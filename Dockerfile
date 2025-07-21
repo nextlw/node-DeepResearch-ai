@@ -33,6 +33,7 @@ COPY --from=builder /app/config.json ./
 COPY --from=builder /app/dist ./dist
 
 # Set environment variables (Recommended to set at runtime, avoid hardcoding)
+ENV NODE_ENV=production
 ENV GEMINI_API_KEY=${GEMINI_API_KEY}
 ENV OPENAI_API_KEY=${OPENAI_API_KEY}
 ENV JINA_API_KEY=${JINA_API_KEY}

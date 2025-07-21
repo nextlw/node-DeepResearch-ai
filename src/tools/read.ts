@@ -35,34 +35,30 @@ export async function readUrl(
     headers['X-Retain-Images'] = 'none'
   }
 
-  try {
-    // Use axios which handles encoding properly
-    const { data } = await axiosClient.post<ReadResponse>(
-      'https://r.jina.ai/',
-      { url },
-      {
-        headers,
-        timeout: 60000,
-        responseType: 'json'
-      }
-    );
-
-    if (!data.data) {
-      throw new Error('Invalid response data');
+  // Use axios which handles encoding properly
+  const { data } = await axiosClient.post<ReadResponse>(
+    'https://r.jina.ai/',
+    { url },
+    {
+      headers,
+      timeout: 60000,
+      responseType: 'json'
     }
+  );
 
-    logDebug(`Read: ${data.data.title} (${data.data.url})`);
-
-    const tokens = data.data.usage?.tokens || 0;
-    const tokenTracker = tracker || new TokenTracker();
-    tokenTracker.trackUsage('read', {
-      totalTokens: tokens,
-      promptTokens: url.length,
-      completionTokens: tokens
-    });
-
-    return { response: data };
-  } catch (error: any) {
-    throw error;
+  if (!data.data) {
+    throw new Error('Invalid response data');
   }
+
+  logDebug(`Read: ${data.data.title} (${data.data.url})`);
+
+  const tokens = data.data.usage?.tokens || 0;
+  const tokenTracker = tracker || new TokenTracker();
+  tokenTracker.trackUsage('read', {
+    totalTokens: tokens,
+    promptTokens: url.length,
+    completionTokens: tokens
+  });
+
+  return { response: data };
 }

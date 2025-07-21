@@ -22,12 +22,13 @@ export function chunkText(text: string, options: ChunkOptions = {}): {
             chunks = text.split(/(?<=[.!?。！？])/).filter(chunk => chunk.trim().length > 0);
             break;
 
-        case 'characters':
+        case 'characters': {
             const chunkSize = Number(options.value) || 1000;
             for (let i = 0; i < text.length; i += chunkSize) {
                 chunks.push(text.slice(i, i + chunkSize));
             }
             break;
+        }
 
         case 'regex':
             if (!options.value || typeof options.value !== 'string') {

@@ -66,5 +66,5 @@ export function logDebug(message: string, context: Record<string, any> = {}) {
 }
 
 export function logWarning(message: string, context: Record<string, any> = {}) {
-  console.warn(JSON.stringify(createLogEntry('WARNING', message, context)));
+  console.error(JSON.stringify(createLogEntry('WARNING', message, context)));
 }
