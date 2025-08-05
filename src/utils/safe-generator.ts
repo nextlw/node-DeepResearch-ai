@@ -186,9 +186,11 @@ export class ObjectGeneratorSafe {
 
             if (NoObjectGeneratedError.isInstance(parseError)) {
               failedOutput = (parseError as any).text;
+              logDebug(`Failed output: ${failedOutput}`);
               // find last `"url":` appear in the string, which is the source of the problem
               failedOutput = failedOutput.slice(0, Math.min(failedOutput.lastIndexOf('"url":'), 8000));
             }
+            logDebug(`Prompt: ${failedOutput}`);
 
             // Create a distilled version of the schema without descriptions
             const distilledSchema = this.createDistilledSchema(schema);
