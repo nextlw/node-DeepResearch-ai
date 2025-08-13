@@ -82,7 +82,14 @@ async function getBatchEmbeddingsWithRetry(
   const batchEmbeddings: number[][] = [];
   let batchTokens = 0;
   let retryCount = 0;
-  let textsToProcess = [...batchTexts]; // Copy the original texts
+  let textsToProcess = [...batchTexts].map(item => {
+    if (typeof item === 'string') {
+      return trimLeadingSymbols(item);
+    } else {
+      const key = Object.keys(item)[0];
+      return key === 'text' ? { text: trimLeadingSymbols(item[key]) } : item;
+    }
+  }); // Copy the original texts
   let indexMap = new Map<number, number>(); // Map to keep track of original indices
 
   // Initialize indexMap with original indices
@@ -241,4 +248,8 @@ function truncateInputString(input: string | Record<string, string>): string {
   } else {
     return Object.values(input)[0].slice(0, 50);
   }
+}
+
+function trimLeadingSymbols(str: string): string {
+  return str.replace(/^(?:[\u{1F000}-\u{1F9FF}]|[\u{2600}-\u{27BF}]|[\u{FE00}-\u{FE0F}]|[\u{DFE5}]|\s)+/gu, '');
 }
