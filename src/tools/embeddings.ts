@@ -251,5 +251,6 @@ function truncateInputString(input: string | Record<string, string>): string {
 }
 
 function trimLeadingSymbols(str: string): string {
-  return str.replace(/^(?:[\u{1F000}-\u{1F9FF}]|[\u{2600}-\u{27BF}]|[\u{FE00}-\u{FE0F}]|[\u{DFE5}]|\s)+/gu, '');
+  const regex = /^[\p{S}\p{P}\p{Z}\p{C}\p{Emoji}]+/u;
+  return str.replace(regex, '');
 }
