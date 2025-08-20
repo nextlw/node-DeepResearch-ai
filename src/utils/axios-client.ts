@@ -55,6 +55,18 @@ const axiosClient = axios.create(baseConfig);
 axiosClient.interceptors.response.use(
   (response) => response,
   (error) => {
+    logError('Request error:', {
+      details: {
+        url: error.config.url,
+        payload: error.config.data,
+        message: error.message,
+        code: error.code,
+        response: error.response ? {
+          status: error.response.status,
+          data: error.response.data,
+        } : undefined,
+      }
+    });
     if (error.code === 'ECONNABORTED') {
       error.request?.destroy?.();
     }

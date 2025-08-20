@@ -121,8 +121,9 @@ async function getBatchEmbeddingsWithRetry(
           headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${JINA_API_KEY}`
-          }
-        }
+          },
+          timeout: 60000,
+        },
       );
 
       if (!response.data.data) {
