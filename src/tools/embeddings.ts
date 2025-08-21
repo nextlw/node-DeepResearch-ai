@@ -26,7 +26,7 @@ export async function getEmbeddings(
   }
 
   // Handle empty input case
-  if (texts.length === 0 || texts.every(text => !text || (typeof text === 'object' && !Object.values(text)?.[0]))) {
+  if (texts.length === 0 || texts.every(text => (typeof text === 'object' && !Object.values(text)?.[0]?.trim() || typeof text === 'string' && !text.trim()))) {
     return { embeddings: [], tokens: 0 };
   }
 
