@@ -84,10 +84,10 @@ async function getBatchEmbeddingsWithRetry(
   let retryCount = 0;
   let textsToProcess = [...batchTexts].map(item => {
     if (typeof item === 'string') {
-      return trimLeadingSymbols(item);
+      return trimSymbols(item);
     } else {
       const key = Object.keys(item)[0];
-      return key === 'text' ? { text: trimLeadingSymbols(item[key]) } : item;
+      return key === 'text' ? { text: trimSymbols(item[key]) } : item;
     }
   }); // Copy the original texts
   let indexMap = new Map<number, number>(); // Map to keep track of original indices
@@ -251,7 +251,7 @@ function truncateInputString(input: string | Record<string, string>): string {
   }
 }
 
-function trimLeadingSymbols(str: string): string {
-  const regex = /^[\p{S}\p{P}\p{Z}\p{C}\p{Emoji}]+/u;
-  return str.replace(regex, '');
+function trimSymbols(str: string): string {
+  const regex = /[\p{S}\p{P}\p{Z}\p{C}\p{Emoji}]+/gu;
+  return str.replace(regex, ' ');
 }
