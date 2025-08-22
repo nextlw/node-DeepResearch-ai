@@ -1,7 +1,7 @@
 import { TrackerContext } from "../types";
 import { Schemas } from "../utils/schemas";
 import { cosineSimilarity } from "./cosine";
-import { getEmbeddings } from "./embeddings";
+import { getEmbeddings, trimSymbols } from "./embeddings";
 import { logError, logDebug } from '../logging';
 
 // Refactored cherryPick function
@@ -21,7 +21,12 @@ export async function cherryPick(question: string, longContext: string, options:
   // Split the longContext into chunks of chunkSize
   const chunks: string[] = [];
   for (let i = 0; i < longContext.length; i += chunkSize) {
-    chunks.push(longContext.substring(i, Math.min(i + chunkSize, longContext.length)));
+    const str = longContext.substring(i, Math.min(i + chunkSize, longContext.length));
+    const trimmedStr = trimSymbols(str);
+    if (trimmedStr.trim().length === 0) {
+      continue; // Skip empty chunks
+    }
+    chunks.push(str);
   }
 
   logDebug(`late chunking enabled! num chunks: ${chunks.length}`);

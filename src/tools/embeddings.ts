@@ -89,7 +89,7 @@ async function getBatchEmbeddingsWithRetry(
       const key = Object.keys(item)[0];
       return key === 'text' ? { text: trimSymbols(item[key]) } : item;
     }
-  }).filter(item => typeof item !== 'string' || item.trim()); // Copy the original texts
+  }); // Copy the original texts
   let indexMap = new Map<number, number>(); // Map to keep track of original indices
 
   // Initialize indexMap with original indices
