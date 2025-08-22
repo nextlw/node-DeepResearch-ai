@@ -89,7 +89,7 @@ async function getBatchEmbeddingsWithRetry(
       const key = Object.keys(item)[0];
       return key === 'text' ? { text: trimSymbols(item[key]) } : item;
     }
-  }); // Copy the original texts
+  }).filter(item => typeof item !== 'string' || item.trim()); // Copy the original texts
   let indexMap = new Map<number, number>(); // Map to keep track of original indices
 
   // Initialize indexMap with original indices
@@ -251,7 +251,7 @@ function truncateInputString(input: string | Record<string, string>): string {
   }
 }
 
-function trimSymbols(str: string): string {
+export function trimSymbols(str: string): string {
   const regex = /[\p{S}\p{P}\p{Z}\p{C}\p{Emoji}]+/gu;
   return str.replace(regex, ' ');
 }
