@@ -32,7 +32,8 @@ export class TokenTracker extends EventEmitter {
   getTotalUsage(): LanguageModelUsage {
     return this.usages.reduce((acc, { usage }) => {
       // CompletionTokens > 0 means LLM usage, apply 3x multiplier
-      const scaler = usage.completionTokens > 0 ? 3 : 1;
+      // const scaler = usage.completionTokens > 0 ? 3 : 1;
+      const scaler = 1;
       acc.promptTokens += usage.promptTokens * scaler;
       acc.completionTokens += usage.completionTokens * scaler;
       acc.totalTokens += usage.totalTokens * scaler;
@@ -43,7 +44,8 @@ export class TokenTracker extends EventEmitter {
   getTotalUsageSnakeCase(): { prompt_tokens: number, completion_tokens: number, total_tokens: number } {
     return this.usages.reduce((acc, { usage }) => {
       // CompletionTokens > 0 means LLM usage, apply 3x multiplier
-      const scaler = usage.completionTokens > 0 ? 3 : 1;
+      // const scaler = usage.completionTokens > 0 ? 3 
+      const scaler = 1;
       acc.prompt_tokens += usage.promptTokens * scaler;
       acc.completion_tokens += usage.completionTokens * scaler;
       acc.total_tokens += usage.totalTokens * scaler;
