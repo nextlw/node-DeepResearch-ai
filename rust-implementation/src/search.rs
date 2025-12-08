@@ -631,10 +631,25 @@ impl SearchClient for JinaClient {
 
     async fn read_urls_batch(&self, urls: &[Url]) -> Vec<Result<UrlContent, SearchError>> {
         use futures::future::join_all;
+        use std::time::Instant;
+
+        let start = Instant::now();
+        log::info!("⚡ [PARALELO] Iniciando {} requisições simultâneas...", urls.len());
 
         let futures: Vec<_> = urls.iter().map(|url| self.read_url(url)).collect();
+        let results = join_all(futures).await;
 
-        join_all(futures).await
+        let elapsed = start.elapsed().as_millis();
+        let avg_per_url = elapsed as f64 / urls.len().max(1) as f64;
+        log::info!(
+            "⚡ [PARALELO] {} URLs lidas em {}ms (média efetiva: {:.0}ms/URL) - Se sequencial seria ~{}ms",
+            urls.len(),
+            elapsed,
+            avg_per_url,
+            urls.len() as u128 * 2000  // Estimativa de 2s por URL sequencial
+        );
+
+        results
     }
 
     async fn rerank(

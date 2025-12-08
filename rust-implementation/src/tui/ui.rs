@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, AppScreen, LogLevel};
+use super::app::{App, AppScreen, LogLevel, ReadMethod, TaskStatus};
 
 /// Renderiza a interface completa
 pub fn render(frame: &mut Frame<'_>, app: &App) {
@@ -245,51 +245,279 @@ fn render_thinking_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(think, chunks[0]);
 
     // Painel de ação atual
-    let action_lines = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(" Step: ", Style::default().fg(Color::DarkGray)),
+    // Construir lista de steps (completados + atual)
+    let mut action_lines: Vec<Line<'_>> = Vec::new();
+
+    // Mostrar steps completados (últimos 4 no máximo)
+    let completed_to_show: Vec<_> = app.completed_steps.iter().rev().take(4).collect();
+    for step in completed_to_show.into_iter().rev() {
+        let action_short = truncate(&step.action, 18);
+        action_lines.push(Line::from(vec![
             Span::styled(
-                format!("{}", app.current_step),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                format!("✅ #{} ", step.step_num),
+                Style::default().fg(Color::Green),
             ),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(" Ação: ", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(vec![
             Span::styled(
-                format!(" {}", truncate(&app.current_action, 25)),
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                action_short,
+                Style::default().fg(Color::DarkGray),
             ),
-        ]),
-    ];
+        ]));
+    }
+
+    // Mostrar step atual (destacado)
+    if app.current_step > 0 {
+        let action_short = truncate(&app.current_action, 18);
+        action_lines.push(Line::from(vec![
+            Span::styled(
+                format!("🔄 #{} ", app.current_step),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                action_short,
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+
+    // Se não houver nada, mostrar aguardando
+    if action_lines.is_empty() {
+        action_lines.push(Line::from(vec![
+            Span::styled(
+                "⏳ Aguardando...",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
 
     let action = Paragraph::new(action_lines).block(
         Block::default()
-            .title(" 🎯 Ação Atual ")
+            .title(format!(" 🎯 Steps ({}) ", app.current_step))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Green)),
     );
     frame.render_widget(action, chunks[1]);
 }
 
-/// Renderiza o conteúdo principal (logs + stats + personas)
+/// Renderiza o conteúdo principal (logs + tasks + stats + personas)
 fn render_main_content(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    // Divide em logs (55%), stats (22%), personas (23%)
+    // Layout sempre com painel de tarefas: logs (40%), tasks (20%), stats (20%), personas (20%)
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(55),
-            Constraint::Percentage(22),
-            Constraint::Percentage(23),
+            Constraint::Percentage(40),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
         ])
         .split(area);
 
     render_logs(frame, app, chunks[0]);
-    render_stats(frame, app, chunks[1]);
-    render_personas(frame, app, chunks[2]);
+    render_parallel_tasks(frame, app, chunks[1]);
+    render_stats(frame, app, chunks[2]);
+    render_personas(frame, app, chunks[3]);
+}
+
+/// Renderiza o painel de tarefas paralelas em execução
+fn render_parallel_tasks(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    // Iterar sobre batches ativos
+    for (batch_id, batch) in &app.active_batches {
+        // Calcular progresso geral do batch
+        let total_progress: u32 = batch.tasks.iter().map(|t| t.progress as u32).sum();
+        let avg_progress = if batch.tasks.is_empty() {
+            0
+        } else {
+            total_progress / batch.tasks.len() as u32
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("⚡ {} ", batch.batch_type),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("[{}] ", &batch_id[..8]),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("{}%", avg_progress),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+
+        // Barra de progresso do batch
+        let progress_bar = create_progress_bar(avg_progress as u8, 15);
+        lines.push(Line::from(vec![
+            Span::styled("   ", Style::default()),
+            Span::styled(progress_bar, Style::default().fg(Color::Cyan)),
+        ]));
+
+        // Mostrar tarefas do batch
+        for task in &batch.tasks {
+            let (icon, color) = match &task.status {
+                TaskStatus::Pending => ("⏳", Color::DarkGray),
+                TaskStatus::Running => ("🔄", Color::Yellow),
+                TaskStatus::Completed => ("✅", Color::Green),
+                TaskStatus::Failed(_) => ("❌", Color::Red),
+            };
+
+            // Método de leitura com cor
+            let method_display = match task.read_method {
+                ReadMethod::Jina => ("J", Color::Blue),      // Jina API
+                ReadMethod::RustLocal => ("R", Color::Magenta), // Rust+LLM
+                ReadMethod::FileRead => ("F", Color::Cyan),  // File
+                ReadMethod::Unknown => ("?", Color::DarkGray),
+            };
+
+            // Truncar URL para caber (mais curto para dar espaço ao progresso)
+            let url_display = if task.description.len() > 20 {
+                format!("{}...", &task.description[..17])
+            } else {
+                task.description.clone()
+            };
+
+            // Progresso individual
+            let progress_str = if task.progress < 100 && matches!(task.status, TaskStatus::Running) {
+                format!(" {}%", task.progress)
+            } else {
+                String::new()
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {} ", icon), Style::default().fg(color)),
+                Span::styled(
+                    format!("[{}] ", method_display.0),
+                    Style::default().fg(method_display.1).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(url_display, Style::default().fg(color)),
+                Span::styled(progress_str, Style::default().fg(Color::Cyan)),
+            ]));
+
+            // Mostrar bytes processados se disponível
+            if task.bytes_processed > 0 || task.bytes_total > 0 {
+                let bytes_info = if task.bytes_total > 0 {
+                    format!("{}/{} bytes",
+                        format_bytes(task.bytes_processed),
+                        format_bytes(task.bytes_total))
+                } else {
+                    format!("{} bytes", format_bytes(task.bytes_processed))
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("      └─ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(bytes_info, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
+
+        lines.push(Line::from(""));
+    }
+
+    // Se não houver batches ativos, mostrar histórico dos completados
+    if lines.is_empty() && !app.completed_batches.is_empty() {
+        // Mostrar resumo de todos os batches completados
+        let total_tasks: usize = app.completed_batches.iter().map(|b| b.tasks.len()).sum();
+        let total_success: usize = app.completed_batches.iter().map(|b| b.completed).sum();
+        let total_failed: usize = app.completed_batches.iter().map(|b| b.failed).sum();
+        let total_time: u128 = app.completed_batches.iter().map(|b| b.total_elapsed_ms).sum();
+
+        lines.push(Line::from(vec![
+            Span::styled("📊 Histórico", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} batches", app.completed_batches.len()),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} tarefas", total_tasks),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(format!("  ✅{}", total_success), Style::default().fg(Color::Green)),
+            Span::styled(format!(" ❌{}", total_failed), Style::default().fg(Color::Red)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:.1}s total", total_time as f64 / 1000.0),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]));
+
+        // Mostrar últimos 3 batches
+        lines.push(Line::from(""));
+        for batch in app.completed_batches.iter().rev().take(3) {
+            lines.push(Line::from(vec![
+                Span::styled("✅ ", Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!("{}ms", batch.total_elapsed_ms),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!(" ({}t)", batch.tasks.len()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+    }
+
+    // Se não houver nada, mostrar legenda
+    if lines.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("⏳ Aguardando", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("   tarefas...", Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    // Sempre mostrar legenda no final
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("─────────────", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("[J]", Style::default().fg(Color::Blue)),
+        Span::styled(" Jina ", Style::default().fg(Color::DarkGray)),
+        Span::styled("[R]", Style::default().fg(Color::Magenta)),
+        Span::styled(" Rust", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("[F]", Style::default().fg(Color::Cyan)),
+        Span::styled(" File", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    let content = Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .title(" ⚡ Paralelo ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Magenta)),
+        );
+
+    frame.render_widget(content, area);
+}
+
+/// Cria uma barra de progresso ASCII
+fn create_progress_bar(progress: u8, width: usize) -> String {
+    let filled = (progress as usize * width) / 100;
+    let empty = width.saturating_sub(filled);
+    format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
+}
+
+/// Formata bytes para exibição legível
+fn format_bytes(bytes: usize) -> String {
+    if bytes >= 1_000_000 {
+        format!("{:.1}MB", bytes as f64 / 1_000_000.0)
+    } else if bytes >= 1_000 {
+        format!("{:.1}KB", bytes as f64 / 1_000.0)
+    } else {
+        format!("{}B", bytes)
+    }
 }
 
 /// Renderiza a área de logs
@@ -504,33 +732,46 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),   // Header com UUID
-            Constraint::Min(6),      // Resposta
-            Constraint::Length(6),   // Referências
-            Constraint::Length(5),   // Personas
-            Constraint::Length(5),   // Stats finais
+            Constraint::Length(4),   // Header com UUID e JSON path
+            Constraint::Min(5),      // Resposta
+            Constraint::Length(5),   // Referências
+            Constraint::Length(5),   // URLs visitadas
+            Constraint::Length(4),   // Stats finais
             Constraint::Length(2),   // Ajuda
         ])
         .margin(1)
         .split(frame.area());
 
-    // Header com UUID
+    // Header com UUID e caminhos dos arquivos
     let session_id_short = &app.session_id[..8];
-    let header = Paragraph::new(Line::from(vec![
+    let header = Paragraph::new(Text::from(vec![
+        Line::from(vec![
         Span::styled(
             " ✅ PESQUISA CONCLUÍDA ",
             Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  │  "),
-        Span::styled("🆔 ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            session_id_short,
-            Style::default().fg(Color::Cyan),
-        ),
-        Span::raw("  │  "),
-        Span::styled("💾 JSON salvo", Style::default().fg(Color::DarkGray)),
+            Span::raw("  │  "),
+            Span::styled("🆔 ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                session_id_short,
+                Style::default().fg(Color::Cyan),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(" 💾 ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("sessions/*_{}.json", session_id_short),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::raw("  │  "),
+            Span::styled("📄 ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("logs/*_{}.txt", session_id_short),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]),
     ]))
     .alignment(ratatui::layout::Alignment::Center)
     .block(
@@ -566,58 +807,57 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
         .style(Style::default().fg(Color::White));
     frame.render_widget(answer, chunks[1]);
 
-    // Referências
+    // Referências (URLs das fontes)
     let refs_items: Vec<ListItem<'_>> = app
         .references
         .iter()
-        .take(4)
+        .take(3)
         .enumerate()
         .map(|(i, r)| {
             let truncated = truncate(r, (chunks[2].width as usize).saturating_sub(8));
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!(" {}. ", i + 1),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Yellow),
                 ),
-                Span::styled(truncated, Style::default().fg(Color::Blue)),
+                Span::styled(truncated, Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED)),
             ]))
         })
         .collect();
 
     let refs = List::new(refs_items).block(
         Block::default()
-            .title(format!(" 📚 Referências ({}) ", app.references.len()))
+            .title(format!(" 📚 Referências ({}) - copie para acessar ", app.references.len()))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Blue)),
     );
     frame.render_widget(refs, chunks[2]);
 
-    // Personas utilizadas
-    let persona_items: Vec<Span<'_>> = app
-        .personas
+    // URLs visitadas
+    let urls_items: Vec<ListItem<'_>> = app
+        .visited_urls
         .iter()
-        .map(|(name, stats)| {
-            Span::styled(
-                format!(" {} (🔍{} 📖{} 🎫{}) ", name, stats.searches, stats.reads, stats.tokens),
-                Style::default().fg(Color::Cyan),
-            )
+        .take(3)
+        .enumerate()
+        .map(|(i, url)| {
+            let truncated = truncate(url, (chunks[3].width as usize).saturating_sub(8));
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!(" {}. ", i + 1),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(truncated, Style::default().fg(Color::Cyan).add_modifier(Modifier::UNDERLINED)),
+            ]))
         })
         .collect();
 
-    let personas_line = if persona_items.is_empty() {
-        Line::from(vec![Span::styled(" Nenhuma persona utilizada", Style::default().fg(Color::DarkGray))])
-    } else {
-        Line::from(persona_items)
-    };
-
-    let personas = Paragraph::new(Text::from(vec![Line::from(""), personas_line]))
-        .block(
-            Block::default()
-                .title(format!(" 👥 Personas ({}) ", app.personas.len()))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        );
-    frame.render_widget(personas, chunks[3]);
+    let urls = List::new(urls_items).block(
+        Block::default()
+            .title(format!(" 🔗 URLs Visitadas ({}) ", app.visited_urls.len()))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    frame.render_widget(urls, chunks[3]);
 
     // Stats finais (com tempos detalhados)
     let stats_text = Text::from(vec![

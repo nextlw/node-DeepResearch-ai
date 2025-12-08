@@ -606,6 +606,55 @@ fn spawn_research_task(
                     })
                 }
                 AgentProgress::VisitedUrl(url) => AppEvent::AddVisitedUrl(url),
+                AgentProgress::BatchStart { batch_id, batch_type, task_count } => {
+                    AppEvent::StartBatch { batch_id, batch_type, task_count }
+                }
+                AgentProgress::TaskUpdate {
+                    task_id, batch_id, task_type, description,
+                    data_info, status, elapsed_ms, thread_id,
+                    progress, read_method, bytes_processed, bytes_total
+                } => {
+                    use deep_research::tui::{ParallelTask, TaskStatus, ReadMethod};
+                    let task_status = if status == "pending" {
+                        TaskStatus::Pending
+                    } else if status == "running" {
+                        TaskStatus::Running
+                    } else if status == "completed" {
+                        TaskStatus::Completed
+                    } else if status.starts_with("failed:") {
+                        TaskStatus::Failed(status.replace("failed:", ""))
+                    } else {
+                        TaskStatus::Running
+                    };
+                    let method = match read_method.as_str() {
+                        "jina" => ReadMethod::Jina,
+                        "rust_local" => ReadMethod::RustLocal,
+                        "file" => ReadMethod::FileRead,
+                        _ => ReadMethod::Unknown,
+                    };
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis();
+                    AppEvent::UpdateTask(ParallelTask {
+                        id: task_id,
+                        batch_id,
+                        task_type,
+                        description,
+                        data_info,
+                        status: task_status,
+                        started_at: now,
+                        elapsed_ms,
+                        thread_id,
+                        progress,
+                        read_method: method,
+                        bytes_processed,
+                        bytes_total,
+                    })
+                }
+                AgentProgress::BatchEnd { batch_id, total_ms, success_count, fail_count } => {
+                    AppEvent::EndBatch { batch_id, total_ms, success_count, fail_count }
+                }
             };
             let _ = tx_clone.send(app_event);
         });
