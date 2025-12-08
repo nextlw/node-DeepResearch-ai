@@ -136,16 +136,16 @@ fn render_research_screen(frame: &mut Frame<'_>, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),  // Header
-            Constraint::Min(10),    // Conteúdo principal
+            Constraint::Length(8),  // Raciocínio e Ação (em cima)
+            Constraint::Min(8),     // Logs e Stats (em baixo)
             Constraint::Length(3),  // Barra de progresso
-            Constraint::Length(3),  // Think atual
         ])
         .split(frame.area());
 
     render_header(frame, app, chunks[0]);
-    render_main_content(frame, app, chunks[1]);
-    render_progress(frame, app, chunks[2]);
-    render_think(frame, app, chunks[3]);
+    render_thinking_panel(frame, app, chunks[1]);
+    render_main_content(frame, app, chunks[2]);
+    render_progress(frame, app, chunks[3]);
 }
 
 /// Renderiza o header
@@ -184,15 +184,74 @@ fn render_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(header, area);
 }
 
-/// Renderiza o conteúdo principal (logs + stats + personas)
-fn render_main_content(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    // Divide em logs (50%), stats (25%), personas (25%)
+/// Renderiza o painel de raciocínio e ação atual (em cima)
+fn render_thinking_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(50),
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
+            Constraint::Percentage(70),  // Raciocínio
+            Constraint::Percentage(30),  // Ação atual
+        ])
+        .split(area);
+
+    // Painel de raciocínio
+    let think_display = if app.current_think.is_empty() {
+        "Aguardando raciocínio do agente...".to_string()
+    } else {
+        app.current_think.clone()
+    };
+
+    let think = Paragraph::new(think_display)
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .title(" 💭 Raciocínio do Agente ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .style(Style::default().fg(Color::White));
+    frame.render_widget(think, chunks[0]);
+
+    // Painel de ação atual
+    let action_lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" Step: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}", app.current_step),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" Ação: ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!(" {}", truncate(&app.current_action, 25)),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+    ];
+
+    let action = Paragraph::new(action_lines).block(
+        Block::default()
+            .title(" 🎯 Ação Atual ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green)),
+    );
+    frame.render_widget(action, chunks[1]);
+}
+
+/// Renderiza o conteúdo principal (logs + stats + personas)
+fn render_main_content(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    // Divide em logs (55%), stats (22%), personas (23%)
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(55),
+            Constraint::Percentage(22),
+            Constraint::Percentage(23),
         ])
         .split(area);
 
@@ -204,6 +263,8 @@ fn render_main_content(frame: &mut Frame<'_>, app: &App, area: Rect) {
 /// Renderiza a área de logs
 fn render_logs(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let visible_height = area.height.saturating_sub(2) as usize;
+    // Largura disponível para a mensagem (descontando bordas, timestamp e símbolo)
+    let max_msg_width = (area.width as usize).saturating_sub(18);
 
     let items: Vec<ListItem<'_>> = app
         .logs
@@ -219,13 +280,16 @@ fn render_logs(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 LogLevel::Debug => Style::default().fg(Color::DarkGray),
             };
 
+            // Truncar mensagem para caber na largura
+            let truncated_msg = truncate(&entry.message, max_msg_width);
+
             let content = Line::from(vec![
                 Span::styled(
                     format!("[{}] ", entry.timestamp),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(format!("{} ", entry.level.symbol()), style),
-                Span::styled(&entry.message, style),
+                Span::styled(truncated_msg, style),
             ]);
 
             ListItem::new(content)
@@ -398,27 +462,6 @@ fn render_progress(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .label(label);
 
     frame.render_widget(gauge, area);
-}
-
-/// Renderiza o think atual
-fn render_think(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let think_display = if app.current_think.is_empty() {
-        "Aguardando...".to_string()
-    } else {
-        truncate(&app.current_think, (area.width as usize).saturating_sub(10))
-    };
-
-    let think = Paragraph::new(Line::from(vec![
-        Span::styled(" 💭 ", Style::default().fg(Color::Yellow)),
-        Span::styled(think_display, Style::default().fg(Color::White)),
-    ]))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow)),
-    );
-
-    frame.render_widget(think, area);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

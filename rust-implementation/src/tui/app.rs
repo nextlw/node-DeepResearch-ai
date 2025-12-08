@@ -178,6 +178,8 @@ pub struct App {
     pub error: Option<String>,
     /// Tempo de início
     pub start_time: Option<Instant>,
+    /// Tempo final (congelado quando completa)
+    pub final_elapsed_secs: Option<f64>,
     /// Scroll position dos logs
     pub log_scroll: usize,
     /// Se deve sair
@@ -218,6 +220,7 @@ impl App {
             is_complete: false,
             error: None,
             start_time: None,
+            final_elapsed_secs: None,
             log_scroll: 0,
             should_quit: false,
             metrics: SystemMetrics::default(),
@@ -295,16 +298,25 @@ impl App {
             AppEvent::Complete => {
                 self.is_complete = true;
                 self.screen = AppScreen::Result;
+                // Congelar o tempo final
+                self.final_elapsed_secs = self.start_time.map(|t| t.elapsed().as_secs_f64());
             }
             AppEvent::Error(msg) => {
                 self.error = Some(msg.clone());
                 self.logs.push_back(LogEntry::error(msg));
+                // Congelar o tempo em caso de erro também
+                self.final_elapsed_secs = self.start_time.map(|t| t.elapsed().as_secs_f64());
             }
         }
     }
 
-    /// Tempo decorrido em segundos
+    /// Tempo decorrido em segundos (congelado quando completo)
     pub fn elapsed_secs(&self) -> f64 {
+        // Se já completou, retorna o tempo congelado
+        if let Some(final_time) = self.final_elapsed_secs {
+            return final_time;
+        }
+        // Caso contrário, calcula em tempo real
         self.start_time
             .map(|t| t.elapsed().as_secs_f64())
             .unwrap_or(0.0)
@@ -450,6 +462,7 @@ impl App {
         self.is_complete = false;
         self.error = None;
         self.start_time = None;
+        self.final_elapsed_secs = None;
         self.log_scroll = 0;
         self.personas.clear();
     }

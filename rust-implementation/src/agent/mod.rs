@@ -39,6 +39,15 @@ pub enum AgentProgress {
     Urls(usize, usize),
     /// Atualiza tokens usados
     Tokens(u64),
+    /// Atualiza stats de persona (nome, searches, reads, answers, tokens, is_active)
+    Persona {
+        name: String,
+        searches: usize,
+        reads: usize,
+        answers: usize,
+        tokens: u64,
+        is_active: bool,
+    },
 }
 
 /// Tipo do callback de progresso
@@ -65,6 +74,12 @@ pub struct DeepResearchAgent {
     start_time: std::time::Instant,
     /// Callback opcional para progresso em tempo real
     progress_callback: Option<ProgressCallback>,
+    /// Contador de buscas realizadas
+    search_count: usize,
+    /// Contador de leituras realizadas
+    read_count: usize,
+    /// Contador de respostas geradas
+    answer_count: usize,
 }
 
 impl DeepResearchAgent {
@@ -88,6 +103,9 @@ impl DeepResearchAgent {
             timing_stats: TimingStats::new(),
             start_time: std::time::Instant::now(),
             progress_callback: None,
+            search_count: 0,
+            read_count: 0,
+            answer_count: 0,
         }
     }
 
@@ -102,6 +120,18 @@ impl DeepResearchAgent {
         if let Some(cb) = &self.progress_callback {
             cb(event);
         }
+    }
+
+    /// Emite estatísticas atuais do agente como "persona"
+    fn emit_persona_stats(&self, is_active: bool) {
+        self.emit(AgentProgress::Persona {
+            name: "Agente".to_string(),
+            searches: self.search_count,
+            reads: self.read_count,
+            answers: self.answer_count,
+            tokens: self.token_tracker.total_tokens(),
+            is_active,
+        });
     }
 
     /// Loop principal - consome self e retorna resultado final
@@ -479,11 +509,22 @@ Available actions:
         let search_time = search_timer.stop();
         self.timing_stats.add_search_time(search_time);
 
+        // Incrementar contador de buscas
+        self.search_count += 1;
+
         log::info!(
             "🔍 Busca concluída: {} URLs encontradas ({}ms)",
             self.context.collected_urls.len(),
             search_time
         );
+
+        // Emitir log e atualizar persona
+        self.emit(AgentProgress::Success(format!(
+            "🔍 Busca #{}: {} URLs encontradas",
+            self.search_count,
+            self.context.collected_urls.len()
+        )));
+        self.emit_persona_stats(true);
 
         // Registrar no diário
         self.context.diary.push(DiaryEntry::Search {
@@ -574,7 +615,19 @@ Available actions:
 
         let read_time = read_timer.stop();
         self.timing_stats.add_read_time(read_time);
+
+        // Incrementar contador de leituras
+        self.read_count += 1;
+
         log::info!("📖 Leitura concluída ({}ms)", read_time);
+
+        // Emitir log e atualizar persona
+        self.emit(AgentProgress::Success(format!(
+            "📖 Leitura #{}: {} URLs processadas",
+            self.read_count,
+            urls.len().min(MAX_URLS_PER_STEP)
+        )));
+        self.emit_persona_stats(true);
 
         self.context.diary.push(DiaryEntry::Read {
             urls: urls.clone(),
@@ -621,6 +674,9 @@ Available actions:
 
         // Resposta imediata no step 1 = pergunta trivial
         if self.context.total_step == 1 && self.context.allow_direct_answer {
+            self.answer_count += 1;
+            self.emit(AgentProgress::Success("✅ Resposta trivial gerada".into()));
+            self.emit_persona_stats(false);
             return StepResult::Completed(AnswerResult {
                 answer,
                 references,
@@ -646,7 +702,18 @@ Available actions:
             .await;
 
         if result.overall_passed {
+            // Incrementar contador de respostas
+            self.answer_count += 1;
+
             log::info!("✅ Resposta aprovada na avaliação!");
+
+            // Emitir sucesso e atualizar persona (não ativa pois vai finalizar)
+            self.emit(AgentProgress::Success(format!(
+                "✅ Resposta #{} aprovada!",
+                self.answer_count
+            )));
+            self.emit_persona_stats(false);
+
             StepResult::Completed(AnswerResult {
                 answer,
                 references,

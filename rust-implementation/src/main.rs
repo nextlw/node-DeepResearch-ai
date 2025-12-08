@@ -542,6 +542,8 @@ fn spawn_research_task(
         // Criar callback para enviar eventos em tempo real para a TUI
         let tx_clone = tx.clone();
         let progress_callback = Arc::new(move |event: AgentProgress| {
+            use deep_research::tui::PersonaStats;
+
             let app_event = match event {
                 AgentProgress::Info(msg) => AppEvent::Log(LogEntry::new(LogLevel::Info, msg)),
                 AgentProgress::Success(msg) => AppEvent::Log(LogEntry::new(LogLevel::Success, msg)),
@@ -555,6 +557,16 @@ fn spawn_research_task(
                     AppEvent::SetVisitedCount(visited)
                 }
                 AgentProgress::Tokens(tokens) => AppEvent::SetTokens(tokens),
+                AgentProgress::Persona { name, searches, reads, answers, tokens, is_active } => {
+                    AppEvent::UpdatePersona(PersonaStats {
+                        name,
+                        searches,
+                        reads,
+                        answers,
+                        tokens,
+                        is_active,
+                    })
+                }
             };
             let _ = tx_clone.send(app_event);
         });
