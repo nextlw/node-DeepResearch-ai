@@ -490,9 +490,13 @@ struct EmbeddingRequest {
 }
 
 /// Usage específico para embeddings - OpenAI não retorna completion_tokens
+///
+/// Para embeddings: `prompt_tokens` = input tokens, `total_tokens` = total (geralmente iguais)
 #[derive(Deserialize, Debug)]
 struct EmbeddingUsage {
+    /// Tokens do texto de entrada
     prompt_tokens: u64,
+    /// Total de tokens (para embeddings = prompt_tokens)
     total_tokens: u64,
 }
 
@@ -835,16 +839,24 @@ impl LlmClient for OpenAiClient {
             .first()
             .ok_or_else(|| LlmError::ParseError("No embedding data in response".into()))?;
 
+        // Rastrear tokens de embedding no acumulador (prompt_tokens = input)
+        self.total_prompt_tokens.fetch_add(
+            embedding_response.usage.prompt_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         log::debug!(
-            "🔢 Embedding: dim={} | {} tokens | Model: {}",
+            "🔢 Embedding: dim={} | prompt={} total={} tokens | Acumulado: {} | Model: {}",
             embedding_data.embedding.len(),
             embedding_response.usage.prompt_tokens,
+            embedding_response.usage.total_tokens,
+            self.get_total_tokens(),
             self.embedding_model
         );
 
         Ok(EmbeddingResult {
             vector: embedding_data.embedding.clone(),
-            tokens_used: embedding_response.usage.prompt_tokens, // Usar prompt_tokens para embeddings
+            tokens_used: embedding_response.usage.total_tokens,
         })
     }
 
@@ -887,13 +899,21 @@ impl LlmClient for OpenAiClient {
             .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
 
         let data_len = embedding_response.data.len() as u64;
-        let tokens_per_embedding = embedding_response.usage.prompt_tokens / data_len.max(1);
+        let tokens_per_embedding = embedding_response.usage.total_tokens / data_len.max(1);
+
+        // Rastrear tokens de embedding batch no acumulador (prompt_tokens = input)
+        self.total_prompt_tokens.fetch_add(
+            embedding_response.usage.prompt_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         log::info!(
-            "🔢 Embeddings: {} vetores | dim={} | {} tokens | Model: {}",
+            "🔢 Embeddings: {} vetores | dim={} | prompt={} total={} tokens | Acumulado: {} | Model: {}",
             data_len,
             embedding_response.data.first().map(|d| d.embedding.len()).unwrap_or(0),
             embedding_response.usage.prompt_tokens,
+            embedding_response.usage.total_tokens,
+            self.get_total_tokens(),
             self.embedding_model
         );
 

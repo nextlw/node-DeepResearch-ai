@@ -643,7 +643,7 @@ impl FileReader {
         let result = {
             // gag::Gag suprime stderr durante o escopo
             let _stderr_gag = gag::Gag::stderr().ok();
-            pdf_extract::extract_text_from_mem(data)
+        pdf_extract::extract_text_from_mem(data)
         };
 
         result.map_err(|e| FileReaderError::PdfExtractionError(e.to_string()))
