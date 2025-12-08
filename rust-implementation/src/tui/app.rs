@@ -106,6 +106,29 @@ pub struct SystemMetrics {
     pub cpu_percent: f32,
 }
 
+/// Estado do AgentAnalyzer (análise de erros em background)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentAnalyzerState {
+    /// Se está ativo (análise em andamento)
+    pub is_active: bool,
+    /// Número de falhas que dispararam a análise
+    pub failures_count: usize,
+    /// Entradas do diário sendo analisadas
+    pub diary_entries: usize,
+    /// Timestamp de início
+    pub started_at: Option<String>,
+    /// Último recap (resumo)
+    pub last_recap: Option<String>,
+    /// Última blame (culpa)
+    pub last_blame: Option<String>,
+    /// Última melhoria sugerida
+    pub last_improvement: Option<String>,
+    /// Tempo de execução em ms
+    pub duration_ms: Option<u128>,
+    /// Logs específicos do analyzer
+    pub logs: Vec<LogEntry>,
+}
+
 /// Estado de uma tarefa paralela
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TaskStatus {
@@ -355,6 +378,24 @@ pub enum AppEvent {
         /// Número de tarefas que falharam
         fail_count: usize,
     },
+    /// AgentAnalyzer iniciou análise em background
+    AgentAnalyzerStarted {
+        /// Número de falhas consecutivas que dispararam a análise
+        failures_count: usize,
+        /// Número de entradas do diário sendo analisadas
+        diary_entries: usize,
+    },
+    /// AgentAnalyzer concluiu análise
+    AgentAnalyzerCompleted {
+        /// Resumo cronológico
+        recap: String,
+        /// Identificação do problema
+        blame: String,
+        /// Sugestões de melhoria
+        improvement: String,
+        /// Tempo de execução em ms
+        duration_ms: u128,
+    },
 }
 
 /// Estado da aplicação
@@ -433,6 +474,8 @@ pub struct App {
     pub all_tasks: Vec<ParallelTask>,
     /// Histórico de steps completados
     pub completed_steps: Vec<CompletedStep>,
+    /// Estado do AgentAnalyzer (análise de erros em background)
+    pub agent_analyzer: AgentAnalyzerState,
 }
 
 /// Step completado para histórico
@@ -497,6 +540,7 @@ impl App {
             completed_batches: Vec::new(),
             all_tasks: Vec::new(),
             completed_steps: Vec::new(),
+            agent_analyzer: AgentAnalyzerState::default(),
         };
         // Carregar sessões anteriores
         app.load_sessions();
@@ -616,8 +660,8 @@ impl App {
             AppEvent::AddVisitedUrl(url) => {
                 if !self.visited_urls.contains(&url) {
                     self.visited_urls.push(url);
-                }
-            }
+        }
+    }
             AppEvent::StartBatch { batch_id, batch_type, task_count } => {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -673,6 +717,39 @@ impl App {
                     )));
                     self.completed_batches.push(batch);
                 }
+            }
+            AppEvent::AgentAnalyzerStarted { failures_count, diary_entries } => {
+                self.agent_analyzer.is_active = true;
+                self.agent_analyzer.failures_count = failures_count;
+                self.agent_analyzer.diary_entries = diary_entries;
+                self.agent_analyzer.started_at = Some(chrono::Local::now().format("%H:%M:%S").to_string());
+                self.agent_analyzer.logs.push(LogEntry::info(format!(
+                    "Iniciando análise de {} falhas ({} entradas)",
+                    failures_count, diary_entries
+                )));
+            }
+            AppEvent::AgentAnalyzerCompleted { recap, blame, improvement, duration_ms } => {
+                self.agent_analyzer.is_active = false;
+                self.agent_analyzer.last_recap = Some(recap.clone());
+                self.agent_analyzer.last_blame = Some(blame.clone());
+                self.agent_analyzer.last_improvement = Some(improvement.clone());
+                self.agent_analyzer.duration_ms = Some(duration_ms);
+                self.agent_analyzer.logs.push(LogEntry::success(format!(
+                    "Análise concluída em {}ms",
+                    duration_ms
+                )));
+                self.agent_analyzer.logs.push(LogEntry::warning(format!(
+                    "📊 {}",
+                    recap
+                )));
+                self.agent_analyzer.logs.push(LogEntry::error(format!(
+                    "🎯 {}",
+                    blame
+                )));
+                self.agent_analyzer.logs.push(LogEntry::success(format!(
+                    "💡 {}",
+                    improvement
+                )));
             }
         }
     }
@@ -914,6 +991,7 @@ impl App {
         self.completed_batches.clear();
         self.all_tasks.clear();
         self.completed_steps.clear();
+        self.agent_analyzer = AgentAnalyzerState::default();
     }
 
     // ─────────────────────────────────────────────────────────────────

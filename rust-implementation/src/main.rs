@@ -655,6 +655,84 @@ fn spawn_research_task(
                 AgentProgress::BatchEnd { batch_id, total_ms, success_count, fail_count } => {
                     AppEvent::EndBatch { batch_id, total_ms, success_count, fail_count }
                 }
+                // Novos eventos de personas e deduplicação
+                AgentProgress::PersonaQuery { persona, original, expanded, weight } => {
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("🎭 [{}] {:.30}... → {:.50}... (w:{:.1})",
+                            persona, original, expanded, weight)
+                    ))
+                }
+                AgentProgress::Dedup { original_count, unique_count, removed_count, threshold } => {
+                    if removed_count > 0 {
+                        AppEvent::Log(LogEntry::new(
+                            LogLevel::Warning,
+                            format!("🔄 Dedup: {} → {} queries ({} duplicadas, thresh:{:.2})",
+                                original_count, unique_count, removed_count, threshold)
+                        ))
+                    } else {
+                        AppEvent::Log(LogEntry::new(
+                            LogLevel::Info,
+                            format!("🔄 Dedup: {} queries únicas (0 duplicadas)",
+                                unique_count)
+                        ))
+                    }
+                }
+                // Eventos de validação fast-fail
+                AgentProgress::ValidationStart { eval_types } => {
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("🔍 Validação Fast-Fail iniciada: [{}]",
+                            eval_types.join(" → "))
+                    ))
+                }
+                AgentProgress::ValidationStep { eval_type, passed, confidence, reasoning, duration_ms } => {
+                    let icon = if passed { "✅" } else { "❌" };
+                    let level = if passed { LogLevel::Success } else { LogLevel::Warning };
+                    AppEvent::Log(LogEntry::new(
+                        level,
+                        format!("{} {}: {:.0}% conf | {}ms | {:.40}...",
+                            icon, eval_type, confidence * 100.0, duration_ms, reasoning)
+                    ))
+                }
+                AgentProgress::ValidationEnd { overall_passed, failed_at, total_evals, passed_evals } => {
+                    let (icon, msg, level) = if overall_passed {
+                        ("✅", format!("Validação APROVADA: {}/{} etapas", passed_evals, total_evals), LogLevel::Success)
+                    } else {
+                        let fail_point = failed_at.unwrap_or("?".into());
+                        ("❌", format!("Validação REPROVADA em {}: {}/{} etapas", fail_point, passed_evals, total_evals), LogLevel::Error)
+                    };
+                    AppEvent::Log(LogEntry::new(level, format!("{} {}", icon, msg)))
+                }
+                // Eventos do AgentAnalyzer (análise de erros em background)
+                AgentProgress::AgentAnalysisStarted { failures_count, diary_entries } => {
+                    // Enviar evento específico para o AgentAnalyzer
+                    let _ = tx_clone.send(AppEvent::AgentAnalyzerStarted {
+                        failures_count,
+                        diary_entries,
+                    });
+                    // Também enviar log geral
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("🔬 AgentAnalyzer: Analisando {} falhas ({} entradas)...",
+                            failures_count, diary_entries)
+                    ))
+                }
+                AgentProgress::AgentAnalysisCompleted { recap, blame, improvement, duration_ms } => {
+                    // Enviar evento específico para o AgentAnalyzer
+                    let _ = tx_clone.send(AppEvent::AgentAnalyzerCompleted {
+                        recap: recap.clone(),
+                        blame: blame.clone(),
+                        improvement: improvement.clone(),
+                        duration_ms,
+                    });
+                    // Também enviar log geral resumido
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Success,
+                        format!("🔬 AgentAnalyzer concluído ({}ms) - Melhoria aplicada ao prompt",
+                            duration_ms)
+                    ))
+                }
             };
             let _ = tx_clone.send(app_event);
         });
@@ -732,36 +810,87 @@ fn spawn_research_task(
     })
 }
 
+/// Conta threads reais do processo atual
+fn count_process_threads() -> usize {
+    #[cfg(target_os = "macos")]
+    {
+        // No macOS, usar mach API ou contar via sysctl
+        use std::process::Command;
+        Command::new("ps")
+            .args(["-M", "-p", &std::process::id().to_string()])
+            .output()
+            .ok()
+            .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // Cada linha após o header é uma thread
+                Some(stdout.lines().count().saturating_sub(1).max(1))
+            })
+            .unwrap_or(1)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // No Linux, contar diretórios em /proc/self/task
+        std::fs::read_dir("/proc/self/task")
+            .map(|entries| entries.count())
+            .unwrap_or(1)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(1)
+    }
+}
+
+/// Obtém uso de memória do processo atual em MB
+fn get_process_memory_mb() -> f64 {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        // Usar ps para obter RSS (Resident Set Size)
+        Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .ok()
+            .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.trim().parse::<f64>().ok()
+            })
+            .map(|kb| kb / 1024.0) // Converter KB para MB
+            .unwrap_or(0.0)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/self/statm")
+            .ok()
+            .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
+            .map(|pages| (pages * 4096) as f64 / 1024.0 / 1024.0)
+            .unwrap_or(0.0)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        0.0
+    }
+}
+
 /// Atualiza métricas do sistema
 fn update_system_metrics(app: &mut deep_research::tui::App) {
     use deep_research::tui::SystemMetrics;
-    #[cfg(target_os = "linux")]
-    use std::fs;
 
-    // Contar threads (aproximado via /proc ou método específico do OS)
-    let threads = std::thread::available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(1);
+    // Contar threads reais do processo
+    let threads = count_process_threads();
 
-    // Memória (aproximado - em produção usar sysinfo crate)
-    let memory_mb = {
-        #[cfg(target_os = "linux")]
-        {
-            fs::read_to_string("/proc/self/statm")
-                .ok()
-                .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
-                .map(|pages| (pages * 4096) as f64 / 1024.0 / 1024.0)
-                .unwrap_or(0.0)
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            // Estimativa baseada no heap (muito aproximado)
-            0.0
-        }
-    };
+    // Memória real do processo
+    let memory_mb = get_process_memory_mb();
+
+    // Contar tarefas ativas nos batches como indicador de carga
+    let active_tasks: usize = app.active_batches.values()
+        .flat_map(|batch| batch.tasks.iter())
+        .filter(|t| matches!(t.status, deep_research::tui::TaskStatus::Running))
+        .count();
 
     app.metrics = SystemMetrics {
-        threads,
+        threads: threads + active_tasks, // Threads do processo + tarefas tokio ativas
         memory_mb,
         cpu_percent: 0.0,
     };

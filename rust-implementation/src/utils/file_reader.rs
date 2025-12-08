@@ -746,42 +746,199 @@ impl FileReader {
     ) -> Result<FileContent, FileReaderError> {
         let size_bytes = data.len() as u64;
 
-        let text = match &file_type {
-            FileType::Pdf => Self::extract_pdf_text(data)?,
-            FileType::Text | FileType::Markdown | FileType::Html => {
-                String::from_utf8_lossy(data).to_string()
+        let (text, title) = match &file_type {
+            FileType::Pdf => (Self::extract_pdf_text(data)?, None),
+            FileType::Html => {
+                // Extrair texto limpo do HTML
+                let (extracted_text, extracted_title) = Self::extract_html_text(data);
+                (extracted_text, extracted_title)
             }
-            FileType::Json | FileType::Xml => String::from_utf8_lossy(data).to_string(),
+            FileType::Text | FileType::Markdown => {
+                (String::from_utf8_lossy(data).to_string(), None)
+            }
+            FileType::Json | FileType::Xml => (String::from_utf8_lossy(data).to_string(), None),
             FileType::Image => {
                 return Err(FileReaderError::UnsupportedType(
                     "Images cannot be converted to text".into(),
                 ));
             }
             FileType::Unknown(_ct) => {
-                // Tentar como texto UTF-8 com fallback para caracteres inválidos
-                String::from_utf8_lossy(data).to_string()
+                // Tentar como HTML se parecer com HTML, senão como texto
+                let raw = String::from_utf8_lossy(data).to_string();
+                if raw.contains("<html") || raw.contains("<body") || raw.contains("<!DOCTYPE") {
+                    let (extracted_text, extracted_title) = Self::extract_html_text(data);
+                    (extracted_text, extracted_title)
+                } else {
+                    (raw, None)
+                }
             }
         };
 
         let word_count = text.split_whitespace().count();
 
         log::info!(
-            "✅ Arquivo processado: {} | tipo={:?} | {} bytes | {} palavras",
+            "✅ Arquivo processado: {} | tipo={:?} | {} bytes | {} palavras{}",
             source,
             file_type,
             size_bytes,
-            word_count
+            word_count,
+            title.as_ref().map(|t| format!(" | título: {}", t)).unwrap_or_default()
         );
 
         Ok(FileContent {
             source: source.to_string(),
             file_type,
             text,
-            title: None, // TODO: Extrair do PDF metadata se necessário
+            title,
             size_bytes,
             word_count,
             metadata: std::collections::HashMap::new(),
         })
+    }
+
+    /// Extrai texto limpo de HTML usando Mozilla Readability algorithm.
+    ///
+    /// Este é o mesmo algoritmo usado pelo Firefox Reader Mode e pelo Jina Reader.
+    /// Automaticamente identifica e extrai o conteúdo principal, removendo:
+    /// - Navegação, headers, footers
+    /// - Anúncios e sidebars
+    /// - Scripts e estilos
+    /// - Elementos não relacionados ao conteúdo
+    ///
+    /// # Retorna
+    /// (texto_extraído, título_opcional)
+    fn extract_html_text(data: &[u8]) -> (String, Option<String>) {
+        use readability::extractor;
+
+        let html_str = String::from_utf8_lossy(data).to_string();
+
+        // Tentar usar Mozilla Readability primeiro
+        match extractor::extract(&mut html_str.as_bytes(), &url::Url::parse("https://example.com").unwrap()) {
+            Ok(product) => {
+                let title = if product.title.is_empty() {
+                    None
+                } else {
+                    Some(product.title)
+                };
+
+                // O readability retorna HTML limpo, precisamos converter para texto
+                let clean_text = Self::html_to_plain_text(&product.content);
+
+                log::debug!(
+                    "📖 Readability extraiu: {} chars | título: {:?}",
+                    clean_text.len(),
+                    title
+                );
+
+                (clean_text, title)
+            }
+            Err(e) => {
+                log::warn!("⚠️ Readability falhou: {}, usando fallback html2text", e);
+                // Fallback para html2text
+                Self::extract_html_text_fallback(&html_str)
+            }
+        }
+    }
+
+    /// Converte HTML limpo para texto puro usando html2text
+    fn html_to_plain_text(html: &str) -> String {
+        // html2text::from_read retorna String diretamente
+        let text = html2text::from_read(html.as_bytes(), 120);
+        Self::clean_extracted_text(&text)
+    }
+
+    /// Fallback: extrai texto de HTML quando Readability falha
+    fn extract_html_text_fallback(html: &str) -> (String, Option<String>) {
+        // html2text retorna String diretamente
+        let text = html2text::from_read(html.as_bytes(), 120);
+        let cleaned = Self::clean_extracted_text(&text);
+
+        // Tentar extrair título manualmente
+        let title = Self::extract_title_from_html(html);
+
+        (cleaned, title)
+    }
+
+    /// Remove tags HTML de forma básica (último fallback)
+    fn strip_html_tags(html: &str) -> String {
+        let mut result = String::new();
+        let mut in_tag = false;
+        let mut in_script = false;
+        let mut in_style = false;
+
+        for c in html.chars() {
+            match c {
+                '<' => {
+                    in_tag = true;
+                    // Verificar se é script ou style
+                    let lower = html.to_lowercase();
+                    if lower.contains("<script") {
+                        in_script = true;
+                    }
+                    if lower.contains("<style") {
+                        in_style = true;
+                    }
+                }
+                '>' => {
+                    in_tag = false;
+                    if html.to_lowercase().contains("</script>") {
+                        in_script = false;
+                    }
+                    if html.to_lowercase().contains("</style>") {
+                        in_style = false;
+                    }
+                }
+                _ if !in_tag && !in_script && !in_style => {
+                    result.push(c);
+                }
+                _ => {}
+            }
+        }
+
+        Self::clean_extracted_text(&result)
+    }
+
+    /// Extrai título de HTML manualmente
+    fn extract_title_from_html(html: &str) -> Option<String> {
+        // Buscar <title>...</title>
+        let lower = html.to_lowercase();
+        if let Some(start) = lower.find("<title>") {
+            if let Some(end) = lower[start..].find("</title>") {
+                let title_start = start + 7; // len("<title>")
+                let title_end = start + end;
+                if title_end > title_start && title_end <= html.len() {
+                    let title = html[title_start..title_end].trim().to_string();
+                    if !title.is_empty() {
+                        return Some(title);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Limpa texto extraído removendo espaços extras e linhas vazias
+    fn clean_extracted_text(text: &str) -> String {
+        let lines: Vec<&str> = text
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty() && l.len() > 1) // Ignorar linhas muito curtas
+            .collect();
+
+        // Remover linhas duplicadas consecutivas
+        let mut result: Vec<&str> = Vec::new();
+        for line in lines {
+            if result.last() != Some(&line) {
+                result.push(line);
+            }
+        }
+
+        // Juntar com quebras de linha e limpar múltiplos espaços
+        result
+            .join("\n")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// Verifica se uma URL aponta para um arquivo que pode ser baixado e processado.

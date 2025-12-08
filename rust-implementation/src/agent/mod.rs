@@ -3,11 +3,15 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 mod actions;
+/// Módulo para análise e diagnóstico do agente durante a execução.
+/// Útil para debugging e geração de relatórios sobre decisões e erros do agente.
+pub mod agent_analyzer;
 mod context;
 mod permissions;
 mod state;
 
 pub use actions::*;
+pub use agent_analyzer::AgentAnalysis;
 pub use context::*;
 pub use permissions::*;
 pub use state::*;
@@ -17,6 +21,7 @@ use crate::search::SearchClient;
 use crate::types::*;
 use crate::utils::{ActionTimer, TimingStats, TokenTracker, TrackerStats};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 /// Evento de progresso do agente para callbacks em tempo real
 #[derive(Debug, Clone)]
@@ -103,6 +108,75 @@ pub enum AgentProgress {
         /// Tarefas que falharam
         fail_count: usize,
     },
+    /// Query expandida por uma persona específica
+    PersonaQuery {
+        /// Nome da persona que gerou a query
+        persona: String,
+        /// Query original
+        original: String,
+        /// Query expandida
+        expanded: String,
+        /// Peso da query (prioridade)
+        weight: f32,
+    },
+    /// Resultado de deduplicação de queries
+    Dedup {
+        /// Queries originais (antes da dedup)
+        original_count: usize,
+        /// Queries únicas (após dedup)
+        unique_count: usize,
+        /// Queries removidas (duplicadas)
+        removed_count: usize,
+        /// Threshold de similaridade usado
+        threshold: f32,
+    },
+    /// Início de validação fast-fail
+    ValidationStart {
+        /// Tipos de validação que serão executados
+        eval_types: Vec<String>,
+    },
+    /// Resultado de uma etapa de validação
+    ValidationStep {
+        /// Tipo de avaliação
+        eval_type: String,
+        /// Se passou (true) ou falhou (false)
+        passed: bool,
+        /// Confiança (0.0 - 1.0)
+        confidence: f32,
+        /// Razão/explicação
+        reasoning: String,
+        /// Duração em ms
+        duration_ms: u128,
+    },
+    /// Fim de validação (com resultado geral)
+    ValidationEnd {
+        /// Se todas as validações passaram
+        overall_passed: bool,
+        /// Em qual tipo falhou (se falhou)
+        failed_at: Option<String>,
+        /// Total de validações executadas
+        total_evals: usize,
+        /// Total de validações aprovadas
+        passed_evals: usize,
+    },
+    /// Análise de erros iniciada em background (AgentAnalyzer)
+    AgentAnalysisStarted {
+        /// Número de falhas consecutivas que dispararam a análise
+        failures_count: usize,
+        /// Número de entradas no diário sendo analisadas
+        diary_entries: usize,
+    },
+    /// Análise de erros concluída (AgentAnalyzer)
+    AgentAnalysisCompleted {
+        /// Resumo cronológico das ações
+        recap: String,
+        /// Identificação do problema
+        blame: String,
+        /// Sugestões de melhoria
+        improvement: String,
+        /// Tempo de execução em ms
+        duration_ms: u128,
+    },
 }
 
 /// Tipo do callback de progresso
@@ -145,6 +219,12 @@ pub struct DeepResearchAgent {
     ties: usize,
     /// Idioma das respostas
     response_language: crate::types::Language,
+    /// Contador de falhas consecutivas de validação
+    consecutive_failures: usize,
+    /// Contador de análises realizadas (máximo 3 por sessão)
+    analysis_count: usize,
+    /// Canal para receber análises do AgentAnalyzer (non-blocking)
+    analysis_rx: Option<mpsc::Receiver<AgentAnalysis>>,
 }
 
 impl DeepResearchAgent {
@@ -183,6 +263,9 @@ impl DeepResearchAgent {
             rust_wins: 0,
             ties: 0,
             response_language,
+            consecutive_failures: 0,
+            analysis_count: 0,
+            analysis_rx: None,
         }
     }
 
@@ -313,6 +396,45 @@ impl DeepResearchAgent {
 
     /// Executa um único passo do agente
     async fn execute_step(&mut self) -> StepResult {
+        // 0. Verificar se há análise do AgentAnalyzer pronta (non-blocking)
+        if let Some(rx) = &mut self.analysis_rx {
+            match rx.try_recv() {
+                Ok(analysis) => {
+                    log::info!(
+                        "🔬 AgentAnalyzer: Análise recebida em {}ms",
+                        analysis.duration_ms.unwrap_or(0)
+                    );
+
+                    // Adicionar hint de melhoria ao contexto
+                    self.context.add_improvement_hint(analysis.improvement.clone());
+                    self.context.set_agent_analysis(analysis.clone());
+
+                    // Emitir evento de conclusão
+                    self.emit(AgentProgress::AgentAnalysisCompleted {
+                        recap: analysis.recap.clone(),
+                        blame: analysis.blame.clone(),
+                        improvement: analysis.improvement.clone(),
+                        duration_ms: analysis.duration_ms.unwrap_or(0),
+                    });
+
+                    self.emit(AgentProgress::Success(format!(
+                        "🔬 Análise concluída: {}",
+                        analysis.improvement.chars().take(80).collect::<String>()
+                    )));
+
+                    // Limpar canal após consumir
+                    self.analysis_rx = None;
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    // Análise ainda em andamento, continuar normalmente
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    // Canal fechado (análise falhou ou timeout), limpar
+                    self.analysis_rx = None;
+                }
+            }
+        }
+
         // 1. Calcular permissões baseadas no contexto atual
         let permissions = ActionPermissions::from_context(&self.context);
 
@@ -570,6 +692,16 @@ Available actions:
             prompt.push_str("\n🔴 You have done many steps. Consider using ANSWER now!\n");
         }
 
+        // Adicionar hints de melhoria do AgentAnalyzer (se disponíveis)
+        if self.context.has_improvement_hints() {
+            prompt.push_str("\n## 💡 IMPROVEMENT HINTS (from previous error analysis):\n");
+            prompt.push_str("Based on analysis of your previous attempts, consider these improvements:\n");
+            for (i, hint) in self.context.improvement_hints.iter().enumerate() {
+                prompt.push_str(&format!("{}. {}\n", i + 1, hint));
+            }
+            prompt.push_str("\nPlease take these suggestions into account in your next actions.\n");
+        }
+
         prompt
     }
 
@@ -590,15 +722,53 @@ Available actions:
         // Expandir queries com personas cognitivas
         let orchestrator = PersonaOrchestrator::new();
         let context = self.build_query_context();
-        let expanded = orchestrator.expand_batch(
-            &queries.iter().map(|q| q.q.clone()).collect::<Vec<_>>(),
-            &context,
-        );
+        let original_queries: Vec<String> = queries.iter().map(|q| q.q.clone()).collect();
+        let expanded = orchestrator.expand_batch(&original_queries, &context);
 
-        // Deduplicar contra queries existentes
-        let unique = self
-            .dedup_queries(expanded.iter().map(|wq| wq.query.clone()).collect())
+        // 🎭 Emitir eventos para cada query expandida por persona
+        self.emit(AgentProgress::Info(format!(
+            "🎭 Expandindo {} queries com {} personas...",
+            original_queries.len(),
+            orchestrator.persona_count()
+        )));
+
+        for wq in &expanded {
+            // Encontrar a query original correspondente (aproximada)
+            let original = original_queries
+                .iter()
+                .find(|oq| wq.query.q.contains(oq.as_str()) || oq.contains(&wq.query.q))
+                .map(|s| s.clone())
+                .unwrap_or_else(|| original_queries.first().cloned().unwrap_or_default());
+
+            self.emit(AgentProgress::PersonaQuery {
+                persona: wq.source_persona.to_string(),
+                original: original.chars().take(50).collect(),
+                expanded: wq.query.q.chars().take(80).collect(),
+                weight: wq.weight,
+            });
+        }
+
+        // Deduplicar contra queries existentes usando SIMD + embeddings
+        let original_count = expanded.len();
+        let (unique, removed_count, new_embeddings) = self
+            .dedup_queries_with_embeddings(expanded.iter().map(|wq| wq.query.clone()).collect())
             .await;
+        let unique_count = unique.len();
+
+        // 🔄 Emitir evento de deduplicação
+        self.emit(AgentProgress::Dedup {
+            original_count,
+            unique_count,
+            removed_count,
+            threshold: 0.86, // Threshold SIMD
+        });
+
+        if removed_count > 0 {
+            self.emit(AgentProgress::Info(format!(
+                "🔄 SIMD Dedup: {} → {} queries ({} duplicadas semânticas)",
+                original_count, unique_count, removed_count
+            )));
+        }
 
         let num_queries = unique.len();
         log::info!("🔍 Executando {} buscas em PARALELO...", num_queries);
@@ -609,6 +779,10 @@ Available actions:
 
         // Executar buscas em paralelo
         let results = self.search_client.search_batch(&unique).await;
+
+        // Salvar embeddings das queries executadas para futuras deduplicações
+        let executed_query_texts: Vec<String> = unique.iter().map(|q| q.q.clone()).collect();
+        self.context.add_executed_queries(executed_query_texts, new_embeddings);
 
         // Contar sucessos e erros
         let mut success_count = 0;
@@ -733,40 +907,51 @@ Available actions:
         if !file_urls.is_empty() {
             log::info!("📥 Lendo {} arquivos em paralelo...", file_urls.len());
 
-            // Emitir tarefas pendentes
+            // Criar task_ids para arquivos antes de iniciar
+            let file_task_ids: std::collections::HashMap<String, String> = file_urls
+                .iter()
+                .map(|(url, _)| (url.clone(), Uuid::new_v4().to_string()))
+                .collect();
+
+            // Atualizar status para running com progresso inicial
             for (url, _) in &file_urls {
-                let task_id = Uuid::new_v4().to_string();
-                self.emit(AgentProgress::TaskUpdate {
-                    task_id: task_id.clone(),
-                    batch_id: batch_id.clone(),
-                    task_type: "FileRead".to_string(),
-                    description: url.to_string(),
-                    data_info: "Carregando arquivo...".to_string(),
-                    status: "running".to_string(),
-                    elapsed_ms: 0,
-                    thread_id: Some(format!("{:?}", std::thread::current().id())),
-                    progress: 0,
-                    read_method: "file".to_string(),
-                    bytes_processed: 0,
-                    bytes_total: 0,
-                });
+                if let Some(task_id) = file_task_ids.get(url) {
+                    self.emit(AgentProgress::TaskUpdate {
+                        task_id: task_id.clone(),
+                        batch_id: batch_id.clone(),
+                        task_type: "FileRead".to_string(),
+                        description: url.to_string(),
+                        data_info: "Lendo arquivo...".to_string(),
+                        status: "running".to_string(),
+                        elapsed_ms: 0,
+                        thread_id: Some(format!("{:?}", std::thread::current().id())),
+                        progress: 10,
+                        read_method: "file".to_string(),
+                        bytes_processed: 0,
+                        bytes_total: 0,
+                    });
+                }
             }
 
+            let file_read_start = std::time::Instant::now();
             let file_futures: Vec<_> = file_urls
                 .iter()
                 .map(|(url, _)| file_reader.read_url(url))
                 .collect();
 
             let file_results = join_all(file_futures).await;
+            let file_read_time = file_read_start.elapsed().as_millis();
+            let avg_file_time = file_read_time / file_urls.len().max(1) as u128;
 
             for (result, (url, file_type)) in file_results.into_iter().zip(file_urls.iter()) {
-                let task_id = Uuid::new_v4().to_string();
+                let task_id = file_task_ids.get(url).cloned().unwrap_or_default();
                 match result {
                     Ok(file_content) => {
                         log::info!(
-                            "✅ Arquivo lido: {} palavras | {} bytes",
+                            "✅ Arquivo lido: {} palavras | {} bytes | {}ms",
                             file_content.word_count,
-                            file_content.size_bytes
+                            file_content.size_bytes,
+                            avg_file_time
                         );
                         // Emitir tarefa completada
                         self.emit(AgentProgress::TaskUpdate {
@@ -774,9 +959,9 @@ Available actions:
                             batch_id: batch_id.clone(),
                             task_type: "FileRead".to_string(),
                             description: url.to_string(),
-                            data_info: format!("{} palavras | {} bytes", file_content.word_count, file_content.size_bytes),
+                            data_info: format!("{} palavras | {} bytes | {}ms", file_content.word_count, file_content.size_bytes, avg_file_time),
                             status: "completed".to_string(),
-                            elapsed_ms: 0,
+                            elapsed_ms: avg_file_time,
                             thread_id: Some(format!("{:?}", std::thread::current().id())),
                             progress: 100,
                             read_method: "file".to_string(),
@@ -808,11 +993,11 @@ Available actions:
                             batch_id: batch_id.clone(),
                             task_type: "FileRead".to_string(),
                             description: url.to_string(),
-                            data_info: "Erro na leitura".to_string(),
-                            status: format!("failed:{}", e),
-                            elapsed_ms: 0,
+                            data_info: format!("Erro: {}", e),
+                            status: "failed".to_string(),
+                            elapsed_ms: avg_file_time,
                             thread_id: Some(format!("{:?}", std::thread::current().id())),
-                            progress: 0,
+                            progress: 100,
                             read_method: "file".to_string(),
                             bytes_processed: 0,
                             bytes_total: 0,
@@ -826,10 +1011,15 @@ Available actions:
 
         // Ler URLs web em paralelo
         if !web_urls.is_empty() {
+            // Criar task_ids para cada URL (para rastrear)
+            let url_task_ids: std::collections::HashMap<String, String> = web_urls
+                .iter()
+                .map(|url| (url.clone(), Uuid::new_v4().to_string()))
+                .collect();
+
             // Emitir tarefas pendentes para URLs web
             let read_method_str = if self.enable_comparative_read { "jina+rust" } else { "jina" };
-            for url in &web_urls {
-                let task_id = Uuid::new_v4().to_string();
+            for (url, task_id) in &url_task_ids {
                 self.emit(AgentProgress::TaskUpdate {
                     task_id: task_id.clone(),
                     batch_id: batch_id.clone(),
@@ -839,7 +1029,7 @@ Available actions:
                     status: "running".to_string(),
                     elapsed_ms: 0,
                     thread_id: Some(format!("{:?}", std::thread::current().id())),
-                    progress: 10,
+                    progress: 0,
                     read_method: read_method_str.to_string(),
                     bytes_processed: 0,
                     bytes_total: 0,
@@ -857,6 +1047,9 @@ Available actions:
                 let comparative_results = self.search_client.read_urls_comparative_batch(&web_urls).await;
 
                 for result in comparative_results {
+                    let task_id = url_task_ids.get(&result.url).cloned().unwrap_or_default();
+                    let elapsed_ms = result.jina_time_ms.max(result.rust_time_ms) as u128;
+
                     // Usar o resultado mais rápido que não tenha erro
                     let (content, source) = match &result.faster {
                         crate::search::ReadMethod::RustLocal if result.rust_result.is_some() => {
@@ -874,7 +1067,22 @@ Available actions:
                                 (jina, "jina")
                             } else if let Some(rust) = result.rust_result.clone() {
                                 (rust, "rust_local")
-            } else {
+                            } else {
+                                // Emitir TaskUpdate de falha
+                                self.emit(AgentProgress::TaskUpdate {
+                                    task_id: task_id.clone(),
+                                    batch_id: batch_id.clone(),
+                                    task_type: "WebRead".to_string(),
+                                    description: result.url.clone(),
+                                    data_info: "Ambos métodos falharam".to_string(),
+                                    status: "failed".to_string(),
+                                    elapsed_ms,
+                                    thread_id: None,
+                                    progress: 100,
+                                    read_method: "failed".to_string(),
+                                    bytes_processed: 0,
+                                    bytes_total: 0,
+                                });
                                 log::warn!("❌ Ambos métodos falharam para {}", result.url);
                                 self.context.bad_urls.push(result.url.clone());
                                 error_count += 1;
@@ -890,6 +1098,21 @@ Available actions:
                                 self.rust_wins += 1;
                                 (rust, "rust_local")
                             } else {
+                                // Emitir TaskUpdate de falha
+                                self.emit(AgentProgress::TaskUpdate {
+                                    task_id: task_id.clone(),
+                                    batch_id: batch_id.clone(),
+                                    task_type: "WebRead".to_string(),
+                                    description: result.url.clone(),
+                                    data_info: "Nenhum método disponível".to_string(),
+                                    status: "failed".to_string(),
+                                    elapsed_ms,
+                                    thread_id: None,
+                                    progress: 100,
+                                    read_method: "failed".to_string(),
+                                    bytes_processed: 0,
+                                    bytes_total: 0,
+                                });
                                 log::warn!("❌ Ambos métodos falharam para {}", result.url);
                                 self.context.bad_urls.push(result.url.clone());
                                 error_count += 1;
@@ -897,6 +1120,25 @@ Available actions:
                             }
                         }
                     };
+
+                    // Calcular bytes processados
+                    let bytes_processed = content.text.len();
+
+                    // Emitir TaskUpdate de sucesso com método real usado
+                    self.emit(AgentProgress::TaskUpdate {
+                        task_id: task_id.clone(),
+                        batch_id: batch_id.clone(),
+                        task_type: "WebRead".to_string(),
+                        description: result.url.clone(),
+                        data_info: format!("{}ms via {}", elapsed_ms, source),
+                        status: "completed".to_string(),
+                        elapsed_ms,
+                        thread_id: None,
+                        progress: 100,
+                        read_method: source.to_string(),
+                        bytes_processed,
+                        bytes_total: bytes_processed,
+                    });
 
                     // Log de comparação
                     log::info!(
@@ -944,29 +1186,67 @@ Available actions:
             } else {
                 // Modo normal: apenas Jina
                 log::info!("🌐 Lendo {} URLs web em paralelo (Jina)...", web_urls.len());
+                let read_start = std::time::Instant::now();
                 let web_results = self.search_client.read_urls_batch(&web_urls).await;
+                let avg_time_per_url = read_start.elapsed().as_millis() / web_urls.len().max(1) as u128;
 
                 for (result, url) in web_results.into_iter().zip(web_urls.iter()) {
+                    let task_id = url_task_ids.get(url).cloned().unwrap_or_default();
+
                     match result {
-                    Ok(content) => {
-                        self.context.add_knowledge(KnowledgeItem {
-                            question: self.context.current_question().to_string(),
-                            answer: content.text,
-                            item_type: KnowledgeType::Url,
-                            references: vec![Reference {
-                                url: url.to_string(),
-                                title: content.title,
-                                exact_quote: None,
-                                relevance_score: None,
-                            }],
-                        });
-                        self.context.visited_urls.push(url.clone());
+                        Ok(content) => {
+                            let bytes_processed = content.text.len();
+
+                            // Emitir TaskUpdate de sucesso
+                            self.emit(AgentProgress::TaskUpdate {
+                                task_id: task_id.clone(),
+                                batch_id: batch_id.clone(),
+                                task_type: "WebRead".to_string(),
+                                description: url.to_string(),
+                                data_info: format!("{}ms via Jina | {} bytes", avg_time_per_url, bytes_processed),
+                                status: "completed".to_string(),
+                                elapsed_ms: avg_time_per_url,
+                                thread_id: None,
+                                progress: 100,
+                                read_method: "jina".to_string(),
+                                bytes_processed,
+                                bytes_total: bytes_processed,
+                            });
+
+                            self.context.add_knowledge(KnowledgeItem {
+                                question: self.context.current_question().to_string(),
+                                answer: content.text,
+                                item_type: KnowledgeType::Url,
+                                references: vec![Reference {
+                                    url: url.to_string(),
+                                    title: content.title,
+                                    exact_quote: None,
+                                    relevance_score: None,
+                                }],
+                            });
+                            self.context.visited_urls.push(url.clone());
                             self.emit(AgentProgress::VisitedUrl(url.to_string()));
                             success_count += 1;
-                    }
-                    Err(e) => {
+                        }
+                        Err(e) => {
+                            // Emitir TaskUpdate de falha
+                            self.emit(AgentProgress::TaskUpdate {
+                                task_id: task_id.clone(),
+                                batch_id: batch_id.clone(),
+                                task_type: "WebRead".to_string(),
+                                description: url.to_string(),
+                                data_info: format!("Erro: {}", e),
+                                status: "failed".to_string(),
+                                elapsed_ms: avg_time_per_url,
+                                thread_id: None,
+                                progress: 100,
+                                read_method: "jina".to_string(),
+                                bytes_processed: 0,
+                                bytes_total: 0,
+                            });
+
                             log::warn!("❌ Falha ao ler URL {}: {}", url, e);
-                        self.context.bad_urls.push(url.clone());
+                            self.context.bad_urls.push(url.clone());
                             error_count += 1;
                         }
                     }
@@ -1065,9 +1345,13 @@ Available actions:
             self.answer_count += 1;
             self.emit(AgentProgress::Success("✅ Resposta trivial gerada".into()));
             self.emit_persona_stats(false);
+
+            // Validar referências mesmo para respostas triviais
+            let validated_refs = self.validate_references(references).await;
+
             return StepResult::Completed(AnswerResult {
                 answer,
-                references,
+                references: validated_refs,
                 trivial: true,
             });
         }
@@ -1077,6 +1361,17 @@ Available actions:
         let eval_types = pipeline
             .determine_required_evaluations(&self.context.original_question, &*self.llm_client)
             .await;
+
+        // 🔍 Emitir início de validação fast-fail
+        let eval_type_names: Vec<String> = eval_types.iter().map(|t| t.as_str().to_string()).collect();
+        self.emit(AgentProgress::ValidationStart {
+            eval_types: eval_type_names.clone(),
+        });
+        self.emit(AgentProgress::Info(format!(
+            "🔍 Validação Fast-Fail: {} etapas [{}]",
+            eval_types.len(),
+            eval_type_names.join(" → ")
+        )));
 
         // Executar avaliações
         let eval_context = self.build_evaluation_context();
@@ -1089,26 +1384,80 @@ Available actions:
             )
             .await;
 
+        // 📊 Emitir resultados de cada validação
+        let mut passed_count = 0;
+        for eval_result in &result.results {
+            let duration_ms = eval_result.duration.as_millis();
+
+            self.emit(AgentProgress::ValidationStep {
+                eval_type: eval_result.eval_type.as_str().to_string(),
+                passed: eval_result.passed,
+                confidence: eval_result.confidence,
+                reasoning: eval_result.reasoning.chars().take(100).collect(),
+                duration_ms,
+            });
+
+            if eval_result.passed {
+                passed_count += 1;
+                self.emit(AgentProgress::Success(format!(
+                    "✅ {} passou ({:.0}% conf, {}ms)",
+                    eval_result.eval_type.as_str(),
+                    eval_result.confidence * 100.0,
+                    duration_ms
+                )));
+            } else {
+                self.emit(AgentProgress::Warning(format!(
+                    "❌ {} FALHOU: {} ({:.0}% conf)",
+                    eval_result.eval_type.as_str(),
+                    eval_result.reasoning.chars().take(50).collect::<String>(),
+                    eval_result.confidence * 100.0
+                )));
+            }
+        }
+
+        // 📊 Emitir fim de validação
+        self.emit(AgentProgress::ValidationEnd {
+            overall_passed: result.overall_passed,
+            failed_at: result.failed_at.map(|t| t.as_str().to_string()),
+            total_evals: result.results.len(),
+            passed_evals: passed_count,
+        });
+
         if result.overall_passed {
             // Incrementar contador de respostas
             self.answer_count += 1;
+            // Resetar contador de falhas consecutivas
+            self.consecutive_failures = 0;
 
             log::info!("✅ Resposta aprovada na avaliação!");
 
+            // 🔗 Validar referências antes de finalizar
+            let validated_refs = self.validate_references(references).await;
+
+            log::info!(
+                "🔗 {} referências validadas para resposta final",
+                validated_refs.len()
+            );
+
             // Emitir sucesso e atualizar persona (não ativa pois vai finalizar)
             self.emit(AgentProgress::Success(format!(
-                "✅ Resposta #{} aprovada!",
-                self.answer_count
+                "✅ Resposta #{} aprovada! ({} refs validadas)",
+                self.answer_count,
+                validated_refs.len()
             )));
             self.emit_persona_stats(false);
 
             StepResult::Completed(AnswerResult {
                 answer,
-                references,
+                references: validated_refs,
                 trivial: false,
             })
         } else {
             log::info!("❌ Resposta reprovada, continuando pesquisa...");
+
+            // Incrementar contador de falhas consecutivas
+            self.consecutive_failures += 1;
+
             // Adicionar falha como conhecimento
             let failed_type = result.failed_at.unwrap_or(EvaluationType::Definitive);
             let reasoning = result
@@ -1125,10 +1474,66 @@ Available actions:
             });
 
             self.context.diary.push(DiaryEntry::FailedAnswer {
-                answer,
+                answer: answer.clone(),
                 eval_type: failed_type,
-                reason: reasoning,
+                reason: reasoning.clone(),
             });
+
+            // 🔍 Disparar AgentAnalyzer após 2+ falhas consecutivas (máximo 3 análises por sessão)
+            const MAX_ANALYSES_PER_SESSION: usize = 3;
+            if self.consecutive_failures >= 2 && self.analysis_count < MAX_ANALYSES_PER_SESSION {
+                self.analysis_count += 1;
+
+                log::info!(
+                    "🔬 AgentAnalyzer: Disparando análise #{} após {} falhas consecutivas",
+                    self.analysis_count,
+                    self.consecutive_failures
+                );
+
+                // Emitir evento de início
+                self.emit(AgentProgress::AgentAnalysisStarted {
+                    failures_count: self.consecutive_failures,
+                    diary_entries: self.context.diary.len(),
+                });
+
+                // Preparar dados para análise em background
+                let diary_clone = self.context.diary.clone();
+                let original_question = self.context.original_question.clone();
+                let failed_answer = answer.clone();
+                let failure_reason = reasoning.clone();
+                let llm_client = self.llm_client.clone();
+
+                // Criar canal para receber resultado
+                let (tx, rx) = mpsc::channel(1);
+                self.analysis_rx = Some(rx);
+
+                // Disparar análise em background (não bloqueia)
+                tokio::spawn(async move {
+                    let result = tokio::time::timeout(
+                        std::time::Duration::from_secs(30),
+                        agent_analyzer::analyze_steps(
+                            &diary_clone,
+                            &original_question,
+                            &failed_answer,
+                            &failure_reason,
+                            llm_client,
+                        ),
+                    )
+                    .await;
+
+                    match result {
+                        Ok(Ok(analysis)) => {
+                            let _ = tx.send(analysis).await;
+                        }
+                        Ok(Err(e)) => {
+                            log::warn!("🔬 AgentAnalyzer falhou: {}", e);
+                        }
+                        Err(_) => {
+                            log::warn!("🔬 AgentAnalyzer timeout (30s)");
+                        }
+                    }
+                });
+            }
 
             self.context.total_step += 1;
             StepResult::Continue
@@ -1257,14 +1662,153 @@ Available actions:
         self.token_tracker.stats()
     }
 
+    /// Deduplica queries usando embeddings SIMD
+    /// Retorna (queries únicas, contagem de removidas, embeddings das queries únicas)
+    async fn dedup_queries_with_embeddings(
+        &self,
+        queries: Vec<SerpQuery>,
+    ) -> (Vec<SerpQuery>, usize, Vec<Vec<f32>>) {
+        use crate::performance::simd::dedup_queries as simd_dedup;
+
+        let original_count = queries.len();
+
+        if queries.is_empty() {
+            return (queries, 0, vec![]);
+        }
+
+        // Gerar embeddings para todas as novas queries
+        let query_texts: Vec<String> = queries.iter().map(|q| q.q.clone()).collect();
+
+        self.emit(AgentProgress::Info(format!(
+            "🧠 Gerando embeddings para {} queries (SIMD)...",
+            query_texts.len()
+        )));
+
+        let embeddings_result = self.llm_client.embed_batch(&query_texts).await;
+
+        let new_embeddings: Vec<Vec<f32>> = match embeddings_result {
+            Ok(results) => results.into_iter().map(|r| r.vector).collect(),
+            Err(e) => {
+                // Fallback para dedup simples se embeddings falharem
+                self.emit(AgentProgress::Warning(format!(
+                    "⚠️ Embeddings falhou, usando dedup textual: {}",
+                    e
+                )));
+                return self.dedup_queries_text_fallback(queries).await;
+            }
+        };
+
+        // Usar SIMD para deduplicação
+        let existing_embeddings = &self.context.executed_query_embeddings;
+
+        self.emit(AgentProgress::Info(format!(
+            "⚡ Dedup SIMD: {} novas vs {} existentes (threshold: 0.86)",
+            new_embeddings.len(),
+            existing_embeddings.len()
+        )));
+
+        let unique_indices = simd_dedup(&new_embeddings, existing_embeddings, 0.86);
+
+        // Filtrar queries e embeddings pelos índices únicos
+        let mut unique_queries = Vec::new();
+        let mut unique_embeddings = Vec::new();
+
+        for idx in &unique_indices {
+            unique_queries.push(queries[*idx].clone());
+            unique_embeddings.push(new_embeddings[*idx].clone());
+        }
+
+        let removed_count = original_count - unique_queries.len();
+
+        if removed_count > 0 {
+            self.emit(AgentProgress::Success(format!(
+                "🎯 SIMD Dedup: {} duplicadas removidas semanticamente",
+                removed_count
+            )));
+        }
+
+        (unique_queries, removed_count, unique_embeddings)
+    }
+
+    /// Fallback para dedup textual quando embeddings falham
+    async fn dedup_queries_text_fallback(&self, queries: Vec<SerpQuery>) -> (Vec<SerpQuery>, usize, Vec<Vec<f32>>) {
+        use std::collections::HashSet;
+
+        let original_count = queries.len();
+        let mut unique = Vec::new();
+        let mut seen_normalized = HashSet::new();
+
+        for query in queries {
+            let normalized = query.q
+                .to_lowercase()
+                .chars()
+                .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let is_duplicate = seen_normalized.iter().any(|seen: &String| {
+                let seen_words: HashSet<_> = seen.split_whitespace().collect();
+                let new_words: HashSet<_> = normalized.split_whitespace().collect();
+
+                if seen_words.is_empty() || new_words.is_empty() {
+                    return false;
+                }
+
+                let intersection = seen_words.intersection(&new_words).count();
+                let union = seen_words.union(&new_words).count();
+
+                intersection as f32 / union as f32 >= 0.86
+            });
+
+            if !is_duplicate && !normalized.is_empty() {
+                seen_normalized.insert(normalized);
+                unique.push(query);
+            }
+        }
+
+        let removed_count = original_count - unique.len();
+        // Retorna embeddings vazios pois fallback não gera embeddings
+        (unique, removed_count, vec![])
+    }
+
+    /// Deduplica queries usando SIMD (interface simplificada)
+    /// Retorna (queries únicas, contagem de removidas)
+    async fn dedup_queries_with_stats(&self, queries: Vec<SerpQuery>) -> (Vec<SerpQuery>, usize) {
+        let (unique, removed, _embeddings) = self.dedup_queries_with_embeddings(queries).await;
+        (unique, removed)
+    }
+
+    #[allow(dead_code)]
     async fn dedup_queries(&self, queries: Vec<SerpQuery>) -> Vec<SerpQuery> {
-        // Implementação usando embeddings
-        queries // Simplificado
+        let (unique, _) = self.dedup_queries_with_stats(queries).await;
+        unique
     }
 
     async fn dedup_questions(&self, questions: Vec<String>) -> Vec<String> {
-        // Implementação usando embeddings
-        questions // Simplificado
+        use std::collections::HashSet;
+
+        let mut unique = Vec::new();
+        let mut seen_normalized = HashSet::new();
+
+        for q in questions {
+            let normalized = q
+                .to_lowercase()
+                .chars()
+                .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            if !seen_normalized.contains(&normalized) && !normalized.is_empty() {
+                seen_normalized.insert(normalized);
+                unique.push(q);
+            }
+        }
+
+        unique
     }
 
     fn build_query_context(&self) -> crate::personas::QueryContext {
@@ -1327,5 +1871,155 @@ Available actions:
 
         log::info!("📚 Extraídas {} referências do conhecimento", refs.len());
         refs
+    }
+
+    /// Valida referências antes de incluir na resposta final
+    ///
+    /// Remove referências com:
+    /// - Títulos inválidos (Cloudflare blocks, Page not found, vazios)
+    /// - URLs que retornam 4xx/5xx (verificação HEAD)
+    async fn validate_references(&self, references: Vec<Reference>) -> Vec<Reference> {
+        use futures::future::join_all;
+
+        let original_count = references.len();
+
+        if references.is_empty() {
+            return references;
+        }
+
+        self.emit(AgentProgress::Info(format!(
+            "🔗 Validando {} referências...",
+            original_count
+        )));
+
+        // Títulos que indicam problemas
+        const INVALID_TITLE_PATTERNS: &[&str] = &[
+            "just a moment",
+            "page not found",
+            "404",
+            "403",
+            "access denied",
+            "cloudflare",
+            "checking your browser",
+            "please wait",
+            "error",
+            "not available",
+            "blocked",
+            "captcha",
+            "verify you are human",
+            "security check",
+        ];
+
+        // Filtrar por título primeiro (rápido)
+        let title_filtered: Vec<Reference> = references
+            .into_iter()
+            .filter(|r| {
+                // Título vazio ou muito curto
+                let title_lower = r.title.to_lowercase().trim().to_string();
+                if title_lower.is_empty() || title_lower.len() < 3 {
+                    log::warn!("🔗 Removendo ref com título vazio/curto: {}", r.url);
+                    return false;
+                }
+
+                // Padrões de título inválido
+                for pattern in INVALID_TITLE_PATTERNS {
+                    if title_lower.contains(pattern) {
+                        log::warn!(
+                            "🔗 Removendo ref com título inválido '{}': {}",
+                            r.title,
+                            r.url
+                        );
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .collect();
+
+        if title_filtered.is_empty() {
+            self.emit(AgentProgress::Warning(
+                "⚠️ Todas as referências tinham títulos inválidos".into(),
+            ));
+            return vec![];
+        }
+
+        // Validar URLs com HEAD request (em paralelo)
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+
+        let validation_futures: Vec<_> = title_filtered
+            .iter()
+            .map(|r| {
+                let client = client.clone();
+                let url = r.url.clone();
+                async move {
+                    match client.head(&url).send().await {
+                        Ok(response) => {
+                            let status = response.status();
+                            if status.is_success() || status.is_redirection() {
+                                log::debug!("✅ URL válida ({}): {}", status, url);
+                                true
+                            } else {
+                                log::warn!("❌ URL inválida ({}): {}", status, url);
+                                false
+                            }
+                        }
+                        Err(e) => {
+                            // Tentar GET se HEAD falhar (alguns servidores não suportam HEAD)
+                            match client.get(&url).send().await {
+                                Ok(response) => {
+                                    let status = response.status();
+                                    if status.is_success() || status.is_redirection() {
+                                        log::debug!("✅ URL válida via GET ({}): {}", status, url);
+                                        true
+                                    } else {
+                                        log::warn!("❌ URL inválida ({}): {}", status, url);
+                                        false
+                                    }
+                                }
+                                Err(_) => {
+                                    log::warn!("❌ URL inacessível: {} ({})", url, e);
+                                    false
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        let validation_results = join_all(validation_futures).await;
+
+        // Filtrar referências válidas
+        let validated: Vec<Reference> = title_filtered
+            .into_iter()
+            .zip(validation_results.into_iter())
+            .filter_map(|(r, is_valid)| if is_valid { Some(r) } else { None })
+            .collect();
+
+        let removed_count = original_count - validated.len();
+        if removed_count > 0 {
+            self.emit(AgentProgress::Warning(format!(
+                "🔗 Removidas {} referências inválidas (restam {})",
+                removed_count,
+                validated.len()
+            )));
+        } else {
+            self.emit(AgentProgress::Success(format!(
+                "✅ Todas {} referências validadas",
+                validated.len()
+            )));
+        }
+
+        log::info!(
+            "🔗 Validação: {} de {} referências aprovadas",
+            validated.len(),
+            original_count
+        );
+
+        validated
     }
 }

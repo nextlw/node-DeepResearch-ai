@@ -426,10 +426,17 @@ struct EmbeddingRequest {
     input: serde_json::Value,
 }
 
+/// Usage específico para embeddings - OpenAI não retorna completion_tokens
+#[derive(Deserialize, Debug)]
+struct EmbeddingUsage {
+    prompt_tokens: u64,
+    total_tokens: u64,
+}
+
 #[derive(Deserialize)]
 struct EmbeddingResponse {
     data: Vec<EmbeddingData>,
-    usage: Usage,
+    usage: EmbeddingUsage,
 }
 
 #[derive(Deserialize)]
@@ -761,9 +768,16 @@ impl LlmClient for OpenAiClient {
             .first()
             .ok_or_else(|| LlmError::ParseError("No embedding data in response".into()))?;
 
+        log::debug!(
+            "🔢 OpenAI Embedding: dim={} | {} prompt tokens | {} total tokens",
+            embedding_data.embedding.len(),
+            embedding_response.usage.prompt_tokens,
+            embedding_response.usage.total_tokens
+        );
+
         Ok(EmbeddingResult {
             vector: embedding_data.embedding.clone(),
-            tokens_used: embedding_response.usage.total_tokens,
+            tokens_used: embedding_response.usage.prompt_tokens, // Usar prompt_tokens para embeddings
         })
     }
 
@@ -806,12 +820,22 @@ impl LlmClient for OpenAiClient {
             .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
 
         let data_len = embedding_response.data.len() as u64;
+        let tokens_per_embedding = embedding_response.usage.prompt_tokens / data_len.max(1);
+
+        log::info!(
+            "🔢 OpenAI Embeddings: {} vetores | dim={} | {} prompt tokens | {} total tokens",
+            data_len,
+            embedding_response.data.first().map(|d| d.embedding.len()).unwrap_or(0),
+            embedding_response.usage.prompt_tokens,
+            embedding_response.usage.total_tokens
+        );
+
         let results: Vec<EmbeddingResult> = embedding_response
             .data
             .into_iter()
             .map(|data| EmbeddingResult {
                 vector: data.embedding,
-                tokens_used: embedding_response.usage.total_tokens / data_len,
+                tokens_used: tokens_per_embedding,
             })
             .collect();
 

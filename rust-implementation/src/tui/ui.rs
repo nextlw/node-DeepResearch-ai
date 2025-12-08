@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, AppScreen, LogLevel, ReadMethod, TaskStatus};
+use super::app::{App, AppScreen, LogLevel, ReadMethod, TaskStatus, AgentAnalyzerState};
 
 /// Renderiza a interface completa
 pub fn render(frame: &mut Frame<'_>, app: &App) {
@@ -298,23 +298,182 @@ fn render_thinking_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(action, chunks[1]);
 }
 
-/// Renderiza o conteúdo principal (logs + tasks + stats + personas)
+/// Renderiza o conteúdo principal (logs + analyzer + tasks + stats + personas)
 fn render_main_content(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    // Layout sempre com painel de tarefas: logs (40%), tasks (20%), stats (20%), personas (20%)
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(40),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-        ])
-        .split(area);
+    // Se AgentAnalyzer está ativo ou tem resultado, mostrar painel dedicado
+    let has_analyzer = app.agent_analyzer.is_active || app.agent_analyzer.last_improvement.is_some();
 
-    render_logs(frame, app, chunks[0]);
-    render_parallel_tasks(frame, app, chunks[1]);
-    render_stats(frame, app, chunks[2]);
-    render_personas(frame, app, chunks[3]);
+    if has_analyzer {
+        // Layout com AgentAnalyzer: logs (35%), analyzer (20%), tasks (15%), stats (15%), personas (15%)
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(35),
+                Constraint::Percentage(20),
+                Constraint::Percentage(15),
+                Constraint::Percentage(15),
+                Constraint::Percentage(15),
+            ])
+            .split(area);
+
+        render_logs(frame, app, chunks[0]);
+        render_agent_analyzer(frame, &app.agent_analyzer, chunks[1]);
+        render_parallel_tasks(frame, app, chunks[2]);
+        render_stats(frame, app, chunks[3]);
+        render_personas(frame, app, chunks[4]);
+    } else {
+        // Layout padrão: logs (40%), tasks (20%), stats (20%), personas (20%)
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(40),
+                Constraint::Percentage(20),
+                Constraint::Percentage(20),
+                Constraint::Percentage(20),
+            ])
+            .split(area);
+
+        render_logs(frame, app, chunks[0]);
+        render_parallel_tasks(frame, app, chunks[1]);
+        render_stats(frame, app, chunks[2]);
+        render_personas(frame, app, chunks[3]);
+    }
+}
+
+/// Renderiza o painel do AgentAnalyzer (segundo agente)
+fn render_agent_analyzer(frame: &mut Frame<'_>, analyzer: &AgentAnalyzerState, area: Rect) {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    // Header com status
+    if analyzer.is_active {
+        lines.push(Line::from(vec![
+            Span::styled("🔬 ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "ANALISANDO...",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("   {} falhas", analyzer.failures_count),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("   {} entradas", analyzer.diary_entries),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    } else if analyzer.last_improvement.is_some() {
+        lines.push(Line::from(vec![
+            Span::styled("✅ ", Style::default().fg(Color::Green)),
+            Span::styled(
+                "CONCLUÍDO",
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        if let Some(ms) = analyzer.duration_ms {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   {}ms", ms),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+
+    // Mostrar logs do analyzer com wrap
+    let visible_height = (area.height as usize).saturating_sub(6);
+    let logs_to_show: Vec<_> = analyzer.logs.iter().rev().take(visible_height).collect();
+
+    for entry in logs_to_show.into_iter().rev() {
+        let style = match entry.level {
+            LogLevel::Info => Style::default().fg(Color::White),
+            LogLevel::Success => Style::default().fg(Color::Green),
+            LogLevel::Warning => Style::default().fg(Color::Yellow),
+            LogLevel::Error => Style::default().fg(Color::Red),
+            LogLevel::Debug => Style::default().fg(Color::DarkGray),
+        };
+
+        // Quebrar mensagem em múltiplas linhas se necessário
+        let max_width = (area.width as usize).saturating_sub(4);
+        let msg = &entry.message;
+
+        if msg.len() <= max_width {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", entry.level.symbol()), style),
+                Span::styled(msg.clone(), style),
+            ]));
+        } else {
+            // Primeira linha com símbolo
+            let first_chunk: String = msg.chars().take(max_width - 3).collect();
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", entry.level.symbol()), style),
+                Span::styled(first_chunk, style),
+            ]));
+
+            // Linhas de continuação
+            let mut remaining: String = msg.chars().skip(max_width - 3).collect();
+            while !remaining.is_empty() {
+                let chunk_size = max_width.saturating_sub(3);
+                let chunk: String = remaining.chars().take(chunk_size).collect();
+                lines.push(Line::from(vec![
+                    Span::styled("   ", Style::default()),
+                    Span::styled(chunk.clone(), style),
+                ]));
+                remaining = remaining.chars().skip(chunk_size).collect();
+            }
+        }
+    }
+
+    // Se tiver resultado, mostrar resumo
+    if let Some(improvement) = &analyzer.last_improvement {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("─── Aplicado ───", Style::default().fg(Color::DarkGray)),
+        ]));
+
+        // Mostrar melhoria com wrap
+        let max_width = (area.width as usize).saturating_sub(4);
+        let chunks: Vec<String> = improvement
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(max_width)
+            .map(|c| c.iter().collect())
+            .collect();
+
+        for chunk in chunks.iter().take(3) {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {}", chunk), Style::default().fg(Color::Cyan)),
+            ]));
+        }
+        if chunks.len() > 3 {
+            lines.push(Line::from(vec![
+                Span::styled(" ...", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+
+    let border_color = if analyzer.is_active {
+        Color::Yellow
+    } else if analyzer.last_improvement.is_some() {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
+
+    let content = Paragraph::new(Text::from(lines))
+        .block(
+            Block::default()
+                .title(" 🔬 Analyzer ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color)),
+        );
+
+    frame.render_widget(content, area);
 }
 
 /// Renderiza o painel de tarefas paralelas em execução
@@ -520,41 +679,74 @@ fn format_bytes(bytes: usize) -> String {
     }
 }
 
-/// Renderiza a área de logs
+/// Renderiza a área de logs (com wrap de mensagens longas)
 fn render_logs(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let visible_height = area.height.saturating_sub(2) as usize;
     // Largura disponível para a mensagem (descontando bordas, timestamp e símbolo)
     let max_msg_width = (area.width as usize).saturating_sub(18);
+    // Largura para linhas de continuação (sem timestamp/símbolo)
+    let continuation_width = (area.width as usize).saturating_sub(6);
 
-    let items: Vec<ListItem<'_>> = app
-        .logs
-        .iter()
-        .skip(app.log_scroll)
-        .take(visible_height)
-        .map(|entry| {
-            let style = match entry.level {
-                LogLevel::Info => Style::default().fg(Color::White),
-                LogLevel::Success => Style::default().fg(Color::Green),
-                LogLevel::Warning => Style::default().fg(Color::Yellow),
-                LogLevel::Error => Style::default().fg(Color::Red),
-                LogLevel::Debug => Style::default().fg(Color::DarkGray),
-            };
+    // Construir lista de linhas com wrap
+    let mut items: Vec<ListItem<'_>> = Vec::new();
+    let mut line_count = 0;
 
-            // Truncar mensagem para caber na largura
-            let truncated_msg = truncate(&entry.message, max_msg_width);
+    for entry in app.logs.iter().skip(app.log_scroll) {
+        if line_count >= visible_height {
+            break;
+        }
 
+        let style = match entry.level {
+            LogLevel::Info => Style::default().fg(Color::White),
+            LogLevel::Success => Style::default().fg(Color::Green),
+            LogLevel::Warning => Style::default().fg(Color::Yellow),
+            LogLevel::Error => Style::default().fg(Color::Red),
+            LogLevel::Debug => Style::default().fg(Color::DarkGray),
+        };
+
+        let msg = &entry.message;
+
+        if msg.len() <= max_msg_width {
+            // Mensagem cabe em uma linha
             let content = Line::from(vec![
                 Span::styled(
                     format!("[{}] ", entry.timestamp),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(format!("{} ", entry.level.symbol()), style),
-                Span::styled(truncated_msg, style),
+                Span::styled(msg.clone(), style),
             ]);
+            items.push(ListItem::new(content));
+            line_count += 1;
+        } else {
+            // Mensagem precisa de wrap - primeira linha com timestamp/símbolo
+            let first_chunk: String = msg.chars().take(max_msg_width).collect();
+            let first_line = Line::from(vec![
+                Span::styled(
+                    format!("[{}] ", entry.timestamp),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(format!("{} ", entry.level.symbol()), style),
+                Span::styled(first_chunk, style),
+            ]);
+            items.push(ListItem::new(first_line));
+            line_count += 1;
 
-            ListItem::new(content)
-        })
-        .collect();
+            // Linhas de continuação (indentadas)
+            let mut remaining: String = msg.chars().skip(max_msg_width).collect();
+            while !remaining.is_empty() && line_count < visible_height {
+                let chunk: String = remaining.chars().take(continuation_width).collect();
+                let continuation_line = Line::from(vec![
+                    Span::styled("     ", Style::default()), // Indentação
+                    Span::styled("↳ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(chunk.clone(), style),
+                ]);
+                items.push(ListItem::new(continuation_line));
+                remaining = remaining.chars().skip(continuation_width).collect();
+                line_count += 1;
+            }
+        }
+    }
 
     let scroll_info = if app.logs.len() > visible_height {
         format!(

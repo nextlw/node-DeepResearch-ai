@@ -323,8 +323,21 @@ pub struct JinaClient {
     reader_endpoint: String,
     /// Endpoint para reranking
     rerank_endpoint: String,
+    /// Endpoint para embeddings
+    embeddings_endpoint: String,
+    /// Modelo de embeddings (jina-embeddings-v3)
+    embeddings_model: String,
     /// Cliente HTTP
     client: reqwest::Client,
+}
+
+/// Resultado de embedding Jina
+#[derive(Debug, Clone)]
+pub struct JinaEmbeddingResult {
+    /// Vetor de embedding
+    pub vector: Vec<f32>,
+    /// Tokens usados
+    pub tokens_used: u64,
 }
 
 impl JinaClient {
@@ -337,6 +350,7 @@ impl JinaClient {
     /// - Busca: `https://svip.jina.ai/` (POST com JSON body)
     /// - Reader: `https://r.jina.ai`
     /// - Rerank: `https://api.jina.ai/v1/rerank`
+    /// - Embeddings: `https://api.jina.ai/v1/embeddings` (jina-embeddings-v3)
     ///
     /// # Exemplo
     /// ```rust,ignore
@@ -349,12 +363,217 @@ impl JinaClient {
             search_endpoint: "https://svip.jina.ai/".into(),
             reader_endpoint: "https://r.jina.ai".into(),
             rerank_endpoint: "https://api.jina.ai/v1/rerank".into(),
+            embeddings_endpoint: "https://api.jina.ai/v1/embeddings".into(),
+            embeddings_model: "jina-embeddings-v4".into(),
             client: reqwest::Client::new(),
+        }
+    }
+
+    /// Gera embeddings para um único texto usando Jina Embeddings v3
+    pub async fn embed(&self, text: &str) -> Result<JinaEmbeddingResult, SearchError> {
+        self.embed_batch(&[text.to_string()])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| SearchError::ParseError("No embedding returned".into()))
+    }
+
+    /// Gera embeddings em batch usando Jina Embeddings v4
+    ///
+    /// Jina v4 suporta até 32,768 tokens por input e dimensões de 2048 (single-vector)
+    /// É multimodal (texto e imagem) e multilíngue (30+ idiomas)
+    pub async fn embed_batch(&self, texts: &[String]) -> Result<Vec<JinaEmbeddingResult>, SearchError> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Formatar input conforme API v4 - aceita objetos com "text"
+        let input: Vec<serde_json::Value> = texts
+            .iter()
+            .map(|t| serde_json::json!({"text": t}))
+            .collect();
+
+        let request_body = serde_json::json!({
+            "model": self.embeddings_model,
+            "task": "text-matching",
+            "normalized": true,
+            "embedding_type": "float",
+            "input": input
+        });
+
+        log::debug!("🔢 Jina Embeddings v4: {} textos", texts.len());
+
+        let response = self
+            .client
+            .post(&self.embeddings_endpoint)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|e| SearchError::NetworkError(e.to_string()))?;
+
+        if response.status() == 429 {
+            return Err(SearchError::RateLimitError);
+        }
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(SearchError::ApiError(format!(
+                "Jina Embeddings API error: {}",
+                error_text
+            )));
+        }
+
+        let embedding_response: JinaEmbeddingResponse = response
+            .json()
+            .await
+            .map_err(|e| SearchError::ParseError(format!("Failed to parse Jina embeddings: {}", e)))?;
+
+        let total_tokens = embedding_response.usage.total_tokens;
+        let prompt_tokens = embedding_response.usage.prompt_tokens;
+        let tokens_per_embedding = prompt_tokens / texts.len().max(1) as u64;
+
+        // Ordenar por index para garantir ordem correta
+        let mut data = embedding_response.data;
+        data.sort_by_key(|d| d.index);
+
+        let results: Vec<JinaEmbeddingResult> = data
+            .into_iter()
+            .map(|d| JinaEmbeddingResult {
+                vector: d.embedding,
+                tokens_used: tokens_per_embedding,
+            })
+            .collect();
+
+        log::info!(
+            "✅ Jina Embeddings v4 ({}): {} vetores | dim={} | {} prompt + {} total tokens",
+            embedding_response.model,
+            results.len(),
+            results.first().map(|r| r.vector.len()).unwrap_or(0),
+            prompt_tokens,
+            total_tokens
+        );
+
+        Ok(results)
+    }
+
+    /// Lê uma URL usando Rust local primeiro, Jina como fallback
+    ///
+    /// Retorna (Result, método_usado, tentativas)
+    async fn read_url_with_fallback(
+        &self,
+        url: &Url,
+    ) -> (Result<UrlContent, SearchError>, &'static str, u8) {
+        use crate::utils::FileReader;
+
+        const MIN_CONTENT_LENGTH: usize = 100; // Mínimo de bytes para considerar sucesso
+
+        // 1. Tentar Rust local primeiro (usa Mozilla Readability internamente)
+        let reader = FileReader::new();
+        let rust_start = std::time::Instant::now();
+        let rust_result = reader.read_url(url).await;
+        let rust_time = rust_start.elapsed().as_millis();
+
+        if let Ok(file_content) = rust_result {
+            // Verificar se o conteúdo é válido (não vazio)
+            if file_content.text.len() >= MIN_CONTENT_LENGTH {
+                log::info!(
+                    "✅ [RUST+Readability] {} | {}ms | {} bytes | {} palavras",
+                    url,
+                    rust_time,
+                    file_content.text.len(),
+                    file_content.word_count
+                );
+                return (
+                    Ok(UrlContent {
+                        title: file_content.title.unwrap_or_default(),
+                        text: file_content.text,
+                        url: file_content.source,
+                        word_count: file_content.word_count,
+                        read_time_ms: Some(rust_time),
+                        source: Some("rust_local".to_string()),
+                    }),
+                    "rust_local",
+                    1,
+                );
+            } else {
+                log::warn!(
+                    "⚠️ [RUST] {} conteúdo muito curto ({} bytes), tentando Jina...",
+                    url,
+                    file_content.text.len()
+                );
+            }
+        } else if let Err(ref e) = rust_result {
+            log::warn!(
+                "⚠️ [RUST] {} falhou ({}ms): {}, tentando Jina...",
+                url,
+                rust_time,
+                e
+            );
+        }
+
+        // 2. Fallback para Jina
+        let jina_start = std::time::Instant::now();
+        let jina_result = self.read_url(url).await;
+        let jina_time = jina_start.elapsed().as_millis();
+
+        match jina_result {
+            Ok(mut content) => {
+                if content.text.len() >= MIN_CONTENT_LENGTH {
+                    content.read_time_ms = Some(rust_time + jina_time);
+                    log::info!(
+                        "✅ [JINA-FALLBACK] {} | {}ms | {} bytes",
+                        url,
+                        jina_time,
+                        content.text.len()
+                    );
+                    (Ok(content), "jina", 2)
+                } else {
+                    log::error!(
+                        "❌ [AMBOS FALHARAM] {} | conteúdo insuficiente (<{} bytes)",
+                        url,
+                        MIN_CONTENT_LENGTH
+                    );
+                    (
+                        Err(SearchError::ExtractionError(format!(
+                            "Conteúdo muito curto em ambos os métodos para {}",
+                            url
+                        ))),
+                        "failed",
+                        2,
+                    )
+                }
+            }
+            Err(e) => {
+                log::error!("❌ [AMBOS FALHARAM] {} | Rust e Jina: {}", url, e);
+                (Err(e), "failed", 2)
+            }
         }
     }
 }
 
 // Estruturas para serialização/deserialização da API Jina
+
+/// Response de embeddings Jina v4
+#[derive(Deserialize, Debug)]
+struct JinaEmbeddingResponse {
+    data: Vec<JinaEmbeddingData>,
+    usage: JinaEmbeddingUsage,
+    model: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct JinaEmbeddingData {
+    embedding: Vec<f32>,
+    index: usize,
+}
+
+#[derive(Deserialize, Debug)]
+struct JinaEmbeddingUsage {
+    total_tokens: u64,
+    prompt_tokens: u64,
+}
 
 /// Request body para busca Jina
 #[derive(Serialize)]
@@ -634,22 +853,38 @@ impl SearchClient for JinaClient {
         use std::time::Instant;
 
         let start = Instant::now();
-        log::info!("⚡ [PARALELO] Iniciando {} requisições simultâneas...", urls.len());
+        log::info!(
+            "⚡ [PARALELO] Iniciando {} leituras (Rust primeiro, Jina fallback)...",
+            urls.len()
+        );
 
-        let futures: Vec<_> = urls.iter().map(|url| self.read_url(url)).collect();
-        let results = join_all(futures).await;
+        // Usar o novo método com fallback
+        let futures: Vec<_> = urls
+            .iter()
+            .map(|url| self.read_url_with_fallback(url))
+            .collect();
+        let results_with_meta = join_all(futures).await;
 
         let elapsed = start.elapsed().as_millis();
         let avg_per_url = elapsed as f64 / urls.len().max(1) as f64;
+
+        // Contar métodos usados
+        let rust_count = results_with_meta.iter().filter(|(_, m, _)| *m == "rust_local").count();
+        let jina_count = results_with_meta.iter().filter(|(_, m, _)| *m == "jina").count();
+        let failed_count = results_with_meta.iter().filter(|(_, m, _)| *m == "failed").count();
+
         log::info!(
-            "⚡ [PARALELO] {} URLs lidas em {}ms (média efetiva: {:.0}ms/URL) - Se sequencial seria ~{}ms",
+            "⚡ [PARALELO] {} URLs em {}ms (média: {:.0}ms) | Rust: {} | Jina: {} | Falhas: {}",
             urls.len(),
             elapsed,
             avg_per_url,
-            urls.len() as u128 * 2000  // Estimativa de 2s por URL sequencial
+            rust_count,
+            jina_count,
+            failed_count
         );
 
-        results
+        // Extrair apenas os resultados
+        results_with_meta.into_iter().map(|(r, _, _)| r).collect()
     }
 
     async fn rerank(
