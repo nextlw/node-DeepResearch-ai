@@ -7,12 +7,16 @@ mod actions;
 /// Útil para debugging e geração de relatórios sobre decisões e erros do agente.
 pub mod agent_analyzer;
 mod context;
+/// Módulo para acesso ao histórico de sessões anteriores.
+/// Suporta múltiplos backends: local (JSON), PostgreSQL, Qdrant.
+pub mod history;
 mod permissions;
 mod state;
 
 pub use actions::*;
 pub use agent_analyzer::AgentAnalysis;
 pub use context::*;
+pub use history::{HistoryQuery, HistorySearchResult, HistoryService, SessionSummary};
 pub use permissions::*;
 pub use state::*;
 
@@ -628,6 +632,11 @@ impl DeepResearchAgent {
                 self.execute_answer(final_answer, final_references, think).await
             }
             AgentAction::Coding { code, think } => self.execute_coding(code, think).await,
+            AgentAction::History {
+                count,
+                filter,
+                think,
+            } => self.execute_history(count, filter, think).await,
         }
     }
 
@@ -712,6 +721,11 @@ Available actions:
         }
         if permissions.coding {
             prompt.push_str("- CODING: Execute code for data processing\n");
+        }
+        if permissions.history {
+            prompt.push_str("- HISTORY: Access previous research sessions for context\n");
+            prompt.push_str("  → Use when user asks about 'what was researched before' or 'summarize previous'\n");
+            prompt.push_str("  → Loads summaries of past questions/answers to provide context\n");
         }
 
         // Adicionar info sobre URLs visitadas
@@ -1686,6 +1700,84 @@ Available actions:
         }
 
         self.context.diary.push(DiaryEntry::Coding { code, think });
+
+        self.context.total_step += 1;
+        StepResult::Continue
+    }
+
+    /// Executa consulta ao histórico de sessões anteriores
+    async fn execute_history(
+        &mut self,
+        count: usize,
+        filter: Option<String>,
+        think: String,
+    ) -> StepResult {
+        self.emit(AgentProgress::Info(format!(
+            "📜 Consultando histórico ({} sessões)...",
+            count
+        )));
+        log::info!("📜 Consultando histórico de sessões anteriores");
+
+        // Criar serviço de histórico (usa local por padrão)
+        let history_service = HistoryService::default();
+
+        // Construir query
+        let query = if let Some(ref text) = filter {
+            HistoryQuery::new(count).with_text_filter(text)
+        } else {
+            HistoryQuery::new(count)
+        };
+
+        // Buscar sessões
+        match history_service.search(&query).await {
+            Ok(result) => {
+                let sessions_loaded = result.sessions.len();
+
+                if sessions_loaded > 0 {
+                    // Formatar contexto para adicionar ao knowledge
+                    let context = result.format_for_llm();
+
+                    self.context.knowledge.push(KnowledgeItem {
+                        question: "Histórico de pesquisas anteriores".to_string(),
+                        answer: context,
+                        item_type: KnowledgeType::History,
+                        references: vec![],
+                    });
+
+                    self.emit(AgentProgress::Success(format!(
+                        "✅ {} sessões anteriores carregadas (backend: {})",
+                        sessions_loaded, result.backend
+                    )));
+                    log::info!(
+                        "📜 {} sessões carregadas em {}ms",
+                        sessions_loaded,
+                        result.search_time_ms
+                    );
+                } else {
+                    self.emit(AgentProgress::Warning(
+                        "⚠️ Nenhuma sessão anterior encontrada".to_string(),
+                    ));
+                    log::info!("📜 Nenhuma sessão anterior encontrada");
+                }
+
+                self.context.diary.push(DiaryEntry::History {
+                    sessions_loaded,
+                    think,
+                });
+            }
+            Err(e) => {
+                self.emit(AgentProgress::Warning(format!(
+                    "⚠️ Erro ao consultar histórico: {}",
+                    e
+                )));
+                log::warn!("📜 Erro ao consultar histórico: {}", e);
+
+                self.context.diary.push(DiaryEntry::History {
+                    sessions_loaded: 0,
+                    think,
+                });
+            }
+        }
 
         self.context.total_step += 1;
         StepResult::Continue

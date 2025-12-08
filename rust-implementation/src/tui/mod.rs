@@ -30,6 +30,6 @@ pub mod ui;
 pub use agent_adapter::AgentTuiAdapter;
 pub use app::{
     App, AppEvent, AppScreen, CompletedStep, LogEntry, LogLevel, ParallelBatch, ParallelTask,
-    PersonaStats, ReadMethod, SystemMetrics, TaskStatus,
+    PersonaStats, ReadMethod, ResearchSession, SystemMetrics, TaskStatus,
 };
 pub use runner::{create_event_channel, run_tui, TuiLogger};

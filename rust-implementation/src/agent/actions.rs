@@ -82,6 +82,19 @@ pub enum AgentAction {
         /// Raciocínio do agente para esta ação
         think: String,
     },
+
+    /// Acessar histórico de pesquisas anteriores
+    ///
+    /// Esta ação carrega sessões anteriores para dar contexto
+    /// ao agente sobre o que o usuário já pesquisou.
+    History {
+        /// Quantidade de sessões anteriores a carregar (default: 5)
+        count: usize,
+        /// Filtro opcional por termo (busca em questions)
+        filter: Option<String>,
+        /// Raciocínio do agente para esta ação
+        think: String,
+    },
 }
 
 impl AgentAction {
@@ -93,6 +106,7 @@ impl AgentAction {
             AgentAction::Reflect { .. } => "reflect",
             AgentAction::Answer { .. } => "answer",
             AgentAction::Coding { .. } => "coding",
+            AgentAction::History { .. } => "history",
         }
     }
 
@@ -104,6 +118,7 @@ impl AgentAction {
             AgentAction::Reflect { think, .. } => think,
             AgentAction::Answer { think, .. } => think,
             AgentAction::Coding { think, .. } => think,
+            AgentAction::History { think, .. } => think,
         }
     }
 
@@ -191,6 +206,17 @@ pub enum DiaryEntry {
         /// Raciocínio do agente para executar este código.
         think: String,
     },
+
+    /// Registro de acesso ao histórico de sessões.
+    ///
+    /// O agente consultou pesquisas anteriores do usuário
+    /// para obter contexto.
+    History {
+        /// Quantidade de sessões carregadas.
+        sessions_loaded: usize,
+        /// Raciocínio do agente para acessar o histórico.
+        think: String,
+    },
 }
 
 impl DiaryEntry {
@@ -225,6 +251,15 @@ impl DiaryEntry {
             }
             DiaryEntry::Coding { think, .. } => {
                 format!("[CODING]\nThink: {}", think)
+            }
+            DiaryEntry::History {
+                sessions_loaded,
+                think,
+            } => {
+                format!(
+                    "[HISTORY] {} sessions loaded\nThink: {}",
+                    sessions_loaded, think
+                )
             }
         }
     }

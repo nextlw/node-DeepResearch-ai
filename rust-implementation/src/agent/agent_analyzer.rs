@@ -137,6 +137,17 @@ fn format_diary_for_analysis(diary: &[DiaryEntry], original_question: &str) -> S
                     think
                 ));
             }
+            DiaryEntry::History {
+                sessions_loaded,
+                think,
+            } => {
+                output.push_str(&format!(
+                    "At step {}, you took the **history** action to access previous research sessions:\n\
+                    Sessions loaded: {}\n\
+                    Think: {}\n\n",
+                    step_num, sessions_loaded, think
+                ));
+            }
         }
     }
 

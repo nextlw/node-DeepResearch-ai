@@ -520,6 +520,10 @@ struct ActionJson {
     answer: Option<String>,
     references: Option<Vec<ActionReference>>,
     code: Option<String>,
+    /// Quantidade de sessões para history
+    count: Option<usize>,
+    /// Filtro de texto para history
+    filter: Option<String>,
     think: String,
 }
 
@@ -564,6 +568,9 @@ impl LlmClient for OpenAiClient {
         }
         if permissions.coding {
             system_prompt.push_str("- coding: {\"action\": \"coding\", \"code\": \"code to execute\", \"think\": \"reasoning\"}\n");
+        }
+        if permissions.history {
+            system_prompt.push_str("- history: {\"action\": \"history\", \"count\": 5, \"filter\": \"optional search term\", \"think\": \"reasoning\"}\n");
         }
 
         system_prompt.push_str("\nRespond ONLY with valid JSON, no other text.");
@@ -700,6 +707,11 @@ impl LlmClient for OpenAiClient {
             }
             "coding" => Ok(AgentAction::Coding {
                 code: action_json.code.unwrap_or_default(),
+                think: action_json.think,
+            }),
+            "history" => Ok(AgentAction::History {
+                count: action_json.count.unwrap_or(5),
+                filter: action_json.filter,
                 think: action_json.think,
             }),
             _ => Err(LlmError::ParseError(format!(

@@ -28,6 +28,8 @@ pub struct ActionPermissions {
     pub answer: bool,
     /// Pode executar código
     pub coding: bool,
+    /// Pode acessar histórico de sessões
+    pub history: bool,
 }
 
 impl ActionPermissions {
@@ -39,6 +41,7 @@ impl ActionPermissions {
     /// - `reflect`: Desabilitada se já tem muitas perguntas de gap
     /// - `answer`: Habilitada após min_steps (carregado do .env) ou se allow_direct_answer
     /// - `coding`: Sempre habilitada (por padrão)
+    /// - `history`: Sempre habilitada (permite consultar sessões anteriores)
     pub fn from_context(ctx: &AgentContext) -> Self {
         // Carregar configuração do agente do .env
         let agent_config = crate::config::load_agent_config();
@@ -51,6 +54,7 @@ impl ActionPermissions {
             answer: ctx.total_step >= agent_config.min_steps_before_answer
                 || (ctx.allow_direct_answer && agent_config.allow_direct_answer),
             coding: true, // Coding geralmente está habilitado
+            history: true, // History sempre habilitado
         }
     }
 
@@ -63,6 +67,7 @@ impl ActionPermissions {
             answer: ctx.total_step >= config.min_steps_before_answer
                 || (ctx.allow_direct_answer && config.allow_direct_answer),
             coding: true,
+            history: true,
         }
     }
 
@@ -74,6 +79,7 @@ impl ActionPermissions {
             reflect: true,
             answer: true,
             coding: true,
+            history: true,
         }
     }
 
@@ -85,6 +91,7 @@ impl ActionPermissions {
             reflect: false,
             answer: false,
             coding: false,
+            history: false,
         }
     }
 
@@ -96,12 +103,13 @@ impl ActionPermissions {
             reflect: false,
             answer: true,
             coding: false,
+            history: false,
         }
     }
 
     /// Lista de ações permitidas (para logging/debug)
     pub fn allowed_actions(&self) -> Vec<&'static str> {
-        let mut actions = Vec::with_capacity(5);
+        let mut actions = Vec::with_capacity(6);
         if self.search {
             actions.push("search");
         }
@@ -117,6 +125,9 @@ impl ActionPermissions {
         if self.coding {
             actions.push("coding");
         }
+        if self.history {
+            actions.push("history");
+        }
         actions
     }
 
@@ -128,6 +139,7 @@ impl ActionPermissions {
             self.reflect,
             self.answer,
             self.coding,
+            self.history,
         ]
         .iter()
         .filter(|&&x| x)
@@ -136,7 +148,7 @@ impl ActionPermissions {
 
     /// Verifica se pelo menos uma ação está permitida
     pub fn has_any_allowed(&self) -> bool {
-        self.search || self.read || self.reflect || self.answer || self.coding
+        self.search || self.read || self.reflect || self.answer || self.coding || self.history
     }
 
     /// Verifica se uma ação específica está permitida
@@ -147,6 +159,7 @@ impl ActionPermissions {
             "reflect" => self.reflect,
             "answer" => self.answer,
             "coding" => self.coding,
+            "history" => self.history,
             _ => false,
         }
     }
@@ -200,7 +213,8 @@ mod tests {
         assert!(perms.reflect);
         assert!(perms.answer);
         assert!(perms.coding);
-        assert_eq!(perms.count_allowed(), 5);
+        assert!(perms.history);
+        assert_eq!(perms.count_allowed(), 6);
     }
 
     #[test]
@@ -211,6 +225,7 @@ mod tests {
         assert!(!perms.reflect);
         assert!(!perms.answer);
         assert!(!perms.coding);
+        assert!(!perms.history);
         assert_eq!(perms.count_allowed(), 0);
     }
 
@@ -222,6 +237,7 @@ mod tests {
         assert!(!perms.reflect);
         assert!(perms.answer);
         assert!(!perms.coding);
+        assert!(!perms.history);
         assert_eq!(perms.count_allowed(), 1);
     }
 
@@ -233,9 +249,10 @@ mod tests {
             reflect: true,
             answer: false,
             coding: true,
+            history: true,
         };
         let actions = perms.allowed_actions();
-        assert_eq!(actions, vec!["search", "reflect", "coding"]);
+        assert_eq!(actions, vec!["search", "reflect", "coding", "history"]);
     }
 
     #[test]
@@ -249,6 +266,7 @@ mod tests {
         assert!(perms.reflect);
         assert!(perms.answer);
         assert!(perms.coding);
+        assert!(perms.history);
     }
 
     #[test]
@@ -259,6 +277,7 @@ mod tests {
             reflect: true,
             answer: true,
             coding: false,
+            history: true,
         };
 
         assert!(perms.is_allowed("search"));
@@ -266,6 +285,7 @@ mod tests {
         assert!(perms.is_allowed("reflect"));
         assert!(perms.is_allowed("answer"));
         assert!(!perms.is_allowed("coding"));
+        assert!(perms.is_allowed("history"));
         assert!(!perms.is_allowed("unknown"));
     }
 }
