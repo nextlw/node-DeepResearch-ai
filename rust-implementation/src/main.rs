@@ -14,7 +14,7 @@ use deep_research::llm::OpenAiClient;
 use deep_research::prelude::*;
 use deep_research::reader_comparison::ReaderComparison;
 use deep_research::search::JinaClient;
-use deep_research::tui::{create_event_channel, run_tui, AppEvent, TuiLogger};
+use deep_research::tui::create_event_channel;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -65,11 +65,15 @@ async fn main() -> anyhow::Result<()> {
     // Carregar .env PRIMEIRO, antes de qualquer coisa
     load_dotenv();
 
-    // Inicializar logging
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
-    // Parse argumentos
+    // Parse argumentos ANTES de inicializar logging
     let args: Vec<String> = std::env::args().collect();
+    let is_tui_mode = args.len() >= 3 && args[1] == "--tui";
+
+    // Inicializar logging apenas se NÃO for modo TUI
+    // (TUI não funciona com env_logger pois corrompe a tela)
+    if !is_tui_mode {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    }
 
     if args.len() < 2 {
         eprintln!("Deep Research CLI v{}", deep_research::VERSION);
@@ -94,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Modo TUI
-    if args.len() >= 3 && args[1] == "--tui" {
+    if is_tui_mode {
         return run_tui_mode(&args[2..].join(" ")).await;
     }
 
@@ -332,6 +336,16 @@ async fn run_comparison_mode(urls_arg: &str) -> anyhow::Result<()> {
 
 /// Executa o modo TUI interativo
 async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
+    use std::io;
+    use std::time::Duration;
+    use crossterm::{
+        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+        execute,
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    };
+    use ratatui::{backend::CrosstermBackend, Terminal};
+    use deep_research::tui::{App, AppEvent, LogEntry, LogLevel};
+
     // Criar clientes
     let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| {
         eprintln!("✗ Erro: OPENAI_API_KEY não encontrada!");
@@ -350,51 +364,137 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
 
     // Criar canal de eventos para TUI
     let (tx, rx) = create_event_channel();
-    let logger = TuiLogger::new(tx.clone());
+    let tx_clone = tx.clone();
+
+    // Setup terminal
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Criar app
+    let mut app = App::new(question.to_string());
 
     // Executar agente em thread separada
     let question_clone = question.to_string();
     let agent_handle = tokio::spawn(async move {
-        // Criar agente
         let agent = DeepResearchAgent::new(llm_client, search_client, None);
 
-        logger.info("Iniciando pesquisa...");
-        logger.set_action("Inicializando");
+        // Enviar evento inicial
+        let _ = tx_clone.send(AppEvent::Log(LogEntry::new(LogLevel::Info, "Iniciando pesquisa...")));
+        let _ = tx_clone.send(AppEvent::SetAction("Buscando".into()));
 
-        // Executar pesquisa
+        // Simular atualizações durante a execução
+        // (O agente real não expõe callbacks, então enviamos o resultado final)
         let result = agent.run(question_clone).await;
 
-        // Enviar resultado para TUI
+        // Enviar estatísticas finais
+        let _ = tx_clone.send(AppEvent::SetStep(result.visited_urls.len()));
+        let _ = tx_clone.send(AppEvent::SetVisitedCount(result.visited_urls.len()));
+        let _ = tx_clone.send(AppEvent::SetTokens(result.token_usage.total_tokens));
+
+        // Enviar resultado
         if result.success {
             if let Some(ref answer) = result.answer {
-                let refs: Vec<String> = result.references
+                let _ = tx_clone.send(AppEvent::Log(LogEntry::new(
+                    LogLevel::Success,
+                    format!("Resposta gerada ({} chars)", answer.len()),
+                )));
+                let refs: Vec<String> = result
+                    .references
                     .iter()
                     .map(|r| format!("{} - {}", r.title, r.url))
                     .collect();
-                logger.complete(answer.clone(), refs);
+                let _ = tx_clone.send(AppEvent::SetAnswer(answer.clone()));
+                let _ = tx_clone.send(AppEvent::SetReferences(refs));
             }
+            let _ = tx_clone.send(AppEvent::Complete);
         } else {
-            let _ = tx.send(AppEvent::Error(
-                result.error.clone().unwrap_or_else(|| "Erro desconhecido".into())
+            let _ = tx_clone.send(AppEvent::Error(
+                result.error.clone().unwrap_or_else(|| "Erro desconhecido".into()),
             ));
         }
 
         result
     });
 
-    // Executar TUI (bloqueia até terminar)
-    let app = run_tui(question.to_string(), rx)?;
+    // Loop principal da TUI
+    loop {
+        // Renderizar
+        terminal.draw(|frame| deep_research::tui::ui::render(frame, &app))?;
+
+        // Processar eventos do agente (não bloqueante)
+        while let Ok(event) = rx.try_recv() {
+            app.handle_event(event);
+        }
+
+        // Processar input do usuário (com timeout curto)
+        if event::poll(Duration::from_millis(50))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Char('q') => {
+                            app.should_quit = true;
+                            break;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
+                        KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
+                        KeyCode::Esc if app.is_complete => break,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // Sair se completo
+        if app.is_complete && app.should_quit {
+            break;
+        }
+    }
+
+    // Restaurar terminal
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
 
     // Aguardar agente terminar
     let result = agent_handle.await?;
 
-    // Se o usuário saiu antes, mostrar resultado no terminal
-    if app.should_quit && !app.is_complete {
-        println!("\n⚠️  TUI encerrada pelo usuário");
-        if let Some(answer) = result.answer {
-            println!("\nResposta parcial: {}", answer);
+    // Mostrar resultado no terminal após sair da TUI
+    println!();
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!(" RESULTADO");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+
+    if result.success {
+        if let Some(answer) = &result.answer {
+            println!("✅ {}", answer);
+            println!();
         }
+        if !result.references.is_empty() {
+            println!("📚 Referências:");
+            for (i, r) in result.references.iter().take(5).enumerate() {
+                println!("   {}. {} - {}", i + 1, r.title, r.url);
+            }
+        }
+    } else {
+        println!("❌ Erro: {}", result.error.unwrap_or_default());
     }
+
+    println!();
+    println!(
+        "⏱️  {:.2}s │ 🎫 {} tokens │ 🔗 {} URLs",
+        result.total_time_ms as f64 / 1000.0,
+        result.token_usage.total_tokens,
+        result.visited_urls.len()
+    );
+    println!();
 
     Ok(())
 }

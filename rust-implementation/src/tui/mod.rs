@@ -24,7 +24,8 @@
 mod agent_adapter;
 mod app;
 mod runner;
-mod ui;
+/// Módulo de renderização UI.
+pub mod ui;
 
 pub use agent_adapter::AgentTuiAdapter;
 pub use app::{App, AppEvent, LogEntry, LogLevel};
