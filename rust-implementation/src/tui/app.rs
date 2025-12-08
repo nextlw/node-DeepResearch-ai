@@ -209,8 +209,12 @@ pub struct App {
     pub personas: HashMap<String, PersonaStats>,
     /// Histórico de perguntas
     pub history: Vec<String>,
-    /// Índice no histórico
+    /// Índice no histórico (para input)
     pub history_index: Option<usize>,
+    /// Scroll position na resposta final
+    pub result_scroll: usize,
+    /// Índice selecionado no histórico (para visualização)
+    pub history_selected: Option<usize>,
 }
 
 impl Default for App {
@@ -250,6 +254,8 @@ impl App {
             personas: HashMap::new(),
             history: Vec::new(),
             history_index: None,
+            result_scroll: 0,
+            history_selected: None,
         }
     }
 
@@ -372,6 +378,74 @@ impl App {
         if self.log_scroll < max_scroll {
             self.log_scroll += 1;
         }
+    }
+
+    /// Scroll up na resposta final
+    pub fn result_scroll_up(&mut self) {
+        self.result_scroll = self.result_scroll.saturating_sub(1);
+    }
+
+    /// Scroll down na resposta final
+    pub fn result_scroll_down(&mut self) {
+        self.result_scroll += 1;
+    }
+
+    /// Page up na resposta final
+    pub fn result_page_up(&mut self) {
+        self.result_scroll = self.result_scroll.saturating_sub(10);
+    }
+
+    /// Page down na resposta final
+    pub fn result_page_down(&mut self) {
+        self.result_scroll += 10;
+    }
+
+    /// Seleciona item anterior no histórico visual
+    pub fn history_select_up(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        match self.history_selected {
+            Some(idx) if idx > 0 => {
+                self.history_selected = Some(idx - 1);
+            }
+            None => {
+                self.history_selected = Some(self.history.len().saturating_sub(1));
+            }
+            _ => {}
+        }
+    }
+
+    /// Seleciona próximo item no histórico visual
+    pub fn history_select_down(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        match self.history_selected {
+            Some(idx) if idx < self.history.len() - 1 => {
+                self.history_selected = Some(idx + 1);
+            }
+            None => {
+                self.history_selected = Some(0);
+            }
+            _ => {}
+        }
+    }
+
+    /// Usa o item selecionado do histórico
+    pub fn use_selected_history(&mut self) {
+        if let Some(idx) = self.history_selected {
+            if let Some(question) = self.history.get(idx).cloned() {
+                self.input_text = question;
+                self.cursor_pos = self.input_text.chars().count();
+                self.history_selected = None;
+            }
+        }
+    }
+
+    /// Limpa seleção do histórico
+    pub fn clear_history_selection(&mut self) {
+        self.history_selected = None;
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -497,6 +571,8 @@ impl App {
         self.read_time_ms = 0;
         self.llm_time_ms = 0;
         self.log_scroll = 0;
+        self.result_scroll = 0;
+        self.history_selected = None;
         self.personas.clear();
     }
 }

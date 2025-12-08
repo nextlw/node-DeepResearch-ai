@@ -48,6 +48,8 @@ fn run_app(
     app: &mut App,
     event_rx: Receiver<AppEvent>,
 ) -> io::Result<()> {
+    use super::app::AppScreen;
+
     loop {
         // Renderizar
         terminal.draw(|frame| ui::render(frame, app))?;
@@ -61,23 +63,84 @@ fn run_app(
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') => {
-                            app.should_quit = true;
-                            return Ok(());
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            app.scroll_up();
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            app.scroll_down();
-                        }
-                        KeyCode::Esc => {
-                            if app.is_complete {
+                    match app.screen {
+                        // Tela de pesquisa - scroll nos logs
+                        AppScreen::Research => match key.code {
+                            KeyCode::Char('q') => {
+                                app.should_quit = true;
                                 return Ok(());
                             }
-                        }
-                        _ => {}
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                app.scroll_up();
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                app.scroll_down();
+                            }
+                            KeyCode::PageUp => {
+                                for _ in 0..5 {
+                                    app.scroll_up();
+                                }
+                            }
+                            KeyCode::PageDown => {
+                                for _ in 0..5 {
+                                    app.scroll_down();
+                                }
+                            }
+                            KeyCode::Esc => {
+                                if app.is_complete {
+                                    return Ok(());
+                                }
+                            }
+                            _ => {}
+                        },
+
+                        // Tela de resultado - scroll na resposta
+                        AppScreen::Result => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => {
+                                app.should_quit = true;
+                                return Ok(());
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                app.result_scroll_up();
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                app.result_scroll_down();
+                            }
+                            KeyCode::PageUp => {
+                                app.result_page_up();
+                            }
+                            KeyCode::PageDown => {
+                                app.result_page_down();
+                            }
+                            KeyCode::Home => {
+                                app.result_scroll = 0;
+                            }
+                            KeyCode::End => {
+                                app.result_scroll = usize::MAX; // será limitado pelo render
+                            }
+                            KeyCode::Enter => {
+                                // Nova pesquisa
+                                app.reset();
+                            }
+                            _ => {}
+                        },
+
+                        // Tela de input - já tratada no main.rs
+                        AppScreen::Input => match key.code {
+                            KeyCode::Char('q') if app.input_text.is_empty() => {
+                                app.should_quit = true;
+                                return Ok(());
+                            }
+                            KeyCode::Esc => {
+                                if app.history_selected.is_some() {
+                                    app.clear_history_selection();
+                                } else {
+                                    app.should_quit = true;
+                                    return Ok(());
+                                }
+                            }
+                            _ => {}
+                        },
                     }
                 }
             }

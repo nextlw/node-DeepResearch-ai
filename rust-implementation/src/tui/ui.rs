@@ -83,32 +83,64 @@ fn render_input_screen(frame: &mut Frame<'_>, app: &App) {
         .style(Style::default().fg(Color::White));
     frame.render_widget(input, chunks[1]);
 
-    // Histórico de perguntas
+    // Histórico de perguntas com seleção visual
+    let history_len = app.history.len();
     let history_items: Vec<ListItem<'_>> = app
         .history
         .iter()
-        .rev()
-        .take(5)
         .enumerate()
-        .map(|(i, q)| {
+        .rev()
+        .take(8)
+        .map(|(original_idx, q)| {
             let truncated = if q.len() > 70 {
                 format!("{}...", &q[..67])
             } else {
                 q.clone()
             };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!(" {} ", i + 1), Style::default().fg(Color::DarkGray)),
-                Span::raw(truncated),
-            ]))
+
+            // Verificar se este item está selecionado
+            let is_selected = app.history_selected == Some(original_idx);
+            let display_num = history_len - original_idx;
+
+            if is_selected {
+                ListItem::new(Line::from(vec![
+                    Span::styled(" ▶ ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        format!("{} ", display_num),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        truncated,
+                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    ),
+                ]))
+                .style(Style::default().bg(Color::DarkGray))
+            } else {
+                ListItem::new(Line::from(vec![
+                    Span::styled("   ", Style::default()),
+                    Span::styled(format!("{} ", display_num), Style::default().fg(Color::DarkGray)),
+                    Span::raw(truncated),
+                ]))
+            }
         })
         .collect();
+
+    let history_title = if app.history_selected.is_some() {
+        " 📜 Histórico (Enter para usar, Esc para cancelar) "
+    } else {
+        " 📜 Histórico (↑/↓ para navegar) "
+    };
 
     let history = List::new(history_items)
         .block(
             Block::default()
-                .title(" 📜 Histórico (↑/↓ para navegar) ")
+                .title(history_title)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(if app.history_selected.is_some() {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                }),
         )
         .style(Style::default().fg(Color::Gray));
     frame.render_widget(history, chunks[2]);
@@ -498,13 +530,26 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     );
     frame.render_widget(header, chunks[0]);
 
-    // Resposta
+    // Resposta com scroll
     let answer_text = app.answer.as_deref().unwrap_or("Sem resposta");
+    let answer_lines: Vec<&str> = answer_text.lines().collect();
+    let total_lines = answer_lines.len();
+    let visible_height = (chunks[1].height as usize).saturating_sub(2);
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let scroll_pos = app.result_scroll.min(max_scroll);
+
+    let scroll_info = if total_lines > visible_height {
+        format!(" [{}/{}] ↑↓ PgUp/PgDn ", scroll_pos + 1, max_scroll + 1)
+    } else {
+        String::new()
+    };
+
     let answer = Paragraph::new(answer_text)
         .wrap(Wrap { trim: false })
+        .scroll((scroll_pos as u16, 0))
         .block(
             Block::default()
-                .title(" 📝 Resposta ")
+                .title(format!(" 📝 Resposta{} ", scroll_info))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::White)),
         )
@@ -581,7 +626,11 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
 
     // Ajuda
     let help = Paragraph::new(Line::from(vec![
-        Span::styled(" Enter", Style::default().fg(Color::Green)),
+        Span::styled("↑↓", Style::default().fg(Color::Yellow)),
+        Span::raw(" Scroll  "),
+        Span::styled("PgUp/PgDn", Style::default().fg(Color::Yellow)),
+        Span::raw(" Página  "),
+        Span::styled("Enter", Style::default().fg(Color::Green)),
         Span::raw(" Nova pesquisa  "),
         Span::styled("q/Esc", Style::default().fg(Color::Red)),
         Span::raw(" Sair"),

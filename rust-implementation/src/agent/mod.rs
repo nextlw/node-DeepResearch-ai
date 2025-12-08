@@ -86,6 +86,14 @@ pub struct DeepResearchAgent {
     read_count: usize,
     /// Contador de respostas geradas
     answer_count: usize,
+    /// Habilita modo de comparação Jina vs Rust+OpenAI
+    enable_comparative_read: bool,
+    /// Contagem de vitórias Jina
+    jina_wins: usize,
+    /// Contagem de vitórias Rust
+    rust_wins: usize,
+    /// Empates
+    ties: usize,
 }
 
 impl DeepResearchAgent {
@@ -112,12 +120,25 @@ impl DeepResearchAgent {
             search_count: 0,
             read_count: 0,
             answer_count: 0,
+            enable_comparative_read: false,
+            jina_wins: 0,
+            rust_wins: 0,
+            ties: 0,
         }
     }
 
     /// Configura callback de progresso para updates em tempo real
     pub fn with_progress_callback(mut self, callback: ProgressCallback) -> Self {
         self.progress_callback = Some(callback);
+        self
+    }
+
+    /// Habilita modo de comparação Jina vs Rust local
+    pub fn with_comparative_read(mut self, enable: bool) -> Self {
+        self.enable_comparative_read = enable;
+        if enable {
+            log::info!("🔬 Modo de comparação ATIVADO: Jina vs Rust local");
+        }
         self
     }
 
@@ -661,32 +682,129 @@ Available actions:
             }
         }
 
-        // Ler URLs web em paralelo usando read_urls_batch
+        // Ler URLs web em paralelo
         if !web_urls.is_empty() {
-            log::info!("🌐 Lendo {} URLs web em paralelo...", web_urls.len());
-            let web_results = self.search_client.read_urls_batch(&web_urls).await;
+            if self.enable_comparative_read {
+                // Modo de comparação: Jina vs Rust local
+                log::info!("🔬 Lendo {} URLs web em modo COMPARATIVO (Jina vs Rust)...", web_urls.len());
+                self.emit(AgentProgress::Info(format!(
+                    "🔬 Comparando Jina vs Rust local para {} URLs",
+                    web_urls.len()
+                )));
 
-            for (result, url) in web_results.into_iter().zip(web_urls.iter()) {
-                match result {
-                    Ok(content) => {
-                        self.context.add_knowledge(KnowledgeItem {
-                            question: self.context.current_question().to_string(),
-                            answer: content.text,
-                            item_type: KnowledgeType::Url,
-                            references: vec![Reference {
-                                url: url.to_string(),
-                                title: content.title,
-                                exact_quote: None,
-                                relevance_score: None,
-                            }],
-                        });
-                        self.context.visited_urls.push(url.clone());
-                        success_count += 1;
-                    }
-                    Err(e) => {
-                        log::warn!("❌ Falha ao ler URL {}: {}", url, e);
-                        self.context.bad_urls.push(url.clone());
-                        error_count += 1;
+                let comparative_results = self.search_client.read_urls_comparative_batch(&web_urls).await;
+
+                for result in comparative_results {
+                    // Usar o resultado mais rápido que não tenha erro
+                    let (content, source) = match &result.faster {
+                        crate::search::ReadMethod::RustLocal if result.rust_result.is_some() => {
+                            self.rust_wins += 1;
+                            (result.rust_result.clone().unwrap(), "rust_local")
+                        }
+                        crate::search::ReadMethod::Jina if result.jina_result.is_some() => {
+                            self.jina_wins += 1;
+                            (result.jina_result.clone().unwrap(), "jina")
+                        }
+                        crate::search::ReadMethod::Tie => {
+                            self.ties += 1;
+                            // Em caso de empate, preferir Jina
+                            if let Some(jina) = result.jina_result.clone() {
+                                (jina, "jina")
+                            } else if let Some(rust) = result.rust_result.clone() {
+                                (rust, "rust_local")
+                            } else {
+                                log::warn!("❌ Ambos métodos falharam para {}", result.url);
+                                self.context.bad_urls.push(result.url.clone());
+                                error_count += 1;
+                                continue;
+                            }
+                        }
+                        _ => {
+                            // Fallback para o que estiver disponível
+                            if let Some(jina) = result.jina_result.clone() {
+                                self.jina_wins += 1;
+                                (jina, "jina")
+                            } else if let Some(rust) = result.rust_result.clone() {
+                                self.rust_wins += 1;
+                                (rust, "rust_local")
+                            } else {
+                                log::warn!("❌ Ambos métodos falharam para {}", result.url);
+                                self.context.bad_urls.push(result.url.clone());
+                                error_count += 1;
+                                continue;
+                            }
+                        }
+                    };
+
+                    // Log de comparação
+                    log::info!(
+                        "📊 {} | Jina: {}ms | Rust: {}ms | Diff: {}ms | Usado: {}",
+                        result.url,
+                        result.jina_time_ms,
+                        result.rust_time_ms,
+                        result.speed_diff_ms,
+                        source
+                    );
+                    self.emit(AgentProgress::Info(format!(
+                        "📊 Jina: {}ms vs Rust: {}ms (diff: {}ms) → usado: {}",
+                        result.jina_time_ms,
+                        result.rust_time_ms,
+                        result.speed_diff_ms,
+                        source
+                    )));
+
+                    self.context.add_knowledge(KnowledgeItem {
+                        question: self.context.current_question().to_string(),
+                        answer: content.text,
+                        item_type: KnowledgeType::Url,
+                        references: vec![Reference {
+                            url: result.url.to_string(),
+                            title: content.title,
+                            exact_quote: None,
+                            relevance_score: None,
+                        }],
+                    });
+                    self.context.visited_urls.push(result.url.clone());
+                    success_count += 1;
+                }
+
+                // Resumo de comparação
+                let total_comparisons = self.jina_wins + self.rust_wins + self.ties;
+                log::info!(
+                    "🏆 Placar comparativo: Jina {} | Rust {} | Empates {} | Total: {}",
+                    self.jina_wins, self.rust_wins, self.ties, total_comparisons
+                );
+                self.emit(AgentProgress::Success(format!(
+                    "🏆 Placar: Jina {} vs Rust {} (empates: {})",
+                    self.jina_wins, self.rust_wins, self.ties
+                )));
+            } else {
+                // Modo normal: apenas Jina
+                log::info!("🌐 Lendo {} URLs web em paralelo (Jina)...", web_urls.len());
+                let web_results = self.search_client.read_urls_batch(&web_urls).await;
+
+                for (result, url) in web_results.into_iter().zip(web_urls.iter()) {
+                    match result {
+                        Ok(content) => {
+                            self.context.add_knowledge(KnowledgeItem {
+                                question: self.context.current_question().to_string(),
+                                answer: content.text,
+                                item_type: KnowledgeType::Url,
+                                references: vec![Reference {
+                                    url: url.to_string(),
+                                    title: content.title,
+                                    exact_quote: None,
+                                    relevance_score: None,
+                                }],
+                            });
+                            self.context.visited_urls.push(url.clone());
+                            success_count += 1;
+                        }
+                        Err(e) => {
+                            log::warn!("❌ Falha ao ler URL {}: {}", url, e);
+                            self.context.bad_urls.push(url.clone());
+                            error_count += 1;
+                        }
                     }
                 }
             }

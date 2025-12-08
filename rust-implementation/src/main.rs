@@ -81,11 +81,12 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("Uso: {} <pergunta>", args[0]);
         eprintln!();
         eprintln!("Opções:");
-        eprintln!("  --tui [pergunta]   Modo TUI interativo (com campo de texto)");
-        eprintln!("  --budget <tokens>  Budget máximo de tokens (padrão: 1000000)");
+        eprintln!("  --tui [pergunta]      Modo TUI interativo (com campo de texto)");
+        eprintln!("  --budget <tokens>     Budget máximo de tokens (padrão: 1000000)");
         eprintln!(
-            "  --compare <urls>   Comparar Jina Reader vs Rust+OpenAI (URLs separadas por vírgula)"
+            "  --compare <urls>      Comparar Jina Reader vs Rust+OpenAI (URLs separadas por vírgula)"
         );
+        eprintln!("  --compare-live        Habilita comparação Jina vs Rust durante pesquisa");
         eprintln!();
         eprintln!("Exemplos:");
         eprintln!("  {} \"Qual é a população do Brasil?\"", args[0]);
@@ -93,6 +94,10 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("  {} --tui \"Qual é a capital da França?\"", args[0]);
         eprintln!(
             "  {} --compare \"https://example.com,https://rust-lang.org\"",
+            args[0]
+        );
+        eprintln!(
+            "  {} --compare-live \"pergunta\"             # Pesquisa com comparação Jina/Rust",
             args[0]
         );
         std::process::exit(1);
@@ -109,18 +114,30 @@ async fn main() -> anyhow::Result<()> {
         return run_tui_mode(&question).await;
     }
 
-    // Modo comparação
+    // Modo comparação standalone
     if args.len() >= 3 && args[1] == "--compare" {
         return run_comparison_mode(&args[2]).await;
     }
 
-    // Parse budget se fornecido
-    let (budget, question) = if args.len() >= 4 && args[1] == "--budget" {
-        let budget: u64 = args[2].parse().unwrap_or(1_000_000);
-        let question = args[3..].join(" ");
-        (Some(budget), question)
-    } else {
-        (None, args[1..].join(" "))
+    // Verificar flag de comparação em tempo real
+    let enable_compare_live = args.iter().any(|a| a == "--compare-live");
+
+    // Parse budget e question (considerando --compare-live)
+    let (budget, question) = {
+        let filtered_args: Vec<&str> = args
+            .iter()
+            .skip(1)
+            .filter(|a| *a != "--compare-live")
+            .map(|s| s.as_str())
+            .collect();
+
+        if filtered_args.len() >= 3 && filtered_args[0] == "--budget" {
+            let budget: u64 = filtered_args[1].parse().unwrap_or(1_000_000);
+            let question = filtered_args[2..].join(" ");
+            (Some(budget), question)
+        } else {
+            (None, filtered_args.join(" "))
+        }
     };
 
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -130,6 +147,9 @@ async fn main() -> anyhow::Result<()> {
     println!("Pergunta: {}", question);
     if let Some(b) = budget {
         println!("Budget: {} tokens", b);
+    }
+    if enable_compare_live {
+        println!("🔬 Modo de comparação: Jina vs Rust local ATIVADO");
     }
     println!();
 
@@ -164,7 +184,8 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(JinaClient::new(jina_key));
 
     // Criar e executar agente
-    let agent = DeepResearchAgent::new(llm_client, search_client, budget);
+    let agent = DeepResearchAgent::new(llm_client, search_client, budget)
+        .with_comparative_read(enable_compare_live);
 
     println!("Iniciando pesquisa...");
     println!();
@@ -450,6 +471,16 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                                 }
                                 KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
                                 KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
+                                KeyCode::PageUp => {
+                                    for _ in 0..5 {
+                                        app.scroll_up();
+                                    }
+                                }
+                                KeyCode::PageDown => {
+                                    for _ in 0..5 {
+                                        app.scroll_down();
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -462,6 +493,13 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                                     app.should_quit = true;
                                     break;
                                 }
+                                // Scroll na resposta
+                                KeyCode::Up | KeyCode::Char('k') => app.result_scroll_up(),
+                                KeyCode::Down | KeyCode::Char('j') => app.result_scroll_down(),
+                                KeyCode::PageUp => app.result_page_up(),
+                                KeyCode::PageDown => app.result_page_down(),
+                                KeyCode::Home => app.result_scroll = 0,
+                                KeyCode::End => app.result_scroll = usize::MAX,
                                 _ => {}
                             }
                         }
