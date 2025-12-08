@@ -155,6 +155,10 @@ pub struct Reference {
     pub exact_quote: Option<String>,
     /// Score de relevância (0.0 - 1.0)
     pub relevance_score: Option<f32>,
+    /// Chunk da resposta que fez match com esta referência
+    pub answer_chunk: Option<String>,
+    /// Posição (start, end) do chunk na resposta original
+    pub answer_position: Option<(usize, usize)>,
 }
 
 impl Default for Reference {
@@ -164,6 +168,8 @@ impl Default for Reference {
             title: String::new(),
             exact_quote: None,
             relevance_score: None,
+            answer_chunk: None,
+            answer_position: None,
         }
     }
 }

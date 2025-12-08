@@ -125,19 +125,22 @@ deep-research-cli --compare-live "Qual é a linguagem de programação mais usad
 | `↓` / `j`   | Scroll para baixo (logs) |
 | `PageUp`    | Scroll 5 linhas acima    |
 | `PageDown`  | Scroll 5 linhas abaixo   |
+| `🖱️ Scroll` | Scroll com roda do mouse |
 
 ### `[result]` Tela de Resultado
 
-| Tecla       | Ação                       |
-| ----------- | -------------------------- |
-| `Enter`     | Nova pesquisa (reset)      |
-| `q` / `Esc` | Sair da aplicação          |
-| `↑` / `k`   | Scroll resposta para cima  |
-| `↓` / `j`   | Scroll resposta para baixo |
-| `PageUp`    | Page up na resposta        |
-| `PageDown`  | Page down na resposta      |
-| `Home`      | Início da resposta         |
-| `End`       | Fim da resposta            |
+| Tecla       | Ação                             |
+| ----------- | -------------------------------- |
+| `Enter`     | Nova pesquisa (reset)            |
+| `q` / `Esc` | Sair da aplicação                |
+| `↑` / `k`   | Scroll resposta para cima        |
+| `↓` / `j`   | Scroll resposta para baixo       |
+| `PageUp`    | Page up na resposta              |
+| `PageDown`  | Page down na resposta            |
+| `Home`      | Início da resposta               |
+| `End`       | Fim da resposta                  |
+| `c`         | **Copiar resposta p/ clipboard** |
+| `🖱️ Scroll` | Scroll com roda do mouse         |
 
 ---
 
@@ -658,13 +661,19 @@ less logs/$(ls -t logs/ | head -1)
 
 #### Tela de Resultado
 
-| Seção             | Conteúdo                                      |
-| ----------------- | --------------------------------------------- |
-| Header            | Status, UUID da sessão, caminhos dos arquivos |
-| 📝 Resposta       | Texto completo com scroll vertical            |
-| 📚 Referências    | Top 3 referências com URLs clicáveis          |
-| 🔗 URLs Visitadas | Top 3 URLs acessadas durante pesquisa         |
-| 📊 Estatísticas   | Tokens, URLs, steps, tempos detalhados        |
+| Seção             | Conteúdo                                           |
+| ----------------- | -------------------------------------------------- |
+| Header            | Status, UUID da sessão, caminhos dos arquivos      |
+| 📝 Resposta       | Texto completo com scroll vertical + **scrollbar** |
+| 📚 Referências    | Top 3 referências com URLs clicáveis               |
+| 🔗 URLs Visitadas | Top 3 URLs acessadas durante pesquisa              |
+| 📊 Estatísticas   | Tokens, URLs, steps, tempos detalhados             |
+
+**Novidades v0.1.x:**
+
+- 🖱️ **Mouse scroll** - Roda do mouse funciona em todas as telas
+- 📋 **Copiar resposta** - Tecla `c` copia para clipboard do sistema
+- 📜 **Scrollbar visual** - Indicador de posição na resposta
 
 ### `[tui-state]` Estado da Aplicação (App)
 
@@ -1173,6 +1182,81 @@ Referências:
 
 ---
 
+## 🔗 Sistema de Referências Semânticas
+
+O sistema de referências foi completamente redesenhado para fornecer citações precisas usando embeddings e similaridade cosseno.
+
+### Como Funciona
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              PIPELINE DE REFERÊNCIAS SEMÂNTICAS                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. CHUNKING DA RESPOSTA                                        │
+│     └─ chunk_text(answer) → chunks[] + positions[]              │
+│                                                                 │
+│  2. CHUNKING DO CONTEÚDO WEB                                    │
+│     └─ Para cada URL visitada: chunk_text(content)              │
+│                                                                 │
+│  3. EMBEDDINGS BATCH                                            │
+│     └─ llm.embed_batch([answer_chunks + web_chunks])            │
+│                                                                 │
+│  4. COSINE SIMILARITY (SIMD AVX2)                               │
+│     └─ simd::cosine_similarity(answer_emb, web_emb)             │
+│                                                                 │
+│  5. FILTRAGEM                                                   │
+│     └─ score >= 0.65, max 10 refs, dedup por URL/chunk          │
+│                                                                 │
+│  6. INSERÇÃO DE MARCADORES                                      │
+│     └─ "texto[^1] mais texto[^2]..."                            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Módulos Envolvidos
+
+| Módulo        | Arquivo               | Função                                                      |
+| ------------- | --------------------- | ----------------------------------------------------------- |
+| **segment**   | `utils/segment.rs`    | Chunking de texto (newline, punctuation, characters, regex) |
+| **build_ref** | `utils/build_ref.rs`  | ReferenceBuilder com embeddings e cosine similarity         |
+| **simd**      | `performance/simd.rs` | Cosine similarity otimizado com AVX2                        |
+| **llm**       | `llm.rs`              | Geração de embeddings via OpenAI                            |
+
+### Configuração
+
+```rust
+ReferenceBuilderConfig {
+    min_chunk_length: 80,      // Mínimo de caracteres por chunk
+    max_references: 10,         // Máximo de referências
+    min_relevance_score: 0.65,  // Score mínimo de similaridade
+    only_hostnames: vec![],     // Filtro de hostnames (opcional)
+}
+```
+
+### Estratégias de Chunking
+
+| Tipo             | Descrição                   | Uso                |
+| ---------------- | --------------------------- | ------------------ |
+| `Newline`        | Split por `\n`              | Parágrafos, listas |
+| `Punctuation`    | Split por `.!?。！？`       | Sentenças          |
+| `Characters(n)`  | Split por N caracteres      | Textos longos      |
+| `Regex(pattern)` | Split por regex customizado | Casos especiais    |
+
+### Fallback Jaccard
+
+Quando embeddings falham (rate limit, erro de API), o sistema usa Jaccard similarity:
+
+```rust
+fn jaccard_similarity(a: &str, b: &str) -> f32 {
+    let words_a: HashSet<&str> = a.split_whitespace().collect();
+    let words_b: HashSet<&str> = b.split_whitespace().collect();
+    intersection / union
+}
+```
+
+---
+
 ## 🗂️ Estrutura de Arquivos
 
 ```
@@ -1194,9 +1278,20 @@ rust-implementation/
 │   │   └── runner.rs    # Loop principal
 │   ├── evaluation/      # Avaliação de respostas
 │   ├── personas/        # Personas cognitivas
+│   ├── performance/     # Otimizações SIMD
+│   │   ├── mod.rs
+│   │   └── simd.rs      # AVX2 cosine similarity
 │   └── utils/           # Utilitários
+│       ├── mod.rs
+│       ├── segment.rs   # Chunking de texto
+│       ├── build_ref.rs # Referências semânticas
+│       ├── file_reader.rs # Leitura de arquivos/PDFs
+│       ├── text.rs      # Processamento de texto
+│       ├── timing.rs    # Métricas de tempo
+│       └── token_tracker.rs # Controle de tokens
 ├── sessions/            # Sessões salvas (JSON)
 ├── logs/                # Logs de sessões (TXT)
+├── benches/             # Benchmarks Criterion
 └── Cargo.toml
 ```
 

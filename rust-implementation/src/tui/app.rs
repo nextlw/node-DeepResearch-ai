@@ -476,6 +476,8 @@ pub struct App {
     pub completed_steps: Vec<CompletedStep>,
     /// Estado do AgentAnalyzer (análise de erros em background)
     pub agent_analyzer: AgentAnalyzerState,
+    /// Mensagem temporária do clipboard (feedback ao usuário)
+    pub clipboard_message: Option<String>,
 }
 
 /// Step completado para histórico
@@ -541,6 +543,7 @@ impl App {
             all_tasks: Vec::new(),
             completed_steps: Vec::new(),
             agent_analyzer: AgentAnalyzerState::default(),
+            clipboard_message: None,
         };
         // Carregar sessões anteriores
         app.load_sessions();
@@ -992,6 +995,7 @@ impl App {
         self.all_tasks.clear();
         self.completed_steps.clear();
         self.agent_analyzer = AgentAnalyzerState::default();
+        self.clipboard_message = None;
     }
 
     // ─────────────────────────────────────────────────────────────────

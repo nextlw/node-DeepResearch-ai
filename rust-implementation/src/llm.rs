@@ -620,6 +620,8 @@ impl LlmClient for OpenAiClient {
                         title: r.title,
                         exact_quote: r.exact_quote,
                         relevance_score: r.relevance_score,
+                        answer_chunk: None,
+                        answer_position: None,
                     })
                     .collect();
                 Ok(AgentAction::Answer {

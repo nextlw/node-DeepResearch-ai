@@ -628,11 +628,25 @@ impl FileReader {
     /// - PDFs escaneados (imagens) não terão texto extraído sem OCR
     /// - A formatação original (tabelas, colunas) pode ser perdida
     /// - Alguns caracteres especiais podem não ser extraídos corretamente
+    ///
+    /// # Nota sobre warnings
+    ///
+    /// A biblioteca `pdf_extract` gera muitos warnings de fontes no stderr
+    /// (Unicode mismatch, unknown glyph, etc.). Esses são suprimidos para
+    /// não corromper a TUI. Se precisar debugar, remova o `gag::Gag`.
     pub fn extract_pdf_text(data: &[u8]) -> Result<String, FileReaderError> {
         log::info!("📄 Extraindo texto de PDF ({} bytes)", data.len());
 
-        pdf_extract::extract_text_from_mem(data)
-            .map_err(|e| FileReaderError::PdfExtractionError(e.to_string()))
+        // Suprimir stderr durante extração para não corromper a TUI
+        // A biblioteca pdf_extract gera MUITOS warnings de fontes (Unicode mismatch,
+        // unknown glyph, etc.) que são escritos diretamente no stderr
+        let result = {
+            // gag::Gag suprime stderr durante o escopo
+            let _stderr_gag = gag::Gag::stderr().ok();
+            pdf_extract::extract_text_from_mem(data)
+        };
+
+        result.map_err(|e| FileReaderError::PdfExtractionError(e.to_string()))
     }
 
     /// Lê e processa um arquivo de uma URL remota.

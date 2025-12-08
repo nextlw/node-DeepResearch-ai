@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     Frame,
 };
 
@@ -999,6 +999,28 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
         .style(Style::default().fg(Color::White));
     frame.render_widget(answer, chunks[1]);
 
+    // Scrollbar visual para resposta
+    if total_lines > visible_height {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"))
+            .track_symbol(Some("│"))
+            .thumb_symbol("█");
+
+        let mut scrollbar_state = ScrollbarState::new(max_scroll)
+            .position(scroll_pos);
+
+        // Área interna (sem bordas)
+        let scrollbar_area = Rect {
+            x: chunks[1].x + chunks[1].width - 1,
+            y: chunks[1].y + 1,
+            width: 1,
+            height: chunks[1].height.saturating_sub(2),
+        };
+
+        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    }
+
     // Referências (URLs das fontes)
     let refs_items: Vec<ListItem<'_>> = app
         .references
@@ -1093,14 +1115,22 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     );
     frame.render_widget(stats, chunks[4]);
 
-    // Ajuda
+    // Ajuda (com mensagem de clipboard se houver)
+    let clipboard_msg = app.clipboard_message.as_deref().unwrap_or("");
     let help = Paragraph::new(Line::from(vec![
-        Span::styled("↑↓/PgUp/Dn", Style::default().fg(Color::Yellow)),
+        Span::styled("↑↓/🖱️", Style::default().fg(Color::Yellow)),
         Span::raw(" Scroll  "),
+        Span::styled("c", Style::default().fg(Color::Cyan)),
+        Span::raw(" Copiar  "),
         Span::styled("Enter", Style::default().fg(Color::Green)),
         Span::raw(" Nova  "),
         Span::styled("q", Style::default().fg(Color::Red)),
         Span::raw(" Sair"),
+        if !clipboard_msg.is_empty() {
+            Span::styled(format!("  {}", clipboard_msg), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+        } else {
+            Span::raw("")
+        },
     ]))
     .alignment(ratatui::layout::Alignment::Center)
     .style(Style::default().fg(Color::DarkGray));

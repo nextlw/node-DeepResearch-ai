@@ -105,8 +105,17 @@ pub fn normalize_query(query: &str) -> String {
         .to_lowercase()
 }
 
-/// Divide texto em chunks de tamanho aproximado
-pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<&str> {
+/// Divide texto em chunks de tamanho aproximado com overlap.
+///
+/// **NOTA**: Para chunking sem overlap, use `segment::chunk_text` que oferece
+/// mais estratégias (newline, punctuation, characters, regex).
+///
+/// # Argumentos
+/// * `text` - Texto a ser dividido
+/// * `chunk_size` - Tamanho máximo de cada chunk em caracteres
+/// * `overlap` - Sobreposição entre chunks (para sliding window)
+#[allow(dead_code)]
+pub fn chunk_text_with_overlap(text: &str, chunk_size: usize, overlap: usize) -> Vec<&str> {
     if text.len() <= chunk_size {
         return vec![text];
     }
@@ -132,11 +141,19 @@ pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<&str> {
 
         chunks.push(&text[start..adjusted_end]);
 
-        start = if adjusted_end > overlap {
+        // Garantir que start sempre avança para evitar loop infinito
+        let next_start = if adjusted_end > overlap {
             adjusted_end - overlap
         } else {
             adjusted_end
         };
+
+        // Se start não avançaria, forçar avanço
+        if next_start <= start {
+            start = adjusted_end;
+        } else {
+            start = next_start;
+        }
     }
 
     chunks
@@ -192,9 +209,9 @@ mod tests {
     }
 
     #[test]
-    fn test_chunk_text() {
+    fn test_chunk_text_with_overlap() {
         let text = "This is a test text for chunking functionality";
-        let chunks = chunk_text(text, 20, 5);
+        let chunks = chunk_text_with_overlap(text, 20, 5);
         assert!(chunks.len() > 1);
 
         // Verify overlap

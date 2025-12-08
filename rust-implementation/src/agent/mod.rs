@@ -19,7 +19,9 @@ pub use state::*;
 use crate::llm::LlmClient;
 use crate::search::SearchClient;
 use crate::types::*;
-use crate::utils::{ActionTimer, TimingStats, TokenTracker, TrackerStats};
+use crate::utils::{
+    ActionTimer, ReferenceBuilder, ReferenceBuilderConfig, TimingStats, TokenTracker, TrackerStats,
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -565,32 +567,29 @@ impl DeepResearchAgent {
                 references,
                 think,
             } => {
-                // Se LLM não retornou referências, extrair do conhecimento coletado
-                let final_references = if references.is_empty() {
-                    self.extract_references_from_knowledge()
-                } else {
-                    references
-                };
+                // Tentar construir referências semânticas usando embeddings
+                let (final_answer, final_references) =
+                    self.build_semantic_references(&answer, references).await;
 
                 self.emit(AgentProgress::Success(format!(
                     "✍️ Gerando resposta ({} chars, {} refs)",
-                    answer.len(),
+                    final_answer.len(),
                     final_references.len()
                 )));
                 log::info!(
                     "✍️ Resposta proposta ({} chars, {} refs)",
-                    answer.len(),
+                    final_answer.len(),
                     final_references.len()
                 );
                 log::info!("💭 Raciocínio: {}", think);
-                log::info!("📝 Resposta:\n{}", answer);
+                log::info!("📝 Resposta:\n{}", final_answer);
                 if !final_references.is_empty() {
                     log::info!("📚 Referências:");
                     for r in &final_references {
                         log::info!("   - {} ({})", r.title, r.url);
                     }
                 }
-                self.execute_answer(answer, final_references, think).await
+                self.execute_answer(final_answer, final_references, think).await
             }
             AgentAction::Coding { code, think } => self.execute_coding(code, think).await,
         }
@@ -979,6 +978,8 @@ Available actions:
                                     .unwrap_or_else(|| format!("Arquivo {:?}", file_type)),
                                 exact_quote: None,
                                 relevance_score: None,
+                                answer_chunk: None,
+                                answer_position: None,
                             }],
                         });
                         self.context.visited_urls.push(url.clone());
@@ -1166,6 +1167,8 @@ Available actions:
                             title: content.title,
                             exact_quote: None,
                             relevance_score: None,
+                            answer_chunk: None,
+                            answer_position: None,
                         }],
                     });
                     self.context.visited_urls.push(result.url.clone());
@@ -1308,6 +1311,8 @@ Available actions:
                                     title: content.title,
                                     exact_quote: None,
                                     relevance_score: None,
+                                    answer_chunk: None,
+                                    answer_position: None,
                                 }],
                             });
                             self.context.visited_urls.push(url.clone());
@@ -1920,7 +1925,101 @@ Available actions:
         Ok("Sandbox output".into())
     }
 
-    /// Extrai referências do conhecimento coletado
+    /// Constrói referências semânticas usando embeddings e cosine similarity
+    ///
+    /// Este método usa o `ReferenceBuilder` para:
+    /// 1. Fazer chunking da resposta e do conteúdo web
+    /// 2. Gerar embeddings para todos os chunks
+    /// 3. Calcular similaridade cosseno (SIMD otimizado)
+    /// 4. Inserir marcadores [^1], [^2] na resposta
+    ///
+    /// Faz fallback para `extract_references_from_knowledge` se falhar.
+    async fn build_semantic_references(
+        &self,
+        answer: &str,
+        llm_references: Vec<Reference>,
+    ) -> (String, Vec<Reference>) {
+        // Se o LLM já retornou referências e a resposta é curta, usar as do LLM
+        if !llm_references.is_empty() && answer.len() < 500 {
+            log::info!(
+                "📚 Usando {} referências do LLM (resposta curta)",
+                llm_references.len()
+            );
+            return (answer.to_string(), llm_references);
+        }
+
+        // Verificar se temos conteúdo web no knowledge
+        let has_web_content = self
+            .context
+            .knowledge
+            .iter()
+            .any(|k| k.item_type == KnowledgeType::Url && !k.answer.is_empty());
+
+        if !has_web_content {
+            log::info!("📚 Sem conteúdo web, usando referências do LLM ou extraídas");
+            let refs = if llm_references.is_empty() {
+                self.extract_references_from_knowledge()
+            } else {
+                llm_references
+            };
+            return (answer.to_string(), refs);
+        }
+
+        // Tentar construir referências semânticas
+        self.emit(AgentProgress::Info(
+            "🔗 Construindo referências semânticas...".into(),
+        ));
+
+        let config = ReferenceBuilderConfig::new(
+            80,   // min_chunk_length
+            10,   // max_references
+            0.65, // min_relevance_score (um pouco mais permissivo)
+        );
+
+        let builder = ReferenceBuilder::new(self.llm_client.clone(), config);
+
+        match builder
+            .build_references(answer, &self.context.knowledge)
+            .await
+        {
+            Ok(result) => {
+                if result.references.is_empty() {
+                    log::warn!("📚 Nenhuma referência semântica encontrada, usando fallback");
+                    let refs = if llm_references.is_empty() {
+                        self.extract_references_from_knowledge()
+                    } else {
+                        llm_references
+                    };
+                    (answer.to_string(), refs)
+                } else {
+                    self.emit(AgentProgress::Success(format!(
+                        "✅ {} referências semânticas com marcadores inseridos",
+                        result.references.len()
+                    )));
+                    log::info!(
+                        "📚 Construídas {} referências semânticas",
+                        result.references.len()
+                    );
+                    (result.answer, result.references)
+                }
+            }
+            Err(e) => {
+                log::error!("📚 Erro ao construir referências semânticas: {:?}", e);
+                self.emit(AgentProgress::Warning(format!(
+                    "⚠️ Fallback para referências simples: {}",
+                    e
+                )));
+                let refs = if llm_references.is_empty() {
+                    self.extract_references_from_knowledge()
+                } else {
+                    llm_references
+                };
+                (answer.to_string(), refs)
+            }
+        }
+    }
+
+    /// Extrai referências do conhecimento coletado (fallback legado)
     fn extract_references_from_knowledge(&self) -> Vec<Reference> {
         use std::collections::HashSet;
 
@@ -1950,6 +2049,8 @@ Available actions:
                         title: "Fonte visitada".to_string(),
                         exact_quote: None,
                         relevance_score: None,
+                        answer_chunk: None,
+                        answer_position: None,
                     });
                 }
             }

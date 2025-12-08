@@ -49,6 +49,8 @@ fn bench_agent_state(c: &mut Criterion) {
             title: "Rust Programming Language".to_string(),
             exact_quote: Some("Memory safety without garbage collection".to_string()),
             relevance_score: Some(0.95),
+            answer_chunk: Some("Rust provides memory safety...".to_string()),
+            answer_position: Some((0, 50)),
         }];
 
         bencher.iter(|| {
@@ -192,6 +194,8 @@ fn bench_agent_actions(c: &mut Criterion) {
                 title: "Rust".to_string(),
                 exact_quote: None,
                 relevance_score: Some(0.9),
+                answer_chunk: None,
+                answer_position: None,
             },
         ];
 
@@ -415,6 +419,8 @@ fn bench_results(c: &mut Criterion) {
                     title: "Rust".to_string(),
                     exact_quote: None,
                     relevance_score: Some(0.95),
+                    answer_chunk: Some("Comprehensive answer about Rust...".to_string()),
+                    answer_position: Some((0, 35)),
                 }],
                 trivial: false,
             })
