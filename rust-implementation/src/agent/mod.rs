@@ -1184,14 +1184,100 @@ Available actions:
                     self.jina_wins, self.rust_wins, self.ties
                 )));
             } else {
-                // Modo normal: apenas Jina
-                log::info!("🌐 Lendo {} URLs web em paralelo (Jina)...", web_urls.len());
+                // Modo normal: Rust primeiro, Jina fallback - COM PROGRESSO EM TEMPO REAL
+                log::info!("🌐 Lendo {} URLs web em paralelo (Rust→Jina com progresso)...", web_urls.len());
                 let read_start = std::time::Instant::now();
-                let web_results = self.search_client.read_urls_batch(&web_urls).await;
+
+                // Criar progresso compartilhado para cada URL
+                use std::sync::{Arc, atomic::{AtomicU8, Ordering}};
+                let progress_map: std::collections::HashMap<String, Arc<AtomicU8>> = web_urls
+                    .iter()
+                    .map(|url| (url.clone(), Arc::new(AtomicU8::new(0))))
+                    .collect();
+
+                // Canal para emitir eventos de progresso
+                let (progress_tx, _progress_rx) = tokio::sync::mpsc::channel::<(String, u8)>(100);
+
+                // Clonar referências para o monitor
+                let progress_map_clone = progress_map.clone();
+                let url_task_ids_clone = url_task_ids.clone();
+                let batch_id_clone = batch_id.clone();
+                let progress_callback = self.progress_callback.clone();
+
+                // Spawnar monitor de progresso que emite atualizações a cada 200ms
+                let monitor_handle = tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
+                    let mut last_progress: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
+
+                    loop {
+                        interval.tick().await;
+
+                        let mut all_done = true;
+                        for (url, progress) in &progress_map_clone {
+                            let current = progress.load(Ordering::Relaxed);
+                            let last = last_progress.get(url).copied().unwrap_or(0);
+
+                            // Só emitir se progresso mudou e não está 100%
+                            if current != last && current < 100 {
+                                last_progress.insert(url.clone(), current);
+
+                                if let Some(task_id) = url_task_ids_clone.get(url) {
+                                    if let Some(ref cb) = progress_callback {
+                                        cb(AgentProgress::TaskUpdate {
+                                            task_id: task_id.clone(),
+                                            batch_id: batch_id_clone.clone(),
+                                            task_type: "WebRead".to_string(),
+                                            description: url.to_string(),
+                                            data_info: format!("{}%", current),
+                                            status: "running".to_string(),
+                                            elapsed_ms: 0,
+                                            thread_id: None,
+                                            progress: current,
+                                            read_method: "rust+jina".to_string(),
+                                            bytes_processed: 0,
+                                            bytes_total: 0,
+                                        });
+                                    }
+                                }
+                            }
+
+                            if current < 100 {
+                                all_done = false;
+                            }
+                        }
+
+                        if all_done {
+                            break;
+                        }
+                    }
+                });
+
+                // Executar leituras em paralelo com progresso
+                let search_client = self.search_client.clone();
+                let futures: Vec<_> = web_urls
+                    .iter()
+                    .map(|url| {
+                        let url = url.clone();
+                        let progress = progress_map.get(&url).cloned().unwrap_or_else(|| Arc::new(AtomicU8::new(0)));
+                        let client = search_client.clone();
+                        async move {
+                            let result = client.read_url_with_fallback_progress(&url, progress).await;
+                            (url, result)
+                        }
+                    })
+                    .collect();
+
+                let results = futures::future::join_all(futures).await;
+
+                // Parar monitor
+                drop(progress_tx);
+                let _ = monitor_handle.await;
+
                 let avg_time_per_url = read_start.elapsed().as_millis() / web_urls.len().max(1) as u128;
 
-                for (result, url) in web_results.into_iter().zip(web_urls.iter()) {
-                    let task_id = url_task_ids.get(url).cloned().unwrap_or_default();
+                // Processar resultados
+                for (url, (result, method, _attempts, _bytes)) in results {
+                    let task_id = url_task_ids.get(&url).cloned().unwrap_or_default();
 
                     match result {
                         Ok(content) => {
@@ -1203,12 +1289,12 @@ Available actions:
                                 batch_id: batch_id.clone(),
                                 task_type: "WebRead".to_string(),
                                 description: url.to_string(),
-                                data_info: format!("{}ms via Jina | {} bytes", avg_time_per_url, bytes_processed),
+                                data_info: format!("{}ms via {} | {} bytes", avg_time_per_url, method, bytes_processed),
                                 status: "completed".to_string(),
                                 elapsed_ms: avg_time_per_url,
                                 thread_id: None,
                                 progress: 100,
-                                read_method: "jina".to_string(),
+                                read_method: method.to_string(),
                                 bytes_processed,
                                 bytes_total: bytes_processed,
                             });
@@ -1240,7 +1326,7 @@ Available actions:
                                 elapsed_ms: avg_time_per_url,
                                 thread_id: None,
                                 progress: 100,
-                                read_method: "jina".to_string(),
+                                read_method: method.to_string(),
                                 bytes_processed: 0,
                                 bytes_total: 0,
                             });
