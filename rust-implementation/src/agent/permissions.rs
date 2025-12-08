@@ -85,20 +85,36 @@ impl ActionPermissions {
     /// Lista de ações permitidas (para logging/debug)
     pub fn allowed_actions(&self) -> Vec<&'static str> {
         let mut actions = Vec::with_capacity(5);
-        if self.search { actions.push("search"); }
-        if self.read { actions.push("read"); }
-        if self.reflect { actions.push("reflect"); }
-        if self.answer { actions.push("answer"); }
-        if self.coding { actions.push("coding"); }
+        if self.search {
+            actions.push("search");
+        }
+        if self.read {
+            actions.push("read");
+        }
+        if self.reflect {
+            actions.push("reflect");
+        }
+        if self.answer {
+            actions.push("answer");
+        }
+        if self.coding {
+            actions.push("coding");
+        }
         actions
     }
 
     /// Conta quantas ações estão permitidas
     pub fn count_allowed(&self) -> usize {
-        [self.search, self.read, self.reflect, self.answer, self.coding]
-            .iter()
-            .filter(|&&x| x)
-            .count()
+        [
+            self.search,
+            self.read,
+            self.reflect,
+            self.answer,
+            self.coding,
+        ]
+        .iter()
+        .filter(|&&x| x)
+        .count()
     }
 
     /// Verifica se pelo menos uma ação está permitida
@@ -151,11 +167,7 @@ impl Default for ActionPermissions {
 
 impl std::fmt::Display for ActionPermissions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Permissions: [{}]",
-            self.allowed_actions().join(", ")
-        )
+        write!(f, "Permissions: [{}]", self.allowed_actions().join(", "))
     }
 }
 

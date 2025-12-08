@@ -82,14 +82,12 @@ pub fn extract_keywords(text: &str, max_keywords: usize) -> Vec<String> {
 /// Verifica se é uma stopword comum
 fn is_stopword(word: &str) -> bool {
     const STOPWORDS: &[&str] = &[
-        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-        "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
-        "be", "have", "has", "had", "do", "does", "did", "will", "would",
-        "could", "should", "may", "might", "must", "shall", "can", "need",
-        "this", "that", "these", "those", "what", "which", "who", "whom",
-        "when", "where", "why", "how", "all", "each", "every", "both",
-        "few", "more", "most", "other", "some", "such", "no", "nor", "not",
-        "only", "own", "same", "so", "than", "too", "very", "just", "also",
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
+        "from", "as", "is", "was", "are", "were", "been", "be", "have", "has", "had", "do", "does",
+        "did", "will", "would", "could", "should", "may", "might", "must", "shall", "can", "need",
+        "this", "that", "these", "those", "what", "which", "who", "whom", "when", "where", "why",
+        "how", "all", "each", "every", "both", "few", "more", "most", "other", "some", "such",
+        "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "just", "also",
     ];
 
     STOPWORDS.contains(&word.to_lowercase().as_str())
@@ -190,10 +188,7 @@ mod tests {
 
     #[test]
     fn test_normalize_query() {
-        assert_eq!(
-            normalize_query("  Hello,  WORLD!!!  "),
-            "hello world"
-        );
+        assert_eq!(normalize_query("  Hello,  WORLD!!!  "), "hello world");
     }
 
     #[test]

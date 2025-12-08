@@ -8,11 +8,8 @@
 //!
 //! Executar: `cargo bench --bench personas_bench`
 
-use criterion::{
-    black_box, criterion_group, criterion_main,
-    BenchmarkId, Criterion, Throughput,
-};
 use chrono::Utc;
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use deep_research::personas::{PersonaOrchestrator, QueryContext};
 use deep_research::types::{Language, TopicCategory};
 
@@ -50,21 +47,15 @@ fn bench_orchestrator_creation(c: &mut Criterion) {
     let mut group = c.benchmark_group("orchestrator_creation");
 
     group.bench_function("new_default", |bencher| {
-        bencher.iter(|| {
-            black_box(PersonaOrchestrator::new())
-        })
+        bencher.iter(|| black_box(PersonaOrchestrator::new()))
     });
 
     group.bench_function("technical", |bencher| {
-        bencher.iter(|| {
-            black_box(PersonaOrchestrator::technical())
-        })
+        bencher.iter(|| black_box(PersonaOrchestrator::technical()))
     });
 
     group.bench_function("investigative", |bencher| {
-        bencher.iter(|| {
-            black_box(PersonaOrchestrator::investigative())
-        })
+        bencher.iter(|| black_box(PersonaOrchestrator::investigative()))
     });
 
     group.finish();
@@ -105,7 +96,9 @@ fn bench_query_expansion(c: &mut Criterion) {
             &context,
             |bencher, ctx| {
                 bencher.iter(|| {
-                    black_box(orchestrator.expand_query_sequential(ctx.original_query.as_str(), ctx))
+                    black_box(
+                        orchestrator.expand_query_sequential(ctx.original_query.as_str(), ctx),
+                    )
                 })
             },
         );
@@ -124,7 +117,7 @@ fn bench_parallelism(c: &mut Criterion) {
 
     let orchestrator = PersonaOrchestrator::new();
     let context = create_test_context(
-        "What are the best practices for building high-performance web APIs in Rust?"
+        "What are the best practices for building high-performance web APIs in Rust?",
     );
 
     // Múltiplas expansões em sequência (batch)
@@ -138,11 +131,7 @@ fn bench_parallelism(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("batch_expand", batch_size),
             &queries,
-            |bencher, qs| {
-                bencher.iter(|| {
-                    black_box(orchestrator.expand_batch(qs, &context))
-                })
-            },
+            |bencher, qs| bencher.iter(|| black_box(orchestrator.expand_batch(qs, &context))),
         );
     }
 
@@ -177,15 +166,11 @@ fn bench_topic_variations(c: &mut Criterion) {
             detected_topic: topic.clone(),
         };
 
-        group.bench_with_input(
-            BenchmarkId::new("topic", name),
-            &context,
-            |bencher, ctx| {
-                bencher.iter(|| {
-                    black_box(orchestrator.expand_query_parallel(ctx.original_query.as_str(), ctx))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("topic", name), &context, |bencher, ctx| {
+            bencher.iter(|| {
+                black_box(orchestrator.expand_query_parallel(ctx.original_query.as_str(), ctx))
+            })
+        });
     }
 
     group.finish();
@@ -202,8 +187,16 @@ fn bench_language_variations(c: &mut Criterion) {
 
     let languages = [
         ("english", Language::English, "What is machine learning?"),
-        ("portuguese", Language::Portuguese, "O que é aprendizado de máquina?"),
-        ("spanish", Language::Spanish, "¿Qué es el aprendizaje automático?"),
+        (
+            "portuguese",
+            Language::Portuguese,
+            "O que é aprendizado de máquina?",
+        ),
+        (
+            "spanish",
+            Language::Spanish,
+            "¿Qué es el aprendizaje automático?",
+        ),
         ("german", Language::German, "Was ist maschinelles Lernen?"),
     ];
 
@@ -246,7 +239,12 @@ fn bench_with_soundbites_context(c: &mut Criterion) {
 
     for &size in &context_sizes {
         let soundbites: Vec<String> = (0..size)
-            .map(|i| format!("Soundbite {} with some technical content about systems design.", i))
+            .map(|i| {
+                format!(
+                    "Soundbite {} with some technical content about systems design.",
+                    i
+                )
+            })
             .collect();
 
         let context = create_context_with_soundbites(question, soundbites);
@@ -303,8 +301,7 @@ fn bench_query_quality_verification(c: &mut Criterion) {
             let queries = orchestrator.expand_query_parallel(&context.original_query, &context);
 
             // Verificar que pesos estão em range válido
-            let valid_weights = queries.iter()
-                .all(|wq| wq.weight > 0.0 && wq.weight <= 2.0);
+            let valid_weights = queries.iter().all(|wq| wq.weight > 0.0 && wq.weight <= 2.0);
 
             let total_weight: f32 = queries.iter().map(|wq| wq.weight).sum();
 
@@ -319,9 +316,7 @@ fn bench_query_quality_verification(c: &mut Criterion) {
             let queries = orchestrator.expand_query_parallel(&context.original_query, &context);
 
             // Verificar que todas as personas contribuíram
-            let personas: Vec<&str> = queries.iter()
-                .map(|wq| wq.source_persona)
-                .collect();
+            let personas: Vec<&str> = queries.iter().map(|wq| wq.source_persona).collect();
 
             let expected_count = orchestrator.persona_count();
             let actual_count = personas.len();

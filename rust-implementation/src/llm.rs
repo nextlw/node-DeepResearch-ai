@@ -6,10 +6,10 @@
 // Suporta múltiplos provedores: OpenAI, Anthropic, local, etc.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+use crate::agent::{ActionPermissions, AgentAction, AgentPrompt};
+use crate::types::{Reference, SerpQuery};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use crate::agent::{AgentAction, AgentPrompt, ActionPermissions};
-use crate::types::{Reference, SerpQuery};
 
 /// Erros que podem ocorrer na comunicação com LLMs.
 ///
@@ -140,6 +140,21 @@ pub trait LlmClient: Send + Sync {
         &self,
         question: &str,
     ) -> Result<Vec<crate::evaluation::EvaluationType>, LlmError>;
+
+    /// Retorna tokens de prompt acumulados (implementação opcional)
+    fn get_prompt_tokens(&self) -> u64 {
+        0
+    }
+
+    /// Retorna tokens de completion acumulados (implementação opcional)
+    fn get_completion_tokens(&self) -> u64 {
+        0
+    }
+
+    /// Retorna total de tokens acumulados (implementação opcional)
+    fn get_total_tokens(&self) -> u64 {
+        self.get_prompt_tokens() + self.get_completion_tokens()
+    }
 }
 
 /// Resposta de uma avaliação feita pelo LLM.
@@ -182,8 +197,10 @@ impl MockLlmClient {
     /// ```rust,ignore
     /// let client = MockLlmClient::new();
     /// ```
-        pub fn new() -> Self {
-        Self { default_action: None }
+    pub fn new() -> Self {
+        Self {
+            default_action: None,
+        }
     }
 
     /// Cria um novo cliente MockLlmClient com uma ação padrão.
@@ -199,7 +216,9 @@ impl MockLlmClient {
     /// });
     /// ```
     pub fn with_action(action: AgentAction) -> Self {
-        Self { default_action: Some(action.clone()) }
+        Self {
+            default_action: Some(action.clone()),
+        }
     }
 }
 
@@ -298,6 +317,10 @@ pub struct OpenAiClient {
     embedding_model: String,
     /// Cliente HTTP
     client: reqwest::Client,
+    /// Contador de tokens de prompt (thread-safe)
+    total_prompt_tokens: std::sync::atomic::AtomicU64,
+    /// Contador de tokens de completion (thread-safe)
+    total_completion_tokens: std::sync::atomic::AtomicU64,
 }
 
 impl OpenAiClient {
@@ -307,7 +330,7 @@ impl OpenAiClient {
     /// * `api_key` - Sua chave de API OpenAI (começa com "sk-")
     ///
     /// # Modelos Padrão
-    /// - Texto: `gpt-4-turbo-preview`
+    /// - Texto: `gpt-4o-mini`
     /// - Embedding: `text-embedding-3-small`
     ///
     /// # Exemplo
@@ -317,10 +340,29 @@ impl OpenAiClient {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
-            model: "gpt-4-turbo-preview".into(),
+            model: "gpt-4.1-mini".into(), // 1M tokens context window, mais capaz
             embedding_model: "text-embedding-3-small".into(),
             client: reqwest::Client::new(),
+            total_prompt_tokens: std::sync::atomic::AtomicU64::new(0),
+            total_completion_tokens: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Retorna o total de tokens de prompt acumulados
+    pub fn get_total_prompt_tokens(&self) -> u64 {
+        self.total_prompt_tokens
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Retorna o total de tokens de completion acumulados
+    pub fn get_total_completion_tokens(&self) -> u64 {
+        self.total_completion_tokens
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Retorna o total de todos os tokens acumulados
+    pub fn get_total_tokens(&self) -> u64 {
+        self.get_total_prompt_tokens() + self.get_total_completion_tokens()
     }
 
     /// Altera o modelo de texto usado pelo cliente.
@@ -459,9 +501,15 @@ impl LlmClient for OpenAiClient {
             },
             ChatMessage {
                 role: "user".into(),
-                content: format!("{}\n\nDiary:\n{}",
+                content: format!(
+                    "{}\n\nDiary:\n{}",
                     prompt.user,
-                    prompt.diary.iter().map(|e| e.format()).collect::<Vec<_>>().join("\n")
+                    prompt
+                        .diary
+                        .iter()
+                        .map(|e| e.format())
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 ),
             },
         ];
@@ -473,7 +521,8 @@ impl LlmClient for OpenAiClient {
             response_format: Some(serde_json::json!({"type": "json_object"})),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post("https://api.openai.com/v1/chat/completions")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
@@ -488,7 +537,10 @@ impl LlmClient for OpenAiClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+            return Err(LlmError::ApiError(format!(
+                "OpenAI API error: {}",
+                error_text
+            )));
         }
 
         let chat_response: ChatResponse = response
@@ -496,17 +548,40 @@ impl LlmClient for OpenAiClient {
             .await
             .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
 
-        let content = chat_response.choices
+        // Acumular tokens
+        self.total_prompt_tokens.fetch_add(
+            chat_response.usage.prompt_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.total_completion_tokens.fetch_add(
+            chat_response.usage.completion_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        // Log token usage
+        log::info!(
+            "🎫 Tokens: prompt={}, completion={}, total={} | Acumulado: {}",
+            chat_response.usage.prompt_tokens,
+            chat_response.usage.completion_tokens,
+            chat_response.usage.total_tokens,
+            self.get_total_tokens()
+        );
+
+        let content = chat_response
+            .choices
             .first()
             .ok_or_else(|| LlmError::ParseError("No choices in response".into()))?
-            .message.content.clone();
+            .message
+            .content
+            .clone();
 
         let action_json: ActionJson = serde_json::from_str(&content)
             .map_err(|e| LlmError::ParseError(format!("Failed to parse action JSON: {}", e)))?;
 
         match action_json.action.as_str() {
             "search" => {
-                let queries = action_json.queries
+                let queries = action_json
+                    .queries
                     .unwrap_or_default()
                     .into_iter()
                     .map(|q| SerpQuery {
@@ -520,20 +595,17 @@ impl LlmClient for OpenAiClient {
                     think: action_json.think,
                 })
             }
-            "read" => {
-                Ok(AgentAction::Read {
-                    urls: action_json.urls.unwrap_or_default(),
-                    think: action_json.think,
-                })
-            }
-            "reflect" => {
-                Ok(AgentAction::Reflect {
-                    gap_questions: action_json.gap_questions.unwrap_or_default(),
-                    think: action_json.think,
-                })
-            }
+            "read" => Ok(AgentAction::Read {
+                urls: action_json.urls.unwrap_or_default(),
+                think: action_json.think,
+            }),
+            "reflect" => Ok(AgentAction::Reflect {
+                gap_questions: action_json.gap_questions.unwrap_or_default(),
+                think: action_json.think,
+            }),
             "answer" => {
-                let references = action_json.references
+                let references = action_json
+                    .references
                     .unwrap_or_default()
                     .into_iter()
                     .map(|r| Reference {
@@ -549,13 +621,14 @@ impl LlmClient for OpenAiClient {
                     think: action_json.think,
                 })
             }
-            "coding" => {
-                Ok(AgentAction::Coding {
-                    code: action_json.code.unwrap_or_default(),
-                    think: action_json.think,
-                })
-            }
-            _ => Err(LlmError::ParseError(format!("Unknown action: {}", action_json.action))),
+            "coding" => Ok(AgentAction::Coding {
+                code: action_json.code.unwrap_or_default(),
+                think: action_json.think,
+            }),
+            _ => Err(LlmError::ParseError(format!(
+                "Unknown action: {}",
+                action_json.action
+            ))),
         }
     }
 
@@ -571,9 +644,15 @@ impl LlmClient for OpenAiClient {
             },
             ChatMessage {
                 role: "user".into(),
-                content: format!("{}\n\nDiary:\n{}",
+                content: format!(
+                    "{}\n\nDiary:\n{}",
                     prompt.user,
-                    prompt.diary.iter().map(|e| e.format()).collect::<Vec<_>>().join("\n")
+                    prompt
+                        .diary
+                        .iter()
+                        .map(|e| e.format())
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 ),
             },
         ];
@@ -585,7 +664,8 @@ impl LlmClient for OpenAiClient {
             response_format: None,
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post("https://api.openai.com/v1/chat/completions")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
@@ -600,7 +680,10 @@ impl LlmClient for OpenAiClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+            return Err(LlmError::ApiError(format!(
+                "OpenAI API error: {}",
+                error_text
+            )));
         }
 
         let chat_response: ChatResponse = response
@@ -608,10 +691,28 @@ impl LlmClient for OpenAiClient {
             .await
             .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
 
-        let answer = chat_response.choices
+        // Acumular tokens
+        self.total_prompt_tokens.fetch_add(
+            chat_response.usage.prompt_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.total_completion_tokens.fetch_add(
+            chat_response.usage.completion_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        log::debug!(
+            "🎫 generate_answer tokens: {} | Acumulado: {}",
+            chat_response.usage.total_tokens,
+            self.get_total_tokens()
+        );
+
+        let answer = chat_response
+            .choices
             .first()
             .ok_or_else(|| LlmError::ParseError("No choices in response".into()))?
-            .message.content.clone();
+            .message
+            .content
+            .clone();
 
         Ok(LlmResponse {
             answer,
@@ -628,7 +729,8 @@ impl LlmClient for OpenAiClient {
             input: serde_json::Value::String(text.to_string()),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post("https://api.openai.com/v1/embeddings")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
@@ -643,7 +745,10 @@ impl LlmClient for OpenAiClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+            return Err(LlmError::ApiError(format!(
+                "OpenAI API error: {}",
+                error_text
+            )));
         }
 
         let embedding_response: EmbeddingResponse = response
@@ -651,7 +756,8 @@ impl LlmClient for OpenAiClient {
             .await
             .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
 
-        let embedding_data = embedding_response.data
+        let embedding_data = embedding_response
+            .data
             .first()
             .ok_or_else(|| LlmError::ParseError("No embedding data in response".into()))?;
 
@@ -662,7 +768,8 @@ impl LlmClient for OpenAiClient {
     }
 
     async fn embed_batch(&self, texts: &[String]) -> Result<Vec<EmbeddingResult>, LlmError> {
-        let input: Vec<serde_json::Value> = texts.iter()
+        let input: Vec<serde_json::Value> = texts
+            .iter()
             .map(|t| serde_json::Value::String(t.clone()))
             .collect();
 
@@ -671,7 +778,8 @@ impl LlmClient for OpenAiClient {
             input: serde_json::Value::Array(input),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post("https://api.openai.com/v1/embeddings")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
@@ -686,7 +794,10 @@ impl LlmClient for OpenAiClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+            return Err(LlmError::ApiError(format!(
+                "OpenAI API error: {}",
+                error_text
+            )));
         }
 
         let embedding_response: EmbeddingResponse = response
@@ -695,7 +806,8 @@ impl LlmClient for OpenAiClient {
             .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
 
         let data_len = embedding_response.data.len() as u64;
-        let results: Vec<EmbeddingResult> = embedding_response.data
+        let results: Vec<EmbeddingResult> = embedding_response
+            .data
             .into_iter()
             .map(|data| EmbeddingResult {
                 vector: data.embedding,
@@ -735,7 +847,8 @@ impl LlmClient for OpenAiClient {
             response_format: Some(serde_json::json!({"type": "json_object"})),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post("https://api.openai.com/v1/chat/completions")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
@@ -750,7 +863,10 @@ impl LlmClient for OpenAiClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+            return Err(LlmError::ApiError(format!(
+                "OpenAI API error: {}",
+                error_text
+            )));
         }
 
         let chat_response: ChatResponse = response
@@ -758,10 +874,28 @@ impl LlmClient for OpenAiClient {
             .await
             .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
 
-        let content = chat_response.choices
+        // Acumular tokens
+        self.total_prompt_tokens.fetch_add(
+            chat_response.usage.prompt_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.total_completion_tokens.fetch_add(
+            chat_response.usage.completion_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        log::debug!(
+            "🎫 evaluate tokens: {} | Acumulado: {}",
+            chat_response.usage.total_tokens,
+            self.get_total_tokens()
+        );
+
+        let content = chat_response
+            .choices
             .first()
             .ok_or_else(|| LlmError::ParseError("No choices in response".into()))?
-            .message.content.clone();
+            .message
+            .content
+            .clone();
 
         #[derive(Deserialize)]
         struct EvalJson {
@@ -809,7 +943,8 @@ Respond with JSON: {"needs_definitive": true/false, "needs_freshness": true/fals
             response_format: Some(serde_json::json!({"type": "json_object"})),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post("https://api.openai.com/v1/chat/completions")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
@@ -824,7 +959,10 @@ Respond with JSON: {"needs_definitive": true/false, "needs_freshness": true/fals
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+            return Err(LlmError::ApiError(format!(
+                "OpenAI API error: {}",
+                error_text
+            )));
         }
 
         let chat_response: ChatResponse = response
@@ -832,10 +970,28 @@ Respond with JSON: {"needs_definitive": true/false, "needs_freshness": true/fals
             .await
             .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
 
-        let content = chat_response.choices
+        // Acumular tokens
+        self.total_prompt_tokens.fetch_add(
+            chat_response.usage.prompt_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.total_completion_tokens.fetch_add(
+            chat_response.usage.completion_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        log::debug!(
+            "🎫 determine_eval_types tokens: {} | Acumulado: {}",
+            chat_response.usage.total_tokens,
+            self.get_total_tokens()
+        );
+
+        let content = chat_response
+            .choices
             .first()
             .ok_or_else(|| LlmError::ParseError("No choices in response".into()))?
-            .message.content.clone();
+            .message
+            .content
+            .clone();
 
         #[derive(Deserialize)]
         struct EvalTypesJson {
@@ -868,6 +1024,16 @@ Respond with JSON: {"needs_definitive": true/false, "needs_freshness": true/fals
         }
 
         Ok(types)
+    }
+
+    fn get_prompt_tokens(&self) -> u64 {
+        self.total_prompt_tokens
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn get_completion_tokens(&self) -> u64 {
+        self.total_completion_tokens
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 

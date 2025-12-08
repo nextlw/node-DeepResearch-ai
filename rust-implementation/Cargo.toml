@@ -50,6 +50,7 @@ uuid = { version = "1.6", features = ["v4"] }
 
 # Configuration
 config = "0.13"
+dotenvy = "0.15"
 
 # Random number generation
 rand = "0.8"
@@ -59,6 +60,12 @@ url = "2.4"
 
 # URL encoding
 urlencoding = "2.1"
+
+# PDF extraction
+pdf-extract = "0.8"
+
+# MIME type detection
+mime_guess = "2.0"
 
 # Futures utilities
 futures = "0.3"

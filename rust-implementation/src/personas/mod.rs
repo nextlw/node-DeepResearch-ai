@@ -2,17 +2,17 @@
 // SISTEMA DE PERSONAS COGNITIVAS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-mod traits;
 mod all_personas;
 mod orchestrator;
+mod traits;
 
-pub use traits::*;
 pub use all_personas::*;
 pub use orchestrator::*;
+pub use traits::*;
 
 use chrono::Utc;
 
-use crate::types::{SerpQuery, Language, TopicCategory};
+use crate::types::{Language, SerpQuery, TopicCategory};
 
 /// Contexto compartilhado para expansão de queries
 #[derive(Debug, Clone)]
@@ -58,7 +58,9 @@ pub struct WeightedQuery {
 /// Funções auxiliares para extração de tópico
 pub fn extract_main_topic(query: &str) -> String {
     // Implementação simplificada - remove stop words e extrai substantivos principais
-    let stop_words = ["the", "a", "an", "is", "are", "was", "were", "what", "how", "why", "when", "where"];
+    let stop_words = [
+        "the", "a", "an", "is", "are", "was", "were", "what", "how", "why", "when", "where",
+    ];
 
     query
         .split_whitespace()

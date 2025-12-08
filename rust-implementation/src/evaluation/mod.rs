@@ -103,7 +103,7 @@ impl EvaluationType {
                 eval_type: self,
                 max_retries: 3,
                 timeout: Duration::from_secs(45),
-                weight: 1.5,  // Mais importante
+                weight: 1.5, // Mais importante
             },
         }
     }
@@ -111,12 +111,12 @@ impl EvaluationType {
     /// Determina freshness threshold baseado no tópico
     pub fn freshness_threshold(&self, topic: &TopicCategory) -> Duration {
         match topic {
-            TopicCategory::Finance => Duration::from_secs(60 * 60 * 2),       // 2 horas
-            TopicCategory::News => Duration::from_secs(60 * 60 * 24),         // 1 dia
+            TopicCategory::Finance => Duration::from_secs(60 * 60 * 2), // 2 horas
+            TopicCategory::News => Duration::from_secs(60 * 60 * 24),   // 1 dia
             TopicCategory::Technology => Duration::from_secs(60 * 60 * 24 * 30), // 30 dias
-            TopicCategory::Science => Duration::from_secs(60 * 60 * 24 * 365),   // 1 ano
-            TopicCategory::History => Duration::MAX,                           // Sem limite
-            _ => Duration::from_secs(60 * 60 * 24 * 7),                        // 7 dias padrão
+            TopicCategory::Science => Duration::from_secs(60 * 60 * 24 * 365), // 1 ano
+            TopicCategory::History => Duration::MAX,                    // Sem limite
+            _ => Duration::from_secs(60 * 60 * 24 * 7),                 // 7 dias padrão
         }
     }
 }
@@ -304,11 +304,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_result() {
-        let success = EvaluationResult::success(
-            EvaluationType::Definitive,
-            "Good answer".into(),
-            0.9,
-        );
+        let success =
+            EvaluationResult::success(EvaluationType::Definitive, "Good answer".into(), 0.9);
         assert!(success.passed);
         assert_eq!(success.confidence, 0.9);
 

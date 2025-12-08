@@ -8,13 +8,9 @@
 //!
 //! Executar: `cargo bench --bench search_bench`
 
-use criterion::{
-    black_box, criterion_group, criterion_main,
-    BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use deep_research::search::{
-    SearchResult, UrlContent,
-    extract_hostname, hostname_boost, path_boost,
+    extract_hostname, hostname_boost, path_boost, SearchResult, UrlContent,
 };
 use deep_research::types::BoostedSearchSnippet;
 
@@ -65,16 +61,12 @@ fn bench_extract_hostname(c: &mut Criterion) {
     let urls = create_test_urls();
 
     group.bench_function("single_url", |bencher| {
-        bencher.iter(|| {
-            black_box(extract_hostname("https://en.wikipedia.org/wiki/Rust"))
-        })
+        bencher.iter(|| black_box(extract_hostname("https://en.wikipedia.org/wiki/Rust")))
     });
 
     group.bench_function("batch_10_urls", |bencher| {
         bencher.iter(|| {
-            let results: Vec<_> = urls.iter()
-                .map(|url| extract_hostname(url))
-                .collect();
+            let results: Vec<_> = urls.iter().map(|url| extract_hostname(url)).collect();
             black_box(results)
         })
     });
@@ -90,9 +82,7 @@ fn bench_extract_hostname(c: &mut Criterion) {
 
     group.bench_function("edge_cases", |bencher| {
         bencher.iter(|| {
-            let results: Vec<_> = edge_cases.iter()
-                .map(|url| extract_hostname(url))
-                .collect();
+            let results: Vec<_> = edge_cases.iter().map(|url| extract_hostname(url)).collect();
             black_box(results)
         })
     });
@@ -119,22 +109,16 @@ fn bench_hostname_boost(c: &mut Criterion) {
     ];
 
     group.bench_function("trusted_hostname", |bencher| {
-        bencher.iter(|| {
-            black_box(hostname_boost("en.wikipedia.org"))
-        })
+        bencher.iter(|| black_box(hostname_boost("en.wikipedia.org")))
     });
 
     group.bench_function("untrusted_hostname", |bencher| {
-        bencher.iter(|| {
-            black_box(hostname_boost("random-site.com"))
-        })
+        bencher.iter(|| black_box(hostname_boost("random-site.com")))
     });
 
     group.bench_function("batch_hostnames", |bencher| {
         bencher.iter(|| {
-            let results: Vec<_> = hostnames.iter()
-                .map(|h| hostname_boost(h))
-                .collect();
+            let results: Vec<_> = hostnames.iter().map(|h| hostname_boost(h)).collect();
             black_box(results)
         })
     });
@@ -157,22 +141,16 @@ fn bench_path_boost(c: &mut Criterion) {
     ];
 
     group.bench_function("docs_path", |bencher| {
-        bencher.iter(|| {
-            black_box(path_boost("https://example.com/docs/api"))
-        })
+        bencher.iter(|| black_box(path_boost("https://example.com/docs/api")))
     });
 
     group.bench_function("regular_path", |bencher| {
-        bencher.iter(|| {
-            black_box(path_boost("https://example.com/about"))
-        })
+        bencher.iter(|| black_box(path_boost("https://example.com/about")))
     });
 
     group.bench_function("batch_paths", |bencher| {
         bencher.iter(|| {
-            let results: Vec<_> = urls.iter()
-                .map(|url| path_boost(url))
-                .collect();
+            let results: Vec<_> = urls.iter().map(|url| path_boost(url)).collect();
             black_box(results)
         })
     });
@@ -189,25 +167,19 @@ fn bench_search_result(c: &mut Criterion) {
 
     for count in [10, 25, 50, 100].iter() {
         let snippets = create_test_snippets(*count);
-        let snippet_texts: Vec<String> = snippets.iter()
-            .map(|s| s.description.clone())
-            .collect();
+        let snippet_texts: Vec<String> = snippets.iter().map(|s| s.description.clone()).collect();
 
         group.throughput(Throughput::Elements(*count as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("create", count),
-            count,
-            |bencher, _| {
-                bencher.iter(|| {
-                    black_box(SearchResult {
-                        urls: snippets.clone(),
-                        snippets: snippet_texts.clone(),
-                        total_results: *count as u64 * 10,
-                    })
+        group.bench_with_input(BenchmarkId::new("create", count), count, |bencher, _| {
+            bencher.iter(|| {
+                black_box(SearchResult {
+                    urls: snippets.clone(),
+                    snippets: snippet_texts.clone(),
+                    total_results: *count as u64 * 10,
                 })
-            },
-        );
+            })
+        });
     }
 
     group.finish();
@@ -220,24 +192,20 @@ fn bench_url_content(c: &mut Criterion) {
     let content_sizes = [100, 500, 1000, 5000, 10000];
 
     for &size in &content_sizes {
-        let text: String = (0..size)
-            .map(|i| format!("Word{} ", i))
-            .collect();
+        let text: String = (0..size).map(|i| format!("Word{} ", i)).collect();
 
-        group.bench_with_input(
-            BenchmarkId::new("create", size),
-            &size,
-            |bencher, _| {
-                bencher.iter(|| {
-                    black_box(UrlContent {
-                        title: "Test Page Title".to_string(),
-                        text: text.clone(),
-                        url: "https://example.com/page".to_string(),
-                        word_count: size,
-                    })
+        group.bench_with_input(BenchmarkId::new("create", size), &size, |bencher, _| {
+            bencher.iter(|| {
+                black_box(UrlContent {
+                    title: "Test Page Title".to_string(),
+                    text: text.clone(),
+                    url: "https://example.com/page".to_string(),
+                    word_count: size,
+                    read_time_ms: None,
+                    source: None,
                 })
-            },
-        );
+            })
+        });
     }
 
     group.finish();
@@ -288,7 +256,8 @@ fn bench_score_calculation(c: &mut Criterion) {
                             * snippet.path_boost;
                     }
                     sorted.sort_by(|a, b| {
-                        b.final_score.partial_cmp(&a.final_score)
+                        b.final_score
+                            .partial_cmp(&a.final_score)
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
                     black_box(sorted)
@@ -319,12 +288,11 @@ fn bench_boost_pipeline(c: &mut Criterion) {
 
     group.bench_function("full_boost_pipeline", |bencher| {
         bencher.iter(|| {
-            let results: Vec<(Option<String>, f32, f32)> = urls.iter()
+            let results: Vec<(Option<String>, f32, f32)> = urls
+                .iter()
                 .map(|url| {
                     let hostname = extract_hostname(url);
-                    let h_boost = hostname.as_ref()
-                        .map(|h| hostname_boost(h))
-                        .unwrap_or(1.0);
+                    let h_boost = hostname.as_ref().map(|h| hostname_boost(h)).unwrap_or(1.0);
                     let p_boost = path_boost(url);
                     (hostname, h_boost, p_boost)
                 })
@@ -335,12 +303,11 @@ fn bench_boost_pipeline(c: &mut Criterion) {
 
     group.bench_function("calculate_combined_boost", |bencher| {
         bencher.iter(|| {
-            let combined: Vec<f32> = urls.iter()
+            let combined: Vec<f32> = urls
+                .iter()
                 .map(|url| {
                     let hostname = extract_hostname(url);
-                    let h_boost = hostname.as_ref()
-                        .map(|h| hostname_boost(h))
-                        .unwrap_or(1.0);
+                    let h_boost = hostname.as_ref().map(|h| hostname_boost(h)).unwrap_or(1.0);
                     let p_boost = path_boost(url);
                     h_boost * p_boost
                 })
@@ -375,30 +342,26 @@ fn bench_result_filtering(c: &mut Criterion) {
             count,
             |bencher, _| {
                 bencher.iter(|| {
-                    let filtered: Vec<_> = snippets.iter()
-                        .filter(|s| s.final_score >= 0.5)
-                        .collect();
+                    let filtered: Vec<_> =
+                        snippets.iter().filter(|s| s.final_score >= 0.5).collect();
                     black_box(filtered)
                 })
             },
         );
 
         // Top N resultados
-        group.bench_with_input(
-            BenchmarkId::new("top_10", count),
-            count,
-            |bencher, _| {
-                bencher.iter(|| {
-                    let mut sorted = snippets.clone();
-                    sorted.sort_by(|a, b| {
-                        b.final_score.partial_cmp(&a.final_score)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                    let top: Vec<_> = sorted.into_iter().take(10).collect();
-                    black_box(top)
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("top_10", count), count, |bencher, _| {
+            bencher.iter(|| {
+                let mut sorted = snippets.clone();
+                sorted.sort_by(|a, b| {
+                    b.final_score
+                        .partial_cmp(&a.final_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let top: Vec<_> = sorted.into_iter().take(10).collect();
+                black_box(top)
+            })
+        });
     }
 
     group.finish();

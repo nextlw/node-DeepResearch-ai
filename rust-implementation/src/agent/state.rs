@@ -61,7 +61,10 @@ pub enum AgentState {
 impl AgentState {
     /// Verifica se o estado é terminal (Completed ou Failed)
     pub fn is_terminal(&self) -> bool {
-        matches!(self, AgentState::Completed { .. } | AgentState::Failed { .. })
+        matches!(
+            self,
+            AgentState::Completed { .. } | AgentState::Failed { .. }
+        )
     }
 
     /// Verifica se o estado é de processamento normal
@@ -84,8 +87,7 @@ impl AgentState {
             (AgentState::Processing { .. }, AgentState::Failed { .. }) |
             // De BeastMode pode ir para Completed ou Failed
             (AgentState::BeastMode { .. }, AgentState::Completed { .. }) |
-            (AgentState::BeastMode { .. }, AgentState::Failed { .. })
-            // Estados terminais não podem transicionar
+            (AgentState::BeastMode { .. }, AgentState::Failed { .. }) // Estados terminais não podem transicionar
         )
     }
 
@@ -209,6 +211,18 @@ pub struct ResearchResult {
     /// Será `Some(mensagem)` quando `success = false`.
     /// Descreve o motivo da falha (timeout, budget, etc).
     pub error: Option<String>,
+
+    /// Tempo total da pesquisa em milissegundos.
+    pub total_time_ms: u128,
+
+    /// Tempo gasto em buscas em milissegundos.
+    pub search_time_ms: u128,
+
+    /// Tempo gasto em leitura de URLs em milissegundos.
+    pub read_time_ms: u128,
+
+    /// Tempo gasto em chamadas LLM em milissegundos.
+    pub llm_time_ms: u128,
 }
 
 /// Estatísticas de uso de tokens durante a pesquisa.

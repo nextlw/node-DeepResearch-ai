@@ -2,8 +2,8 @@
 // TRAIT DE PERSONA COGNITIVA
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-use crate::types::SerpQuery;
 use super::QueryContext;
+use crate::types::SerpQuery;
 
 /// Trait que define o comportamento de uma persona cognitiva
 ///
@@ -118,8 +118,12 @@ mod tests {
     struct TestPersona;
 
     impl CognitivePersona for TestPersona {
-        fn name(&self) -> &'static str { "Test" }
-        fn focus(&self) -> &'static str { "testing" }
+        fn name(&self) -> &'static str {
+            "Test"
+        }
+        fn focus(&self) -> &'static str {
+            "testing"
+        }
 
         fn expand_query(&self, original: &str, _ctx: &QueryContext) -> SerpQuery {
             SerpQuery {
@@ -129,7 +133,9 @@ mod tests {
             }
         }
 
-        fn weight(&self) -> f32 { 1.5 }
+        fn weight(&self) -> f32 {
+            1.5
+        }
     }
 
     #[test]

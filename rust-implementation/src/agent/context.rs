@@ -2,8 +2,8 @@
 // CONTEXTO DO AGENTE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-use crate::types::{KnowledgeItem, KnowledgeType, BoostedSearchSnippet};
 use super::DiaryEntry;
+use crate::types::{BoostedSearchSnippet, KnowledgeItem, KnowledgeType};
 
 /// Contexto acumulado durante a execução do agente
 ///
@@ -116,7 +116,11 @@ impl AgentContext {
     /// Adiciona um item de conhecimento
     pub fn add_knowledge(&mut self, item: KnowledgeItem) {
         // Evita duplicatas baseado na pergunta
-        if !self.knowledge.iter().any(|k| k.question == item.question && k.answer == item.answer) {
+        if !self
+            .knowledge
+            .iter()
+            .any(|k| k.question == item.question && k.answer == item.answer)
+        {
             self.knowledge.push(item);
         }
     }
@@ -159,13 +163,15 @@ impl AgentContext {
         self.knowledge
             .iter()
             .enumerate()
-            .map(|(i, k)| format!(
-                "{}. [{}] Q: {}\n   A: {}",
-                i + 1,
-                k.item_type.as_str(),
-                k.question,
-                k.answer
-            ))
+            .map(|(i, k)| {
+                format!(
+                    "{}. [{}] Q: {}\n   A: {}",
+                    i + 1,
+                    k.item_type.as_str(),
+                    k.question,
+                    k.answer
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n\n")
     }
@@ -220,8 +226,16 @@ mod tests {
     fn test_add_urls_dedup() {
         let mut ctx = AgentContext::new();
 
-        ctx.add_url("https://example.com".into(), "Example".into(), "Description".into());
-        ctx.add_url("https://example.com".into(), "Example".into(), "Description".into());
+        ctx.add_url(
+            "https://example.com".into(),
+            "Example".into(),
+            "Description".into(),
+        );
+        ctx.add_url(
+            "https://example.com".into(),
+            "Example".into(),
+            "Description".into(),
+        );
 
         assert_eq!(ctx.collected_urls.len(), 1);
     }

@@ -8,23 +8,19 @@
 //!
 //! Executar: `cargo bench --bench e2e_bench`
 
-use criterion::{
-    black_box, criterion_group, criterion_main,
-    BenchmarkId, Criterion,
-};
 use chrono::Utc;
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use deep_research::agent::{
-    AgentState, AgentAction, ActionPermissions,
-    DiaryEntry, AgentPrompt, TokenUsage, ResearchResult,
+    ActionPermissions, AgentAction, AgentPrompt, AgentState, DiaryEntry, ResearchResult, TokenUsage,
 };
-use deep_research::evaluation::{EvaluationType, EvaluationResult};
-use deep_research::personas::{PersonaOrchestrator, QueryContext};
-use deep_research::types::{
-    SerpQuery, Reference, KnowledgeItem, KnowledgeType,
-    Language, TopicCategory, BoostedSearchSnippet,
-};
-use deep_research::search::SearchResult;
+use deep_research::evaluation::{EvaluationResult, EvaluationType};
 use deep_research::performance::simd::{cosine_similarity, dedup_queries};
+use deep_research::personas::{PersonaOrchestrator, QueryContext};
+use deep_research::search::SearchResult;
+use deep_research::types::{
+    BoostedSearchSnippet, KnowledgeItem, KnowledgeType, Language, Reference, SerpQuery,
+    TopicCategory,
+};
 use std::time::Duration;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -54,9 +50,7 @@ fn generate_mock_search_results(count: usize) -> SearchResult {
         })
         .collect();
 
-    let snippets: Vec<String> = urls.iter()
-        .map(|u| u.description.clone())
-        .collect();
+    let snippets: Vec<String> = urls.iter().map(|u| u.description.clone()).collect();
 
     SearchResult {
         urls,
@@ -97,16 +91,11 @@ fn bench_single_step_simulation(c: &mut Criterion) {
 
     // Step 2: Deduplicação (simulada com embeddings)
     group.bench_function("step2_deduplication", |bencher| {
-        let new_embeddings: Vec<Vec<f32>> = (0..10)
-            .map(|_| generate_mock_embedding(768))
-            .collect();
-        let existing_embeddings: Vec<Vec<f32>> = (0..50)
-            .map(|_| generate_mock_embedding(768))
-            .collect();
+        let new_embeddings: Vec<Vec<f32>> = (0..10).map(|_| generate_mock_embedding(768)).collect();
+        let existing_embeddings: Vec<Vec<f32>> =
+            (0..50).map(|_| generate_mock_embedding(768)).collect();
 
-        bencher.iter(|| {
-            black_box(dedup_queries(&new_embeddings, &existing_embeddings, 0.86))
-        })
+        bencher.iter(|| black_box(dedup_queries(&new_embeddings, &existing_embeddings, 0.86)))
     });
 
     // Step 3: Processamento de resultados de busca
@@ -116,7 +105,8 @@ fn bench_single_step_simulation(c: &mut Criterion) {
         bencher.iter(|| {
             let mut sorted = search_results.urls.clone();
             sorted.sort_by(|a, b| {
-                b.final_score.partial_cmp(&a.final_score)
+                b.final_score
+                    .partial_cmp(&a.final_score)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
             let top_urls: Vec<_> = sorted.into_iter().take(5).collect();
@@ -129,8 +119,16 @@ fn bench_single_step_simulation(c: &mut Criterion) {
         bencher.iter(|| {
             let entry = DiaryEntry::Search {
                 queries: vec![
-                    SerpQuery { q: "rust web framework".to_string(), tbs: None, location: None },
-                    SerpQuery { q: "actix vs axum".to_string(), tbs: None, location: None },
+                    SerpQuery {
+                        q: "rust web framework".to_string(),
+                        tbs: None,
+                        location: None,
+                    },
+                    SerpQuery {
+                        q: "actix vs axum".to_string(),
+                        tbs: None,
+                        location: None,
+                    },
                 ],
                 think: "Searching for Rust web frameworks comparison".to_string(),
                 urls_found: 15,
@@ -148,11 +146,7 @@ fn bench_single_step_simulation(c: &mut Criterion) {
                 current_question: "What are the best Rust web frameworks?".to_string(),
                 budget_used: 0.35,
             };
-            black_box((
-                state.is_terminal(),
-                state.budget_used(),
-                state.total_step(),
-            ))
+            black_box((state.is_terminal(), state.budget_used(), state.total_step()))
         })
     });
 
@@ -178,20 +172,17 @@ fn bench_evaluation_pipeline(c: &mut Criterion) {
     // Pipeline completo (todas as avaliações passam)
     group.bench_function("all_pass", |bencher| {
         bencher.iter(|| {
-            let results: Vec<EvaluationResult> = eval_types.iter()
+            let results: Vec<EvaluationResult> = eval_types
+                .iter()
                 .map(|&t| {
-                    EvaluationResult::success(
-                        t,
-                        format!("{} check passed", t.as_str()),
-                        0.9,
-                    ).with_duration(Duration::from_millis(50))
+                    EvaluationResult::success(t, format!("{} check passed", t.as_str()), 0.9)
+                        .with_duration(Duration::from_millis(50))
                 })
                 .collect();
 
             let all_passed = results.iter().all(|r| r.passed);
-            let avg_confidence: f32 = results.iter()
-                .map(|r| r.confidence)
-                .sum::<f32>() / results.len() as f32;
+            let avg_confidence: f32 =
+                results.iter().map(|r| r.confidence).sum::<f32>() / results.len() as f32;
 
             black_box((all_passed, avg_confidence))
         })
@@ -274,7 +265,8 @@ fn bench_multi_step_simulation(c: &mut Criterion) {
                             AgentAction::Search { queries, think, .. } => {
                                 // Expandir queries
                                 let context = create_test_context(&queries[0].q);
-                                let _expanded = orchestrator.expand_query_parallel(&context.original_query, &context);
+                                let _expanded = orchestrator
+                                    .expand_query_parallel(&context.original_query, &context);
 
                                 // Registrar no diário
                                 diary.push(DiaryEntry::Search {
@@ -348,6 +340,10 @@ fn bench_final_result(c: &mut Criterion) {
                         },
                         visited_urls: visited_urls.clone(),
                         error: None,
+                        total_time_ms: 8000,
+                        search_time_ms: 2500,
+                        read_time_ms: 1200,
+                        llm_time_ms: 4300,
                     })
                 })
             },
@@ -368,6 +364,10 @@ fn bench_final_result(c: &mut Criterion) {
                 },
                 visited_urls: vec![],
                 error: Some("Budget exhausted without satisfactory answer".to_string()),
+                total_time_ms: 45000,
+                search_time_ms: 15000,
+                read_time_ms: 8000,
+                llm_time_ms: 22000,
             })
         })
     });
@@ -385,31 +385,29 @@ fn bench_orchestration_overhead(c: &mut Criterion) {
     // Criação de prompt com diferentes tamanhos de diário
     for diary_size in [5, 15, 30, 50].iter() {
         let diary: Vec<DiaryEntry> = (0..*diary_size)
-            .map(|i| {
-                match i % 4 {
-                    0 => DiaryEntry::Search {
-                        queries: vec![SerpQuery {
-                            q: format!("query {}", i),
-                            tbs: None,
-                            location: None,
-                        }],
-                        think: format!("Search {}", i),
-                        urls_found: 10,
-                    },
-                    1 => DiaryEntry::Read {
-                        urls: vec![format!("https://url{}.com", i)],
-                        think: format!("Read {}", i),
-                    },
-                    2 => DiaryEntry::Reflect {
-                        questions: vec![format!("Gap question {}", i)],
-                        think: format!("Reflect {}", i),
-                    },
-                    _ => DiaryEntry::FailedAnswer {
-                        answer: format!("Failed answer {}", i),
-                        eval_type: EvaluationType::Completeness,
-                        reason: "Missing info".to_string(),
-                    },
-                }
+            .map(|i| match i % 4 {
+                0 => DiaryEntry::Search {
+                    queries: vec![SerpQuery {
+                        q: format!("query {}", i),
+                        tbs: None,
+                        location: None,
+                    }],
+                    think: format!("Search {}", i),
+                    urls_found: 10,
+                },
+                1 => DiaryEntry::Read {
+                    urls: vec![format!("https://url{}.com", i)],
+                    think: format!("Read {}", i),
+                },
+                2 => DiaryEntry::Reflect {
+                    questions: vec![format!("Gap question {}", i)],
+                    think: format!("Reflect {}", i),
+                },
+                _ => DiaryEntry::FailedAnswer {
+                    answer: format!("Failed answer {}", i),
+                    eval_type: EvaluationType::Completeness,
+                    reason: "Missing info".to_string(),
+                },
             })
             .collect();
 
@@ -425,9 +423,7 @@ fn bench_orchestration_overhead(c: &mut Criterion) {
                     };
 
                     // Simular formatação do diário
-                    let formatted: Vec<String> = prompt.diary.iter()
-                        .map(|e| e.format())
-                        .collect();
+                    let formatted: Vec<String> = prompt.diary.iter().map(|e| e.format()).collect();
 
                     black_box((prompt, formatted.len()))
                 })
@@ -474,7 +470,8 @@ fn bench_e2e_similarity(c: &mut Criterion) {
             kb_size,
             |bencher, _| {
                 bencher.iter(|| {
-                    let similarities: Vec<(usize, f32)> = kb_embeddings.iter()
+                    let similarities: Vec<(usize, f32)> = kb_embeddings
+                        .iter()
                         .enumerate()
                         .map(|(i, emb)| (i, cosine_similarity(&query_embedding, emb)))
                         .filter(|(_, sim)| *sim >= 0.7)

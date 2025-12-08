@@ -2,27 +2,29 @@
 // DEEP RESEARCH AGENT - MÁQUINA DE ESTADOS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-mod state;
 mod actions;
 mod context;
 mod permissions;
+mod state;
 
-pub use state::*;
 pub use actions::*;
 pub use context::*;
 pub use permissions::*;
+pub use state::*;
 
-use std::sync::Arc;
-use crate::types::*;
 use crate::llm::LlmClient;
 use crate::search::SearchClient;
-use crate::utils::TokenTracker;
+use crate::types::*;
+use crate::utils::{ActionTimer, TimingStats, TokenTracker};
+use std::sync::Arc;
 
 /// Máximo de queries por passo (reservado para expansão futura)
 #[allow(dead_code)]
 const MAX_QUERIES_PER_STEP: usize = 5;
 /// Máximo de URLs por passo
 const MAX_URLS_PER_STEP: usize = 5;
+/// Máximo de steps antes de forçar resposta
+const MAX_STEPS_BEFORE_ANSWER: usize = 15;
 
 /// Agente principal de pesquisa profunda
 pub struct DeepResearchAgent {
@@ -31,6 +33,8 @@ pub struct DeepResearchAgent {
     llm_client: Arc<dyn LlmClient>,
     search_client: Arc<dyn SearchClient>,
     token_tracker: TokenTracker,
+    timing_stats: TimingStats,
+    start_time: std::time::Instant,
 }
 
 impl DeepResearchAgent {
@@ -51,6 +55,8 @@ impl DeepResearchAgent {
             llm_client,
             search_client,
             token_tracker: TokenTracker::new(token_budget),
+            timing_stats: TimingStats::new(),
+            start_time: std::time::Instant::now(),
         }
     }
 
@@ -97,7 +103,10 @@ impl DeepResearchAgent {
                     };
                 }
 
-                AgentState::BeastMode { attempts: _attempts, .. } => {
+                AgentState::BeastMode {
+                    attempts: _attempts,
+                    ..
+                } => {
                     // Tentar forçar resposta
                     match self.force_answer().await {
                         Ok(answer) => {
@@ -132,37 +141,100 @@ impl DeepResearchAgent {
         // 2. Rotacionar para próxima pergunta
         let current_question = self.rotate_question();
 
-        // 3. Gerar prompt e obter decisão do LLM
+        // 3. Gerar prompt e obter decisão do LLM (com timing)
         let prompt = self.build_prompt(&permissions, &current_question);
+        let llm_timer = ActionTimer::start("LLM decide_action");
         let action = match self.llm_client.decide_action(&prompt, &permissions).await {
             Ok(a) => a,
             Err(e) => return StepResult::Error(format!("LLM error: {}", e)),
         };
+        let llm_time = llm_timer.stop();
+        self.timing_stats.add_llm_time(llm_time);
+        log::debug!("⏱️  LLM decision: {}ms", llm_time);
 
-        log::debug!(
-            "Step {} | Action: {:?} <- [{}]",
+        log::info!(
+            "📍 Step {} | Action: {} | Think: {}",
             self.context.total_step,
-            action,
-            permissions.allowed_actions().join(", ")
+            action.name(),
+            action.think().chars().take(150).collect::<String>()
         );
 
         // 4. Executar ação escolhida - pattern matching garante cobertura total
         match action {
             AgentAction::Search { queries, think } => {
+                log::debug!(
+                    "🔍 Queries: {:?}",
+                    queries.iter().map(|q| &q.q).collect::<Vec<_>>()
+                );
                 self.execute_search(queries, think).await
             }
             AgentAction::Read { urls, think } => {
-                self.execute_read(urls, think).await
+                // Filtrar URLs já visitadas ou ruins
+                let mut new_urls: Vec<_> = urls
+                    .into_iter()
+                    .filter(|u| !self.context.is_url_visited(u) && !self.context.is_url_bad(u))
+                    .collect();
+
+                // Se LLM escolheu URLs já visitadas, pegar as próximas não visitadas automaticamente
+                if new_urls.is_empty() {
+                    log::warn!(
+                        "⚠️ LLM escolheu URLs já visitadas, selecionando próximas disponíveis..."
+                    );
+                    new_urls = self
+                        .context
+                        .collected_urls
+                        .iter()
+                        .filter(|u| {
+                            !self.context.is_url_visited(&u.url) && !self.context.is_url_bad(&u.url)
+                        })
+                        .take(MAX_URLS_PER_STEP)
+                        .map(|u| u.url.clone())
+                        .collect();
+                }
+
+                // Se ainda não há URLs disponíveis, tentar responder
+                if new_urls.is_empty() {
+                    log::warn!("⚠️ Nenhuma URL disponível! Tentando gerar resposta...");
+                    self.context.total_step += 1;
+                    // Forçar tentativa de resposta
+                    return StepResult::Continue;
+                }
+
+                log::info!(
+                    "📖 URLs selecionadas ({} novas): {:?}",
+                    new_urls.len(),
+                    new_urls.iter().take(3).collect::<Vec<_>>()
+                );
+                self.execute_read(new_urls, think).await
             }
-            AgentAction::Reflect { gap_questions, think } => {
+            AgentAction::Reflect {
+                gap_questions,
+                think,
+            } => {
+                log::debug!("🤔 Gap questions: {:?}", gap_questions);
                 self.execute_reflect(gap_questions, think).await
             }
-            AgentAction::Answer { answer, references, think } => {
+            AgentAction::Answer {
+                answer,
+                references,
+                think,
+            } => {
+                log::info!(
+                    "✍️ Resposta proposta ({} chars, {} refs)",
+                    answer.len(),
+                    references.len()
+                );
+                log::info!("💭 Raciocínio: {}", think);
+                log::info!("📝 Resposta:\n{}", answer);
+                if !references.is_empty() {
+                    log::info!("📚 Referências:");
+                    for r in &references {
+                        log::info!("   - {} ({})", r.title, r.url);
+                    }
+                }
                 self.execute_answer(answer, references, think).await
             }
-            AgentAction::Coding { code, think } => {
-                self.execute_coding(code, think).await
-            }
+            AgentAction::Coding { code, think } => self.execute_coding(code, think).await,
         }
     }
 
@@ -174,10 +246,32 @@ impl DeepResearchAgent {
 
     /// Constrói o prompt para o LLM decidir a próxima ação
     fn build_prompt(&self, permissions: &ActionPermissions, question: &str) -> AgentPrompt {
+        // Listar URLs disponíveis (não visitadas)
+        let available_urls: Vec<_> = self
+            .context
+            .collected_urls
+            .iter()
+            .filter(|u| !self.context.is_url_visited(&u.url) && !self.context.is_url_bad(&u.url))
+            .take(10)
+            .map(|u| format!("- {} ({})", u.url, u.title))
+            .collect();
+
+        let urls_section = if available_urls.is_empty() {
+            "No unvisited URLs available.".to_string()
+        } else {
+            format!(
+                "Available URLs to read (pick different ones each time!):\n{}",
+                available_urls.join("\n")
+            )
+        };
+
         AgentPrompt {
             system: self.build_system_prompt(permissions),
-            user: format!("Current question: {}\n\nKnowledge so far:\n{}",
+            user: format!(
+                "Current question: {}\n\n{}\n\nAlready visited URLs: {}\n\nKnowledge so far:\n{}",
                 question,
+                urls_section,
+                self.context.visited_urls.len(),
                 self.format_knowledge()
             ),
             diary: self.context.diary.clone(),
@@ -185,29 +279,62 @@ impl DeepResearchAgent {
     }
 
     fn build_system_prompt(&self, permissions: &ActionPermissions) -> String {
-        let mut prompt = String::from("You are a research agent. Choose the best action:\n\n");
+        let mut prompt = String::from(
+            r#"You are a research agent. Your goal is to find accurate information efficiently.
+
+CRITICAL RULES:
+1. NEVER read the same URL twice - pick DIFFERENT URLs from the available list
+2. After reading 3-5 different URLs, try to ANSWER the question
+3. If you have enough information, use ANSWER action immediately
+4. Only use SEARCH if you need completely different information
+
+Available actions:
+"#,
+        );
 
         if permissions.search {
-            prompt.push_str("- SEARCH: Search the web for information\n");
+            prompt.push_str("- SEARCH: Search the web (only if current URLs are insufficient)\n");
         }
         if permissions.read {
-            prompt.push_str("- READ: Read a URL in depth\n");
+            prompt.push_str(
+                "- READ: Read URLs from the available list (MUST pick different URLs each time!)\n",
+            );
+            prompt.push_str("  → Supports: web pages, PDFs, JSON, XML, TXT, Markdown files\n");
+            prompt.push_str(
+                "  → Files (.pdf, .json, etc.) are downloaded and extracted automatically\n",
+            );
         }
         if permissions.reflect {
-            prompt.push_str("- REFLECT: Generate gap-closing sub-questions\n");
+            prompt.push_str("- REFLECT: Generate sub-questions (use sparingly)\n");
         }
         if permissions.answer {
-            prompt.push_str("- ANSWER: Provide the final answer\n");
+            prompt.push_str(
+                "- ANSWER: Provide the final answer (USE THIS when you have enough info!)\n",
+            );
         }
         if permissions.coding {
             prompt.push_str("- CODING: Execute code for data processing\n");
+        }
+
+        // Adicionar info sobre URLs visitadas
+        if !self.context.visited_urls.is_empty() {
+            prompt.push_str(&format!(
+                "\n⚠️ You have already visited {} URLs. Pick NEW ones or ANSWER!\n",
+                self.context.visited_urls.len()
+            ));
+        }
+
+        // Forçar resposta após muitos steps
+        if self.context.total_step >= 5 {
+            prompt.push_str("\n🔴 You have done many steps. Consider using ANSWER now!\n");
         }
 
         prompt
     }
 
     fn format_knowledge(&self) -> String {
-        self.context.knowledge
+        self.context
+            .knowledge
             .iter()
             .map(|k| format!("Q: {}\nA: {}", k.question, k.answer))
             .collect::<Vec<_>>()
@@ -217,19 +344,20 @@ impl DeepResearchAgent {
     /// Executa ação de busca
     async fn execute_search(&mut self, queries: Vec<SerpQuery>, think: String) -> StepResult {
         use crate::personas::PersonaOrchestrator;
+        let search_timer = ActionTimer::start("Search");
 
         // Expandir queries com personas cognitivas
         let orchestrator = PersonaOrchestrator::new();
         let context = self.build_query_context();
         let expanded = orchestrator.expand_batch(
             &queries.iter().map(|q| q.q.clone()).collect::<Vec<_>>(),
-            &context
+            &context,
         );
 
         // Deduplicar contra queries existentes
-        let unique = self.dedup_queries(
-            expanded.iter().map(|wq| wq.query.clone()).collect()
-        ).await;
+        let unique = self
+            .dedup_queries(expanded.iter().map(|wq| wq.query.clone()).collect())
+            .await;
 
         // Executar buscas em paralelo
         let results = self.search_client.search_batch(&unique).await;
@@ -241,6 +369,15 @@ impl DeepResearchAgent {
                 self.context.add_snippets(r.snippets);
             }
         }
+
+        let search_time = search_timer.stop();
+        self.timing_stats.add_search_time(search_time);
+
+        log::info!(
+            "🔍 Busca concluída: {} URLs encontradas ({}ms)",
+            self.context.collected_urls.len(),
+            search_time
+        );
 
         // Registrar no diário
         self.context.diary.push(DiaryEntry::Search {
@@ -255,28 +392,83 @@ impl DeepResearchAgent {
 
     /// Executa ação de leitura de URL
     async fn execute_read(&mut self, urls: Vec<Url>, think: String) -> StepResult {
+        use crate::utils::{FileReader, FileType};
+
+        let read_timer = ActionTimer::start("Read URLs");
+        log::info!("📖 Lendo {} URLs...", urls.len().min(MAX_URLS_PER_STEP));
+        let file_reader = FileReader::new();
+
         for url in urls.iter().take(MAX_URLS_PER_STEP) {
-            match self.search_client.read_url(url).await {
-                Ok(content) => {
-                    self.context.add_knowledge(KnowledgeItem {
-                        question: self.context.current_question().to_string(),
-                        answer: content.text,
-                        item_type: KnowledgeType::Url,
-                        references: vec![Reference {
-                            url: url.to_string(),
-                            title: content.title,
-                            exact_quote: None,
-                            relevance_score: None,
-                        }],
-                    });
-                    self.context.visited_urls.push(url.clone());
+            // Detectar se é arquivo para download direto (PDF, JSON, etc.)
+            let file_type = FileType::from_url(url);
+            let is_file = matches!(
+                file_type,
+                FileType::Pdf
+                    | FileType::Json
+                    | FileType::Xml
+                    | FileType::Text
+                    | FileType::Markdown
+            );
+
+            if is_file {
+                // Usar FileReader para arquivos
+                log::info!("📥 Detectado arquivo {:?}: {}", file_type, url);
+                match file_reader.read_url(url).await {
+                    Ok(file_content) => {
+                        log::info!(
+                            "✅ Arquivo lido: {} palavras | {} bytes",
+                            file_content.word_count,
+                            file_content.size_bytes
+                        );
+
+                        self.context.add_knowledge(KnowledgeItem {
+                            question: self.context.current_question().to_string(),
+                            answer: file_content.text,
+                            item_type: KnowledgeType::Url,
+                            references: vec![Reference {
+                                url: url.to_string(),
+                                title: file_content
+                                    .title
+                                    .unwrap_or_else(|| format!("Arquivo {:?}", file_type)),
+                                exact_quote: None,
+                                relevance_score: None,
+                            }],
+                        });
+                        self.context.visited_urls.push(url.clone());
+                    }
+                    Err(e) => {
+                        log::warn!("❌ Falha ao ler arquivo {}: {}", url, e);
+                        self.context.bad_urls.push(url.clone());
+                    }
                 }
-                Err(e) => {
-                    log::warn!("Failed to read URL {}: {}", url, e);
-                    self.context.bad_urls.push(url.clone());
+            } else {
+                // Usar Jina Reader para páginas web
+                match self.search_client.read_url(url).await {
+                    Ok(content) => {
+                        self.context.add_knowledge(KnowledgeItem {
+                            question: self.context.current_question().to_string(),
+                            answer: content.text,
+                            item_type: KnowledgeType::Url,
+                            references: vec![Reference {
+                                url: url.to_string(),
+                                title: content.title,
+                                exact_quote: None,
+                                relevance_score: None,
+                            }],
+                        });
+                        self.context.visited_urls.push(url.clone());
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to read URL {}: {}", url, e);
+                        self.context.bad_urls.push(url.clone());
+                    }
                 }
             }
         }
+
+        let read_time = read_timer.stop();
+        self.timing_stats.add_read_time(read_time);
+        log::info!("📖 Leitura concluída ({}ms)", read_time);
 
         self.context.diary.push(DiaryEntry::Read {
             urls: urls.clone(),
@@ -289,6 +481,8 @@ impl DeepResearchAgent {
 
     /// Executa ação de reflexão
     async fn execute_reflect(&mut self, gap_questions: Vec<String>, think: String) -> StepResult {
+        log::info!("🤔 Refletindo... {} novas perguntas", gap_questions.len());
+
         // Deduplicar novas perguntas
         let unique_questions = self.dedup_questions(gap_questions).await;
 
@@ -313,9 +507,11 @@ impl DeepResearchAgent {
         &mut self,
         answer: String,
         references: Vec<Reference>,
-        _think: String
+        _think: String,
     ) -> StepResult {
         use crate::evaluation::{EvaluationPipeline, EvaluationType};
+
+        log::info!("✍️  Avaliando resposta...");
 
         // Resposta imediata no step 1 = pergunta trivial
         if self.context.total_step == 1 && self.context.allow_direct_answer {
@@ -335,19 +531,27 @@ impl DeepResearchAgent {
         // Executar avaliações
         let eval_context = self.build_evaluation_context();
         let result = pipeline
-            .evaluate_sequential(&self.context.original_question, &answer, &eval_context, &eval_types)
+            .evaluate_sequential(
+                &self.context.original_question,
+                &answer,
+                &eval_context,
+                &eval_types,
+            )
             .await;
 
         if result.overall_passed {
+            log::info!("✅ Resposta aprovada na avaliação!");
             StepResult::Completed(AnswerResult {
                 answer,
                 references,
                 trivial: false,
             })
         } else {
+            log::info!("❌ Resposta reprovada, continuando pesquisa...");
             // Adicionar falha como conhecimento
             let failed_type = result.failed_at.unwrap_or(EvaluationType::Definitive);
-            let reasoning = result.results
+            let reasoning = result
+                .results
                 .last()
                 .map(|r| r.reasoning.clone())
                 .unwrap_or_default();
@@ -388,10 +592,7 @@ impl DeepResearchAgent {
             }
         }
 
-        self.context.diary.push(DiaryEntry::Coding {
-            code,
-            think,
-        });
+        self.context.diary.push(DiaryEntry::Coding { code, think });
 
         self.context.total_step += 1;
         StepResult::Continue
@@ -401,7 +602,8 @@ impl DeepResearchAgent {
     async fn force_answer(&mut self) -> Result<AnswerResult, AgentError> {
         let prompt = AgentPrompt {
             system: "You MUST provide an answer now. No more searching or reflecting. \
-                     Be pragmatic and use what you know.".into(),
+                     Be pragmatic and use what you know."
+                .into(),
             user: format!(
                 "Question: {}\n\nKnowledge:\n{}\n\nProvide your best answer.",
                 self.context.original_question,
@@ -410,7 +612,8 @@ impl DeepResearchAgent {
             diary: self.context.diary.clone(),
         };
 
-        let response = self.llm_client
+        let response = self
+            .llm_client
             .generate_answer(&prompt, 0.7) // Higher temperature
             .await
             .map_err(|e| AgentError::LlmError(e.to_string()))?;
@@ -424,29 +627,53 @@ impl DeepResearchAgent {
 
     /// Constrói o resultado final
     fn build_result(self) -> ResearchResult {
+        // Usar tokens do LLM client (acumulados durante execução)
+        let token_usage = TokenUsage {
+            prompt_tokens: self.llm_client.get_prompt_tokens(),
+            completion_tokens: self.llm_client.get_completion_tokens(),
+            total_tokens: self.llm_client.get_total_tokens(),
+        };
+
+        // Calcular tempos
+        let total_time_ms = self.start_time.elapsed().as_millis();
+        let search_time_ms: u128 = self.timing_stats.search_times.iter().sum();
+        let read_time_ms: u128 = self.timing_stats.read_times.iter().sum();
+        let llm_time_ms: u128 = self.timing_stats.llm_times.iter().sum();
+
         match self.state {
-            AgentState::Completed { answer, references, trivial } => {
-                ResearchResult {
-                    success: true,
-                    answer: Some(answer),
-                    references,
-                    trivial,
-                    token_usage: self.token_tracker.get_total_usage(),
-                    visited_urls: self.context.visited_urls,
-                    error: None,
-                }
-            }
-            AgentState::Failed { reason, partial_knowledge: _partial_knowledge } => {
-                ResearchResult {
-                    success: false,
-                    answer: None,
-                    references: vec![],
-                    trivial: false,
-                    token_usage: self.token_tracker.get_total_usage(),
-                    visited_urls: self.context.visited_urls,
-                    error: Some(reason),
-                }
-            }
+            AgentState::Completed {
+                answer,
+                references,
+                trivial,
+            } => ResearchResult {
+                success: true,
+                answer: Some(answer),
+                references,
+                trivial,
+                token_usage,
+                visited_urls: self.context.visited_urls,
+                error: None,
+                total_time_ms,
+                search_time_ms,
+                read_time_ms,
+                llm_time_ms,
+            },
+            AgentState::Failed {
+                reason,
+                partial_knowledge: _partial_knowledge,
+            } => ResearchResult {
+                success: false,
+                answer: None,
+                references: vec![],
+                trivial: false,
+                token_usage,
+                visited_urls: self.context.visited_urls,
+                error: Some(reason),
+                total_time_ms,
+                search_time_ms,
+                read_time_ms,
+                llm_time_ms,
+            },
             _ => unreachable!("build_result called in non-terminal state"),
         }
     }

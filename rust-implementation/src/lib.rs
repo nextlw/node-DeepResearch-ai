@@ -140,6 +140,14 @@ pub mod llm;
 /// - Reranking de resultados por relevância
 pub mod search;
 
+/// Comparação de readers: Jina vs Rust + OpenAI.
+///
+/// Módulo para benchmark e comparação de diferentes métodos
+/// de leitura e extração de conteúdo de URLs:
+/// - Jina Reader API
+/// - Rust local + OpenAI gpt-4o-mini
+pub mod reader_comparison;
+
 /// Utilitários diversos.
 ///
 /// Funções auxiliares usadas em todo o sistema:
@@ -149,11 +157,11 @@ pub mod search;
 pub mod utils;
 
 // Re-exports principais
-pub use types::*;
 pub use agent::DeepResearchAgent;
-pub use personas::PersonaOrchestrator;
 pub use evaluation::{EvaluationPipeline, EvaluationType};
 pub use performance::simd::cosine_similarity;
+pub use personas::PersonaOrchestrator;
+pub use types::*;
 
 /// Versão da biblioteca.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -166,16 +174,14 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// ```
 pub mod prelude {
     pub use crate::agent::{
-        DeepResearchAgent, AgentState, AgentAction, AgentContext, ActionPermissions,
-    };
-    pub use crate::personas::{
-        PersonaOrchestrator, CognitivePersona, QueryContext, WeightedQuery,
+        ActionPermissions, AgentAction, AgentContext, AgentState, DeepResearchAgent,
     };
     pub use crate::evaluation::{
-        EvaluationPipeline, EvaluationType, EvaluationResult, EvaluationContext,
+        EvaluationContext, EvaluationPipeline, EvaluationResult, EvaluationType,
     };
+    pub use crate::performance::simd::{cosine_similarity, dedup_queries, find_similar};
+    pub use crate::personas::{CognitivePersona, PersonaOrchestrator, QueryContext, WeightedQuery};
     pub use crate::types::*;
-    pub use crate::performance::simd::{cosine_similarity, find_similar, dedup_queries};
 }
 
 #[cfg(test)]

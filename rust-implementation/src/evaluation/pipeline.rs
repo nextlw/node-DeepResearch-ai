@@ -4,9 +4,7 @@
 
 use std::sync::Arc;
 
-use super::{
-    EvaluationType, EvaluationResult, EvaluationContext, EvalError, PromptPair,
-};
+use super::{EvalError, EvaluationContext, EvaluationResult, EvaluationType, PromptPair};
 use crate::llm::LlmClient;
 
 /// Resultado do pipeline de avaliação
@@ -103,7 +101,9 @@ impl EvaluationPipeline {
         let mut results = Vec::new();
 
         for &eval_type in required_types {
-            let result = self.evaluate_single(eval_type, question, answer, context).await;
+            let result = self
+                .evaluate_single(eval_type, question, answer, context)
+                .await;
 
             match result {
                 Ok(eval_result) => {
@@ -145,7 +145,8 @@ impl EvaluationPipeline {
         let _prompt = self.generate_prompt(eval_type, question, answer, context);
 
         // Simula chamada ao LLM (em produção, chamaria a API real)
-        let response = self.llm
+        let response = self
+            .llm
             .evaluate(question, answer, &eval_type.as_str())
             .await
             .map_err(|e| EvalError::LlmError(e.to_string()))?;
@@ -155,7 +156,7 @@ impl EvaluationPipeline {
             passed: response.passed,
             confidence: response.confidence,
             reasoning: response.reasoning,
-            suggestions: vec![],  // TODO: adicionar sugestões na EvaluationResponse
+            suggestions: vec![], // TODO: adicionar sugestões na EvaluationResponse
             duration: start.elapsed(),
         })
     }
@@ -192,17 +193,24 @@ Evaluate the answer and respond with:
 - confidence: float 0-1
 - reasoning: string explaining your evaluation
 - suggestions: array of improvement suggestions (if failed)
-"#.into(),
+"#
+            .into(),
             user: format!("Question: {}\n\nAnswer to evaluate:\n{}", question, answer),
         }
     }
 
-    fn freshness_prompt(&self, question: &str, answer: &str, context: &EvaluationContext) -> PromptPair {
+    fn freshness_prompt(
+        &self,
+        question: &str,
+        answer: &str,
+        context: &EvaluationContext,
+    ) -> PromptPair {
         let threshold = EvaluationType::Freshness.freshness_threshold(&context.topic);
         let days = threshold.as_secs() / 86400;
 
         PromptPair {
-            system: format!(r#"
+            system: format!(
+                r#"
 You are evaluating if an answer contains sufficiently RECENT information.
 Topic category: {:?}
 Required freshness: information should not be older than {} days
@@ -218,7 +226,9 @@ Respond with:
 - reasoning: string
 - suggestions: array (if failed)
 - detected_date: string (if found)
-"#, context.topic, days),
+"#,
+                context.topic, days
+            ),
             user: format!("Question: {}\n\nAnswer to evaluate:\n{}", question, answer),
         }
     }
@@ -237,7 +247,8 @@ Respond with:
 - suggestions: array (if failed)
 - item_count: integer
 - expected_count: integer (if specified in question)
-"#.into(),
+"#
+            .into(),
             user: format!("Question: {}\n\nAnswer to evaluate:\n{}", question, answer),
         }
     }
@@ -258,16 +269,29 @@ Respond with:
 - aspects_found: array of strings
 - aspects_covered: array of strings
 - coverage_ratio: float 0-1
-"#.into(),
+"#
+            .into(),
             user: format!("Question: {}\n\nAnswer to evaluate:\n{}", question, answer),
         }
     }
 
-    fn strict_prompt(&self, question: &str, answer: &str, context: &EvaluationContext) -> PromptPair {
-        let knowledge_summary = context.knowledge_items
+    fn strict_prompt(
+        &self,
+        question: &str,
+        answer: &str,
+        context: &EvaluationContext,
+    ) -> PromptPair {
+        let knowledge_summary = context
+            .knowledge_items
             .iter()
             .take(5)
-            .map(|k| format!("- {}: {}", k.question, k.answer.chars().take(100).collect::<String>()))
+            .map(|k| {
+                format!(
+                    "- {}: {}",
+                    k.question,
+                    k.answer.chars().take(100).collect::<String>()
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -292,7 +316,8 @@ Respond with:
 - reasoning: string (detailed explanation)
 - suggestions: array (specific improvements needed)
 - quality_score: float 0-1
-"#.into(),
+"#
+            .into(),
             user: format!(
                 "Question: {}\n\nAnswer to evaluate:\n{}\n\nKnowledge base used:\n{}",
                 question, answer, knowledge_summary
@@ -320,7 +345,8 @@ Respond with:
 - needs_plurality: boolean
 - needs_completeness: boolean
 - reasoning: string
-"#.into(),
+"#
+            .into(),
             user: format!("Question: {}", question),
         };
 
@@ -387,7 +413,8 @@ mod tests {
             ),
         ];
 
-        let pipeline_result = EvaluationPipelineResult::failure(results, EvaluationType::Definitive);
+        let pipeline_result =
+            EvaluationPipelineResult::failure(results, EvaluationType::Definitive);
         let suggestions = pipeline_result.all_suggestions();
 
         assert_eq!(suggestions.len(), 3);

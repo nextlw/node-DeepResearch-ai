@@ -197,7 +197,11 @@ impl DiaryEntry {
     /// Formata a entrada do diário como string legível
     pub fn format(&self) -> String {
         match self {
-            DiaryEntry::Search { queries, think, urls_found } => {
+            DiaryEntry::Search {
+                queries,
+                think,
+                urls_found,
+            } => {
                 format!(
                     "[SEARCH] {} queries -> {} URLs found\nThink: {}",
                     queries.len(),
@@ -206,24 +210,17 @@ impl DiaryEntry {
                 )
             }
             DiaryEntry::Read { urls, think } => {
-                format!(
-                    "[READ] {} URLs\nThink: {}",
-                    urls.len(),
-                    think
-                )
+                format!("[READ] {} URLs\nThink: {}", urls.len(), think)
             }
             DiaryEntry::Reflect { questions, think } => {
-                format!(
-                    "[REFLECT] {} questions\nThink: {}",
-                    questions.len(),
-                    think
-                )
+                format!("[REFLECT] {} questions\nThink: {}", questions.len(), think)
             }
-            DiaryEntry::FailedAnswer { eval_type, reason, .. } => {
+            DiaryEntry::FailedAnswer {
+                eval_type, reason, ..
+            } => {
                 format!(
                     "[FAILED] {:?} evaluation failed\nReason: {}",
-                    eval_type,
-                    reason
+                    eval_type, reason
                 )
             }
             DiaryEntry::Coding { think, .. } => {

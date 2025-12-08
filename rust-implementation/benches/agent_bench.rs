@@ -8,16 +8,12 @@
 //!
 //! Executar: `cargo bench --bench agent_bench`
 
-use criterion::{
-    black_box, criterion_group, criterion_main,
-    BenchmarkId, Criterion,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use deep_research::agent::{
-    AgentState, AgentAction, ActionPermissions,
-    DiaryEntry, AgentPrompt, TokenUsage,
-    AnswerResult, ResearchResult,
+    ActionPermissions, AgentAction, AgentPrompt, AgentState, AnswerResult, DiaryEntry,
+    ResearchResult, TokenUsage,
 };
-use deep_research::types::{SerpQuery, Reference, KnowledgeItem, KnowledgeType};
+use deep_research::types::{KnowledgeItem, KnowledgeType, Reference, SerpQuery};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // BENCHMARK: Estados do Agente
@@ -48,14 +44,12 @@ fn bench_agent_state(c: &mut Criterion) {
     });
 
     group.bench_function("create_completed", |bencher| {
-        let refs = vec![
-            Reference {
-                url: "https://rust-lang.org".to_string(),
-                title: "Rust Programming Language".to_string(),
-                exact_quote: Some("Memory safety without garbage collection".to_string()),
-                relevance_score: Some(0.95),
-            },
-        ];
+        let refs = vec![Reference {
+            url: "https://rust-lang.org".to_string(),
+            title: "Rust Programming Language".to_string(),
+            exact_quote: Some("Memory safety without garbage collection".to_string()),
+            relevance_score: Some(0.95),
+        }];
 
         bencher.iter(|| {
             black_box(AgentState::Completed {
@@ -67,14 +61,12 @@ fn bench_agent_state(c: &mut Criterion) {
     });
 
     group.bench_function("create_failed", |bencher| {
-        let knowledge = vec![
-            KnowledgeItem {
-                question: "What is Rust?".to_string(),
-                answer: "Partial answer found...".to_string(),
-                item_type: KnowledgeType::Qa,
-                references: vec![],
-            },
-        ];
+        let knowledge = vec![KnowledgeItem {
+            question: "What is Rust?".to_string(),
+            answer: "Partial answer found...".to_string(),
+            item_type: KnowledgeType::Qa,
+            references: vec![],
+        }];
 
         bencher.iter(|| {
             black_box(AgentState::Failed {
@@ -113,24 +105,15 @@ fn bench_state_checks(c: &mut Criterion) {
     };
 
     group.bench_function("is_terminal", |bencher| {
-        bencher.iter(|| {
-            black_box((
-                processing.is_terminal(),
-                completed.is_terminal(),
-            ))
-        })
+        bencher.iter(|| black_box((processing.is_terminal(), completed.is_terminal())))
     });
 
     group.bench_function("is_processing", |bencher| {
-        bencher.iter(|| {
-            black_box(processing.is_processing())
-        })
+        bencher.iter(|| black_box(processing.is_processing()))
     });
 
     group.bench_function("is_beast_mode", |bencher| {
-        bencher.iter(|| {
-            black_box(beast_mode.is_beast_mode())
-        })
+        bencher.iter(|| black_box(beast_mode.is_beast_mode()))
     });
 
     group.bench_function("can_transition_to", |bencher| {
@@ -145,9 +128,7 @@ fn bench_state_checks(c: &mut Criterion) {
     });
 
     group.bench_function("budget_used", |bencher| {
-        bencher.iter(|| {
-            black_box(processing.budget_used())
-        })
+        bencher.iter(|| black_box(processing.budget_used()))
     });
 
     group.finish();
@@ -164,8 +145,16 @@ fn bench_agent_actions(c: &mut Criterion) {
         bencher.iter(|| {
             black_box(AgentAction::Search {
                 queries: vec![
-                    SerpQuery { q: "rust programming".to_string(), tbs: None, location: None },
-                    SerpQuery { q: "rust vs go".to_string(), tbs: Some("qdr:m".to_string()), location: None },
+                    SerpQuery {
+                        q: "rust programming".to_string(),
+                        tbs: None,
+                        location: None,
+                    },
+                    SerpQuery {
+                        q: "rust vs go".to_string(),
+                        tbs: Some("qdr:m".to_string()),
+                        location: None,
+                    },
                 ],
                 think: "Need to find information about Rust programming language.".to_string(),
             })
@@ -235,7 +224,11 @@ fn bench_action_checks(c: &mut Criterion) {
     let mut group = c.benchmark_group("action_checks");
 
     let search = AgentAction::Search {
-        queries: vec![SerpQuery { q: "test".to_string(), tbs: None, location: None }],
+        queries: vec![SerpQuery {
+            q: "test".to_string(),
+            tbs: None,
+            location: None,
+        }],
         think: "Testing".to_string(),
     };
 
@@ -246,27 +239,19 @@ fn bench_action_checks(c: &mut Criterion) {
     };
 
     group.bench_function("name", |bencher| {
-        bencher.iter(|| {
-            black_box((search.name(), answer.name()))
-        })
+        bencher.iter(|| black_box((search.name(), answer.name())))
     });
 
     group.bench_function("think", |bencher| {
-        bencher.iter(|| {
-            black_box((search.think(), answer.think()))
-        })
+        bencher.iter(|| black_box((search.think(), answer.think())))
     });
 
     group.bench_function("is_search", |bencher| {
-        bencher.iter(|| {
-            black_box((search.is_search(), answer.is_search()))
-        })
+        bencher.iter(|| black_box((search.is_search(), answer.is_search())))
     });
 
     group.bench_function("is_answer", |bencher| {
-        bencher.iter(|| {
-            black_box((search.is_answer(), answer.is_answer()))
-        })
+        bencher.iter(|| black_box((search.is_answer(), answer.is_answer())))
     });
 
     group.finish();
@@ -280,15 +265,11 @@ fn bench_action_permissions(c: &mut Criterion) {
     let mut group = c.benchmark_group("action_permissions");
 
     group.bench_function("all_enabled", |bencher| {
-        bencher.iter(|| {
-            black_box(ActionPermissions::all_enabled())
-        })
+        bencher.iter(|| black_box(ActionPermissions::all_enabled()))
     });
 
     group.bench_function("beast_mode", |bencher| {
-        bencher.iter(|| {
-            black_box(ActionPermissions::beast_mode())
-        })
+        bencher.iter(|| black_box(ActionPermissions::beast_mode()))
     });
 
     group.bench_function("check_permissions", |bencher| {
@@ -317,9 +298,11 @@ fn bench_diary_entry(c: &mut Criterion) {
     group.bench_function("create_search_entry", |bencher| {
         bencher.iter(|| {
             black_box(DiaryEntry::Search {
-                queries: vec![
-                    SerpQuery { q: "rust".to_string(), tbs: None, location: None },
-                ],
+                queries: vec![SerpQuery {
+                    q: "rust".to_string(),
+                    tbs: None,
+                    location: None,
+                }],
                 think: "Searching for Rust information".to_string(),
                 urls_found: 15,
             })
@@ -338,7 +321,11 @@ fn bench_diary_entry(c: &mut Criterion) {
 
     // Format benchmarks
     let search_entry = DiaryEntry::Search {
-        queries: vec![SerpQuery { q: "test".to_string(), tbs: None, location: None }],
+        queries: vec![SerpQuery {
+            q: "test".to_string(),
+            tbs: None,
+            location: None,
+        }],
         think: "Testing".to_string(),
         urls_found: 10,
     };
@@ -349,15 +336,11 @@ fn bench_diary_entry(c: &mut Criterion) {
     };
 
     group.bench_function("format_search", |bencher| {
-        bencher.iter(|| {
-            black_box(search_entry.format())
-        })
+        bencher.iter(|| black_box(search_entry.format()))
     });
 
     group.bench_function("format_read", |bencher| {
-        bencher.iter(|| {
-            black_box(read_entry.format())
-        })
+        bencher.iter(|| black_box(read_entry.format()))
     });
 
     group.finish();
@@ -379,7 +362,7 @@ fn bench_agent_prompt(c: &mut Criterion) {
                         queries: vec![SerpQuery {
                             q: format!("query {}", i),
                             tbs: None,
-                            location: None
+                            location: None,
                         }],
                         think: format!("Search iteration {}", i),
                         urls_found: 10,
@@ -427,14 +410,12 @@ fn bench_results(c: &mut Criterion) {
         bencher.iter(|| {
             black_box(AnswerResult {
                 answer: "Comprehensive answer about Rust...".to_string(),
-                references: vec![
-                    Reference {
-                        url: "https://rust-lang.org".to_string(),
-                        title: "Rust".to_string(),
-                        exact_quote: None,
-                        relevance_score: Some(0.95),
-                    },
-                ],
+                references: vec![Reference {
+                    url: "https://rust-lang.org".to_string(),
+                    title: "Rust".to_string(),
+                    exact_quote: None,
+                    relevance_score: Some(0.95),
+                }],
                 trivial: false,
             })
         })
@@ -457,6 +438,10 @@ fn bench_results(c: &mut Criterion) {
                     "https://example.com/2".to_string(),
                 ],
                 error: None,
+                total_time_ms: 5000,
+                search_time_ms: 1500,
+                read_time_ms: 800,
+                llm_time_ms: 2700,
             })
         })
     });
@@ -475,6 +460,10 @@ fn bench_results(c: &mut Criterion) {
                 },
                 visited_urls: vec![],
                 error: Some("Budget exhausted".to_string()),
+                total_time_ms: 30000,
+                search_time_ms: 10000,
+                read_time_ms: 5000,
+                llm_time_ms: 15000,
             })
         })
     });

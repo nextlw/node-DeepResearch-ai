@@ -9,17 +9,62 @@
 //   deep-research-cli --budget 500000 "pergunta complexa"
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-use std::sync::Arc;
-use deep_research::prelude::*;
 use deep_research::llm::OpenAiClient;
+use deep_research::prelude::*;
+use deep_research::reader_comparison::ReaderComparison;
 use deep_research::search::JinaClient;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Tenta carregar o arquivo .env de múltiplos locais possíveis
+fn load_dotenv() {
+    // Lista de possíveis locais para o .env
+    let possible_paths = [
+        // Diretório atual
+        PathBuf::from(".env"),
+        // Diretório pai (se executando de rust-implementation)
+        PathBuf::from("../.env"),
+        // Caminho absoluto em tempo de compilação (fallback)
+        {
+            let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            p.pop();
+            p.push(".env");
+            p
+        },
+    ];
+
+    for path in &possible_paths {
+        if path.exists() {
+            match dotenvy::from_path(path) {
+                Ok(_) => {
+                    eprintln!(
+                        "✓ Carregado .env de: {:?}",
+                        path.canonicalize().unwrap_or(path.clone())
+                    );
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("⚠ Erro ao carregar {:?}: {}", path, e);
+                }
+            }
+        }
+    }
+
+    // Última tentativa: dotenvy padrão
+    if dotenvy::dotenv().is_ok() {
+        eprintln!("✓ Carregado .env do diretório atual");
+    } else {
+        eprintln!("⚠ Nenhum arquivo .env encontrado. Certifique-se de que OPENAI_API_KEY e JINA_API_KEY estão definidas.");
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Carregar .env PRIMEIRO, antes de qualquer coisa
+    load_dotenv();
+
     // Inicializar logging
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info")
-    ).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     // Parse argumentos
     let args: Vec<String> = std::env::args().collect();
@@ -31,10 +76,22 @@ async fn main() -> anyhow::Result<()> {
         eprintln!();
         eprintln!("Opções:");
         eprintln!("  --budget <tokens>  Budget máximo de tokens (padrão: 1000000)");
+        eprintln!(
+            "  --compare <urls>   Comparar Jina Reader vs Rust+OpenAI (URLs separadas por vírgula)"
+        );
         eprintln!();
-        eprintln!("Exemplo:");
+        eprintln!("Exemplos:");
         eprintln!("  {} \"Qual é a população do Brasil em 2024?\"", args[0]);
+        eprintln!(
+            "  {} --compare \"https://example.com,https://rust-lang.org\"",
+            args[0]
+        );
         std::process::exit(1);
+    }
+
+    // Modo comparação
+    if args.len() >= 3 && args[1] == "--compare" {
+        return run_comparison_mode(&args[2]).await;
     }
 
     // Parse budget se fornecido
@@ -57,10 +114,29 @@ async fn main() -> anyhow::Result<()> {
     println!();
 
     // Criar clientes reais com API keys de variáveis de ambiente
-    let openai_key = std::env::var("OPENAI_API_KEY")
-        .expect("OPENAI_API_KEY environment variable must be set");
-    let jina_key = std::env::var("JINA_API_KEY")
-        .expect("JINA_API_KEY environment variable must be set");
+    let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| {
+        eprintln!("✗ Erro: OPENAI_API_KEY não encontrada!");
+        eprintln!();
+        eprintln!("Certifique-se de que:");
+        eprintln!("  1. O arquivo .env existe no diretório raiz do projeto");
+        eprintln!("  2. O arquivo contém: OPENAI_API_KEY=sua-chave-aqui");
+        eprintln!();
+        eprintln!("Ou defina a variável de ambiente diretamente:");
+        eprintln!("  export OPENAI_API_KEY=sua-chave-aqui");
+        std::process::exit(1);
+    });
+
+    let jina_key = std::env::var("JINA_API_KEY").unwrap_or_else(|_| {
+        eprintln!("✗ Erro: JINA_API_KEY não encontrada!");
+        eprintln!();
+        eprintln!("Certifique-se de que:");
+        eprintln!("  1. O arquivo .env existe no diretório raiz do projeto");
+        eprintln!("  2. O arquivo contém: JINA_API_KEY=sua-chave-aqui");
+        eprintln!();
+        eprintln!("Ou defina a variável de ambiente diretamente:");
+        eprintln!("  export JINA_API_KEY=sua-chave-aqui");
+        std::process::exit(1);
+    });
 
     let llm_client: Arc<dyn deep_research::llm::LlmClient> =
         Arc::new(OpenAiClient::new(openai_key));
@@ -68,11 +144,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(JinaClient::new(jina_key));
 
     // Criar e executar agente
-    let agent = DeepResearchAgent::new(
-        llm_client,
-        search_client,
-        budget,
-    );
+    let agent = DeepResearchAgent::new(llm_client, search_client, budget);
 
     println!("Iniciando pesquisa...");
     println!();
@@ -121,14 +193,128 @@ async fn main() -> anyhow::Result<()> {
     println!(" ESTATÍSTICAS");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
-    println!("Tokens utilizados:");
-    println!("  Prompt:     {}", result.token_usage.prompt_tokens);
-    println!("  Completion: {}", result.token_usage.completion_tokens);
-    println!("  Total:      {}", result.token_usage.total_tokens);
+    println!("⏱️  Tempo total: {:.2}s", result.total_time_ms as f64 / 1000.0);
+    println!("    - Busca:   {}ms", result.search_time_ms);
+    println!("    - Leitura: {}ms", result.read_time_ms);
+    println!("    - LLM:     {}ms", result.llm_time_ms);
     println!();
-    println!("URLs visitadas: {}", result.visited_urls.len());
+    println!("🎫 Tokens utilizados:");
+    println!("    - Prompt:     {}", result.token_usage.prompt_tokens);
+    println!("    - Completion: {}", result.token_usage.completion_tokens);
+    println!("    - Total:      {}", result.token_usage.total_tokens);
+    println!();
+    println!("🔗 URLs visitadas: {}", result.visited_urls.len());
     for url in &result.visited_urls {
-        println!("  - {}", url);
+        println!("    - {}", url);
+    }
+    println!();
+
+    Ok(())
+}
+
+/// Executa o modo de comparação entre Jina Reader e Rust+OpenAI
+async fn run_comparison_mode(urls_arg: &str) -> anyhow::Result<()> {
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!(" COMPARAÇÃO: JINA READER vs RUST + OPENAI GPT-4O-MINI");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+
+    let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| {
+        eprintln!("✗ Erro: OPENAI_API_KEY não encontrada!");
+        std::process::exit(1);
+    });
+
+    let jina_key = std::env::var("JINA_API_KEY").unwrap_or_else(|_| {
+        eprintln!("✗ Erro: JINA_API_KEY não encontrada!");
+        std::process::exit(1);
+    });
+
+    // Parse URLs
+    let urls: Vec<&str> = urls_arg.split(',').map(|s| s.trim()).collect();
+    println!("URLs para comparar: {:?}", urls);
+    println!();
+
+    let comparison = ReaderComparison::new(jina_key, openai_key);
+    let results = comparison.compare_batch(&urls).await;
+
+    // Exibir resultados detalhados
+    println!();
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!(" RESULTADOS DETALHADOS");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+
+    for result in &results {
+        println!("URL: {}", result.url);
+        println!(
+            "  Vencedor: {} (diff: {}ms)",
+            result.faster,
+            result.time_diff_ms.abs()
+        );
+
+        if let Some(jina) = &result.jina {
+            println!("  📘 Jina Reader:");
+            println!("     - Tempo: {}ms", jina.time_ms);
+            println!(
+                "     - Título: {}",
+                jina.title.chars().take(50).collect::<String>()
+            );
+            println!("     - Palavras: {}", jina.word_count);
+            if let Some(err) = &jina.error {
+                println!("     - Erro: {}", err);
+            }
+        }
+
+        if let Some(openai) = &result.rust_openai {
+            println!("  🤖 Rust + OpenAI:");
+            println!("     - Tempo: {}ms", openai.time_ms);
+            println!(
+                "     - Título: {}",
+                openai.title.chars().take(50).collect::<String>()
+            );
+            println!("     - Palavras: {}", openai.word_count);
+            if let Some(err) = &openai.error {
+                println!("     - Erro: {}", err);
+            }
+        }
+        println!();
+    }
+
+    // Estatísticas finais
+    let jina_wins = results.iter().filter(|r| r.faster == "jina").count();
+    let openai_wins = results.iter().filter(|r| r.faster == "rust_openai").count();
+    let jina_total_ms: u128 = results
+        .iter()
+        .filter_map(|r| r.jina.as_ref())
+        .map(|j| j.time_ms)
+        .sum();
+    let openai_total_ms: u128 = results
+        .iter()
+        .filter_map(|r| r.rust_openai.as_ref())
+        .map(|o| o.time_ms)
+        .sum();
+
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!(" RESUMO FINAL");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+    println!("📘 Jina Reader:");
+    println!("   Vitórias: {}", jina_wins);
+    println!("   Tempo total: {}ms", jina_total_ms);
+    println!();
+    println!("🤖 Rust + OpenAI gpt-4o-mini:");
+    println!("   Vitórias: {}", openai_wins);
+    println!("   Tempo total: {}ms", openai_total_ms);
+    println!();
+
+    if jina_total_ms < openai_total_ms {
+        let speedup = (openai_total_ms as f64 / jina_total_ms as f64) * 100.0 - 100.0;
+        println!("🏆 Jina Reader foi {:.1}% mais rápido no geral!", speedup);
+    } else if openai_total_ms < jina_total_ms {
+        let speedup = (jina_total_ms as f64 / openai_total_ms as f64) * 100.0 - 100.0;
+        println!("🏆 Rust + OpenAI foi {:.1}% mais rápido no geral!", speedup);
+    } else {
+        println!("🏆 Empate!");
     }
     println!();
 

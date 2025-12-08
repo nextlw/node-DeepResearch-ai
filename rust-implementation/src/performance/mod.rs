@@ -29,4 +29,4 @@
 /// com fallback para implementação escalar.
 pub mod simd;
 
-pub use simd::{cosine_similarity, find_similar, dedup_queries};
+pub use simd::{cosine_similarity, dedup_queries, find_similar};

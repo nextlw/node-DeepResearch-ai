@@ -8,14 +8,11 @@
 //!
 //! Executar: `cargo bench --bench evaluation_bench`
 
-use criterion::{
-    black_box, criterion_group, criterion_main,
-    BenchmarkId, Criterion,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use deep_research::evaluation::{
-    EvaluationType, EvaluationConfig, EvaluationResult, EvaluationContext,
+    EvaluationConfig, EvaluationContext, EvaluationResult, EvaluationType,
 };
-use deep_research::types::{TopicCategory, KnowledgeItem, KnowledgeType, Reference};
+use deep_research::types::{KnowledgeItem, KnowledgeType, Reference, TopicCategory};
 use std::time::Duration;
 
 /// Cria contexto de avaliação para testes
@@ -59,21 +56,13 @@ fn bench_evaluation_config(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("default_config", name),
             eval_type,
-            |bencher, &eval_type| {
-                bencher.iter(|| {
-                    black_box(eval_type.default_config())
-                })
-            },
+            |bencher, &eval_type| bencher.iter(|| black_box(eval_type.default_config())),
         );
 
         group.bench_with_input(
             BenchmarkId::new("as_str", name),
             eval_type,
-            |bencher, &eval_type| {
-                bencher.iter(|| {
-                    black_box(eval_type.as_str())
-                })
-            },
+            |bencher, &eval_type| bencher.iter(|| black_box(eval_type.as_str())),
         );
     }
 
@@ -102,11 +91,7 @@ fn bench_freshness_threshold(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("threshold", name),
             topic,
-            |bencher, topic| {
-                bencher.iter(|| {
-                    black_box(eval_type.freshness_threshold(topic))
-                })
-            },
+            |bencher, topic| bencher.iter(|| black_box(eval_type.freshness_threshold(topic))),
         );
     }
 
@@ -146,15 +131,10 @@ fn bench_evaluation_result(c: &mut Criterion) {
     });
 
     group.bench_function("with_duration", |bencher| {
-        let result = EvaluationResult::success(
-            EvaluationType::Strict,
-            "Good answer.".to_string(),
-            0.9,
-        );
+        let result =
+            EvaluationResult::success(EvaluationType::Strict, "Good answer.".to_string(), 0.9);
 
-        bencher.iter(|| {
-            black_box(result.clone().with_duration(Duration::from_millis(150)))
-        })
+        bencher.iter(|| black_box(result.clone().with_duration(Duration::from_millis(150))))
     });
 
     group.finish();
@@ -173,9 +153,7 @@ fn bench_evaluation_context(c: &mut Criterion) {
             BenchmarkId::new("create", knowledge_count),
             knowledge_count,
             |bencher, &count| {
-                bencher.iter(|| {
-                    black_box(create_eval_context(TopicCategory::Technology, count))
-                })
+                bencher.iter(|| black_box(create_eval_context(TopicCategory::Technology, count)))
             },
         );
     }
@@ -202,10 +180,8 @@ fn bench_pipeline_simulation(c: &mut Criterion) {
 
     group.bench_function("get_all_configs", |bencher| {
         bencher.iter(|| {
-            let configs: Vec<EvaluationConfig> = eval_types
-                .iter()
-                .map(|t| t.default_config())
-                .collect();
+            let configs: Vec<EvaluationConfig> =
+                eval_types.iter().map(|t| t.default_config()).collect();
             black_box(configs)
         })
     });
@@ -219,7 +195,8 @@ fn bench_pipeline_simulation(c: &mut Criterion) {
                         t,
                         format!("{} evaluation passed", t.as_str()),
                         0.85 + (0.1 * rand::random::<f32>()),
-                    ).with_duration(Duration::from_millis(50))
+                    )
+                    .with_duration(Duration::from_millis(50))
                 })
                 .collect();
 
@@ -235,11 +212,7 @@ fn bench_pipeline_simulation(c: &mut Criterion) {
 
             for (i, &eval_type) in eval_types.iter().enumerate() {
                 let result = if i < 2 {
-                    EvaluationResult::success(
-                        eval_type,
-                        "Passed".to_string(),
-                        0.9,
-                    )
+                    EvaluationResult::success(eval_type, "Passed".to_string(), 0.9)
                 } else {
                     EvaluationResult::failure(
                         eval_type,
@@ -300,17 +273,19 @@ fn bench_result_aggregation(c: &mut Criterion) {
 
     group.bench_function("calculate_weighted_score", |bencher| {
         bencher.iter(|| {
-            let configs: Vec<EvaluationConfig> = eval_types
-                .iter()
-                .map(|t| t.default_config())
-                .collect();
+            let configs: Vec<EvaluationConfig> =
+                eval_types.iter().map(|t| t.default_config()).collect();
 
             let total_weight: f32 = configs.iter().map(|c| c.weight).sum();
             let weighted_score: f32 = results
                 .iter()
                 .zip(configs.iter())
                 .map(|(r, c)| {
-                    if r.passed { r.confidence * c.weight } else { 0.0 }
+                    if r.passed {
+                        r.confidence * c.weight
+                    } else {
+                        0.0
+                    }
                 })
                 .sum();
 
@@ -332,10 +307,7 @@ fn bench_result_aggregation(c: &mut Criterion) {
 
     group.bench_function("total_duration", |bencher| {
         bencher.iter(|| {
-            let total: Duration = results
-                .iter()
-                .map(|r| r.duration)
-                .sum();
+            let total: Duration = results.iter().map(|r| r.duration).sum();
 
             black_box(total)
         })

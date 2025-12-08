@@ -8,14 +8,10 @@
 //!
 //! Executar: `cargo bench --bench simd_bench`
 
-use criterion::{
-    black_box, criterion_group, criterion_main,
-    BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use deep_research::performance::simd::{
-    cosine_similarity, cosine_similarity_scalar,
-    dot_product, l2_norm, normalize,
-    find_similar, dedup_queries,
+    cosine_similarity, cosine_similarity_scalar, dedup_queries, dot_product, find_similar, l2_norm,
+    normalize,
 };
 use rand::Rng;
 
@@ -45,26 +41,14 @@ fn bench_cosine_similarity(c: &mut Criterion) {
         group.throughput(Throughput::Elements(*size as u64));
 
         // Versão scalar (baseline)
-        group.bench_with_input(
-            BenchmarkId::new("scalar", size),
-            size,
-            |bencher, _| {
-                bencher.iter(|| {
-                    black_box(cosine_similarity_scalar(&a, &b))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("scalar", size), size, |bencher, _| {
+            bencher.iter(|| black_box(cosine_similarity_scalar(&a, &b)))
+        });
 
         // Versão auto-detect (SIMD quando disponível)
-        group.bench_with_input(
-            BenchmarkId::new("auto", size),
-            size,
-            |bencher, _| {
-                bencher.iter(|| {
-                    black_box(cosine_similarity(&a, &b))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("auto", size), size, |bencher, _| {
+            bencher.iter(|| black_box(cosine_similarity(&a, &b)))
+        });
     }
 
     group.finish();
@@ -83,15 +67,9 @@ fn bench_dot_product(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(*size as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("optimized", size),
-            size,
-            |bencher, _| {
-                bencher.iter(|| {
-                    black_box(dot_product(&a, &b))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("optimized", size), size, |bencher, _| {
+            bencher.iter(|| black_box(dot_product(&a, &b)))
+        });
     }
 
     group.finish();
@@ -105,16 +83,10 @@ fn bench_normalize(c: &mut Criterion) {
     let mut group = c.benchmark_group("normalize");
 
     for size in [768, 1536].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("l2_norm", size),
-            size,
-            |bencher, &size| {
-                let v = generate_random_embedding(size);
-                bencher.iter(|| {
-                    black_box(l2_norm(&v))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("l2_norm", size), size, |bencher, &size| {
+            let v = generate_random_embedding(size);
+            bencher.iter(|| black_box(l2_norm(&v)))
+        });
 
         group.bench_with_input(
             BenchmarkId::new("normalize", size),
@@ -149,15 +121,9 @@ fn bench_find_similar(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(*count as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("parallel", count),
-            count,
-            |bencher, _| {
-                bencher.iter(|| {
-                    black_box(find_similar(&query, &existing, 0.8))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("parallel", count), count, |bencher, _| {
+            bencher.iter(|| black_box(find_similar(&query, &existing, 0.8)))
+        });
     }
 
     group.finish();
@@ -179,9 +145,7 @@ fn bench_dedup_queries(c: &mut Criterion) {
         let existing = generate_embeddings(500, dim);
 
         group.bench_function("10_new_500_existing", |bencher| {
-            bencher.iter(|| {
-                black_box(dedup_queries(&new, &existing, 0.86))
-            })
+            bencher.iter(|| black_box(dedup_queries(&new, &existing, 0.86)))
         });
     }
 
@@ -191,9 +155,7 @@ fn bench_dedup_queries(c: &mut Criterion) {
         let existing = generate_embeddings(100, dim);
 
         group.bench_function("50_new_100_existing", |bencher| {
-            bencher.iter(|| {
-                black_box(dedup_queries(&new, &existing, 0.86))
-            })
+            bencher.iter(|| black_box(dedup_queries(&new, &existing, 0.86)))
         });
     }
 
@@ -203,9 +165,7 @@ fn bench_dedup_queries(c: &mut Criterion) {
         let existing = generate_embeddings(1000, dim);
 
         group.bench_function("100_new_1000_existing", |bencher| {
-            bencher.iter(|| {
-                black_box(dedup_queries(&new, &existing, 0.86))
-            })
+            bencher.iter(|| black_box(dedup_queries(&new, &existing, 0.86)))
         });
     }
 
@@ -224,7 +184,12 @@ fn bench_accuracy_verification(c: &mut Criterion) {
 
     group.bench_function("verify_1000_pairs", |bencher| {
         let pairs: Vec<_> = (0..samples)
-            .map(|_| (generate_random_embedding(dim), generate_random_embedding(dim)))
+            .map(|_| {
+                (
+                    generate_random_embedding(dim),
+                    generate_random_embedding(dim),
+                )
+            })
             .collect();
 
         bencher.iter(|| {
@@ -266,10 +231,8 @@ fn bench_batch_throughput(c: &mut Criterion) {
             &batch_size,
             |bencher, _| {
                 bencher.iter(|| {
-                    let results: Vec<f32> = batch
-                        .iter()
-                        .map(|b| cosine_similarity(&query, b))
-                        .collect();
+                    let results: Vec<f32> =
+                        batch.iter().map(|b| cosine_similarity(&query, b)).collect();
                     black_box(results)
                 })
             },
