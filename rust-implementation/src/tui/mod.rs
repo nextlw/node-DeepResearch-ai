@@ -21,9 +21,11 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 
+mod agent_adapter;
 mod app;
 mod runner;
 mod ui;
 
+pub use agent_adapter::AgentTuiAdapter;
 pub use app::{App, AppEvent, LogEntry, LogLevel};
 pub use runner::{create_event_channel, run_tui, TuiLogger};

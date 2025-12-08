@@ -49,6 +49,7 @@ impl AgentTuiAdapter {
             AgentAction::Read { .. } => "📖 Lendo URLs",
             AgentAction::Answer { .. } => "✍️ Gerando resposta",
             AgentAction::Reflect { .. } => "🤔 Refletindo",
+            AgentAction::Coding { .. } => "💻 Codificando",
         };
         let _ = self.tx.send(AppEvent::SetAction(action_name.to_string()));
     }
@@ -61,7 +62,7 @@ impl AgentTuiAdapter {
     /// Atualiza o raciocínio atual
     pub fn set_think(&self, action: &AgentAction) {
         let think = action.think();
-        let _ = self.tx.send(AppEvent::SetThink(think));
+        let _ = self.tx.send(AppEvent::SetThink(think.to_string()));
     }
 
     /// Atualiza contagem de URLs
