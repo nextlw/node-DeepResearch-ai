@@ -15,7 +15,7 @@ pub use state::*;
 use crate::llm::LlmClient;
 use crate::search::SearchClient;
 use crate::types::*;
-use crate::utils::{ActionTimer, TimingStats, TokenTracker};
+use crate::utils::{ActionTimer, TimingStats, TokenTracker, TrackerStats};
 use std::sync::Arc;
 
 /// Máximo de queries por passo (reservado para expansão futura)
@@ -71,8 +71,12 @@ impl DeepResearchAgent {
         // Loop principal com pattern matching exaustivo
         loop {
             match &self.state {
-                AgentState::Processing { budget_used, .. } if *budget_used >= 0.85 => {
-                    // Transição para Beast Mode
+                AgentState::Processing { .. } if self.token_tracker.should_enter_beast_mode() => {
+                    // Transição para Beast Mode (>= 85% do budget de tokens)
+                    log::warn!(
+                        "⚠️ Budget de tokens em {:.1}% - entrando em Beast Mode",
+                        self.token_tracker.budget_used_percentage() * 100.0
+                    );
                     self.state = AgentState::BeastMode {
                         attempts: 0,
                         last_failure: "Budget exhausted".into(),
@@ -652,12 +656,16 @@ Available actions:
 
     /// Constrói o resultado final
     fn build_result(self) -> ResearchResult {
-        // Usar tokens do LLM client (acumulados durante execução)
-        let token_usage = TokenUsage {
-            prompt_tokens: self.llm_client.get_prompt_tokens(),
-            completion_tokens: self.llm_client.get_completion_tokens(),
-            total_tokens: self.llm_client.get_total_tokens(),
-        };
+        // Usar tokens do tracker (rastreados durante execução)
+        let token_usage = self.token_tracker.get_total_usage();
+        
+        log::info!(
+            "📊 Token usage final: {} prompt + {} completion = {} total ({:.1}% do budget)",
+            token_usage.prompt_tokens,
+            token_usage.completion_tokens,
+            token_usage.total_tokens,
+            self.token_tracker.budget_used_percentage() * 100.0
+        );
 
         // Calcular tempos
         let total_time_ms = self.start_time.elapsed().as_millis();
@@ -704,6 +712,18 @@ Available actions:
     }
 
     // Métodos auxiliares...
+
+    /// Atualiza o budget_used no estado baseado no token_tracker
+    fn update_budget_used(&mut self) {
+        if let AgentState::Processing { budget_used, .. } = &mut self.state {
+            *budget_used = self.token_tracker.budget_used_percentage();
+        }
+    }
+
+    /// Retorna estatísticas do token tracker
+    pub fn get_token_stats(&self) -> TrackerStats {
+        self.token_tracker.stats()
+    }
 
     async fn dedup_queries(&self, queries: Vec<SerpQuery>) -> Vec<SerpQuery> {
         // Implementação usando embeddings

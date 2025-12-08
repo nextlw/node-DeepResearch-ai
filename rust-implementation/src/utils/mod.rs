@@ -17,4 +17,4 @@ mod token_tracker;
 pub use file_reader::{FileContent, FileReader, FileReaderError, FileType};
 pub use text::*;
 pub use timing::{ActionTimer, TimingStats};
-pub use token_tracker::TokenTracker;
+pub use token_tracker::{TokenTracker, TrackerStats};
