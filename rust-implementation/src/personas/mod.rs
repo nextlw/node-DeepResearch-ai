@@ -3,20 +3,25 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 mod all_personas;
+mod metrics;
 mod orchestrator;
 mod traits;
 
 pub use all_personas::*;
+pub use metrics::*;
 pub use orchestrator::*;
 pub use traits::*;
 
 use chrono::Utc;
+use uuid::Uuid;
 
 use crate::types::{Language, SerpQuery, TopicCategory};
 
 /// Contexto compartilhado para expansão de queries
 #[derive(Debug, Clone)]
 pub struct QueryContext {
+    /// ID único desta execução (para rastreamento)
+    pub execution_id: Uuid,
     /// Query original do usuário
     pub original_query: String,
     /// Intenção do usuário (interpretada)
@@ -34,12 +39,31 @@ pub struct QueryContext {
 impl Default for QueryContext {
     fn default() -> Self {
         Self {
+            execution_id: Uuid::new_v4(),
             original_query: String::new(),
             user_intent: String::new(),
             soundbites: Vec::new(),
             current_date: Utc::now().date_naive(),
             detected_language: Language::English,
             detected_topic: TopicCategory::General,
+        }
+    }
+}
+
+impl QueryContext {
+    /// Cria um novo contexto com uma query específica
+    pub fn with_query(query: impl Into<String>) -> Self {
+        Self {
+            original_query: query.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Cria um novo contexto com ID de execução específico
+    pub fn with_execution_id(execution_id: Uuid) -> Self {
+        Self {
+            execution_id,
+            ..Default::default()
         }
     }
 }

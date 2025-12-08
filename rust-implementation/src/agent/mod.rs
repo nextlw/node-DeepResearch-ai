@@ -1101,6 +1101,7 @@ Available actions:
 
     fn build_query_context(&self) -> crate::personas::QueryContext {
         crate::personas::QueryContext {
+            execution_id: uuid::Uuid::new_v4(),
             original_query: self.context.original_question.clone(),
             user_intent: String::new(),
             soundbites: self.context.snippets.clone(),

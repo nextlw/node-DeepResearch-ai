@@ -2,7 +2,7 @@
 // TRAIT DE PERSONA COGNITIVA
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-use super::QueryContext;
+use super::{QueryContext, PersonaExecutionMetrics};
 use crate::types::SerpQuery;
 
 /// Trait que define o comportamento de uma persona cognitiva
@@ -83,6 +83,49 @@ pub trait CognitivePersona: Send + Sync {
     /// Descrição curta para uso em prompts
     fn prompt_description(&self) -> String {
         format!("{}: {}", self.name(), self.focus())
+    }
+
+    /// Gera uma query expandida COM métricas de execução
+    ///
+    /// Este método é o recomendado para uso em produção pois coleta
+    /// métricas de performance (tempo, tokens, memória).
+    ///
+    /// # Argumentos
+    ///
+    /// * `original` - Query original do usuário
+    /// * `context` - Contexto compartilhado com informações adicionais
+    ///
+    /// # Retorno
+    ///
+    /// Uma tupla `(SerpQuery, PersonaExecutionMetrics)` contendo a query
+    /// expandida e métricas de execução.
+    fn expand_query_with_metrics(
+        &self,
+        original: &str,
+        context: &QueryContext,
+    ) -> (SerpQuery, PersonaExecutionMetrics) {
+        let mut metrics = PersonaExecutionMetrics::new(
+            self.name(),
+            self.focus(),
+            self.weight(),
+            original.to_string(),
+        );
+
+        metrics.start();
+        let was_applicable = self.is_applicable(context);
+        let query = if was_applicable {
+            self.expand_query(original, context)
+        } else {
+            // Se não aplicável, retorna query original sem expansão
+            SerpQuery {
+                q: original.to_string(),
+                tbs: None,
+                location: None,
+            }
+        };
+        metrics.finish(query.clone(), was_applicable);
+
+        (query, metrics)
     }
 }
 
@@ -171,5 +214,24 @@ mod tests {
     fn test_persona_box() {
         let boxed = PersonaBox::new(TestPersona);
         assert_eq!(boxed.name(), "Test");
+    }
+
+    #[test]
+    fn test_expand_query_with_metrics() {
+        let persona = TestPersona;
+        let ctx = QueryContext::default();
+        
+        let (query, metrics) = persona.expand_query_with_metrics("rust programming", &ctx);
+        
+        // Verifica query
+        assert_eq!(query.q, "rust programming test");
+        
+        // Verifica métricas
+        assert_eq!(metrics.persona_name, "Test");
+        assert_eq!(metrics.persona_focus, "testing");
+        assert_eq!(metrics.weight, 1.5);
+        assert!(metrics.was_applicable);
+        assert!(metrics.duration().as_nanos() > 0);
+        assert!(metrics.input_tokens > 0);
     }
 }
