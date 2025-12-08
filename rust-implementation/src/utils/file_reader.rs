@@ -840,62 +840,120 @@ impl FileReader {
         }
     }
 
-    /// Converte HTML limpo para texto puro usando html2text
+    /// Converte HTML limpo para texto puro usando html2text com fallback para strip_html_tags
     fn html_to_plain_text(html: &str) -> String {
-        // html2text::from_read retorna String diretamente
+        // Tentar html2text primeiro
         let text = html2text::from_read(html.as_bytes(), 120);
-        Self::clean_extracted_text(&text)
+        let cleaned = Self::clean_extracted_text(&text);
+
+        // Se html2text retornar muito pouco, usar strip_html_tags como fallback
+        if cleaned.len() < 50 {
+            log::debug!(
+                "html2text retornou pouco texto ({} chars), usando strip_html_tags",
+                cleaned.len()
+            );
+            let stripped = Self::strip_html_tags(html);
+            if stripped.len() > cleaned.len() {
+                return stripped;
+            }
+        }
+
+        cleaned
     }
 
     /// Fallback: extrai texto de HTML quando Readability falha
     fn extract_html_text_fallback(html: &str) -> (String, Option<String>) {
-        // html2text retorna String diretamente
+        // Tentar html2text primeiro
         let text = html2text::from_read(html.as_bytes(), 120);
         let cleaned = Self::clean_extracted_text(&text);
+
+        // Se retornou muito pouco, tentar strip_html_tags
+        let final_text = if cleaned.len() < 50 {
+            let stripped = Self::strip_html_tags(html);
+            if stripped.len() > cleaned.len() {
+                stripped
+            } else {
+                cleaned
+            }
+        } else {
+            cleaned
+        };
 
         // Tentar extrair título manualmente
         let title = Self::extract_title_from_html(html);
 
-        (cleaned, title)
+        (final_text, title)
     }
 
     /// Remove tags HTML de forma básica (último fallback)
+    ///
+    /// Usa uma máquina de estados para:
+    /// - Remover todas as tags HTML
+    /// - Ignorar conteúdo de <script> e <style>
+    /// - Preservar apenas texto visível
     fn strip_html_tags(html: &str) -> String {
-        let mut result = String::new();
+        let mut result = String::with_capacity(html.len() / 2);
         let mut in_tag = false;
         let mut in_script = false;
         let mut in_style = false;
+        let mut tag_buffer = String::new();
 
         for c in html.chars() {
             match c {
                 '<' => {
                     in_tag = true;
-                    // Verificar se é script ou style
-                    let lower = html.to_lowercase();
-                    if lower.contains("<script") {
-                        in_script = true;
-                    }
-                    if lower.contains("<style") {
-                        in_style = true;
-                    }
+                    tag_buffer.clear();
                 }
                 '>' => {
                     in_tag = false;
-                    if html.to_lowercase().contains("</script>") {
+                    let tag_lower = tag_buffer.to_lowercase();
+
+                    // Detectar início/fim de script e style
+                    if tag_lower.starts_with("script") {
+                        in_script = true;
+                    } else if tag_lower.starts_with("/script") {
                         in_script = false;
-                    }
-                    if html.to_lowercase().contains("</style>") {
+                    } else if tag_lower.starts_with("style") {
+                        in_style = true;
+                    } else if tag_lower.starts_with("/style") {
                         in_style = false;
                     }
+                    // Adicionar espaço após certas tags de bloco
+                    else if tag_lower.starts_with("br")
+                        || tag_lower.starts_with("p")
+                        || tag_lower.starts_with("/p")
+                        || tag_lower.starts_with("div")
+                        || tag_lower.starts_with("/div")
+                        || tag_lower.starts_with("li")
+                        || tag_lower.starts_with("h")
+                    {
+                        result.push(' ');
+                    }
+
+                    tag_buffer.clear();
                 }
-                _ if !in_tag && !in_script && !in_style => {
+                _ if in_tag => {
+                    tag_buffer.push(c);
+                }
+                _ if !in_script && !in_style => {
+                    // Converter entidades HTML comuns
                     result.push(c);
                 }
                 _ => {}
             }
         }
 
-        Self::clean_extracted_text(&result)
+        // Decodificar entidades HTML básicas
+        let decoded = result
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&apos;", "'");
+
+        Self::clean_extracted_text(&decoded)
     }
 
     /// Extrai título de HTML manualmente
