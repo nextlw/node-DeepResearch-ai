@@ -120,6 +120,7 @@ impl ReaderComparison {
 
         #[derive(Deserialize)]
         struct JinaResponse {
+            #[allow(dead_code)]
             code: i32,
             data: Option<JinaData>,
         }

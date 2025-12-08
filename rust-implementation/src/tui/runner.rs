@@ -66,16 +66,16 @@ fn run_app(
                     match app.screen {
                         // Tela de pesquisa - scroll nos logs
                         AppScreen::Research => match key.code {
-                            KeyCode::Char('q') => {
-                                app.should_quit = true;
-                                return Ok(());
-                            }
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                app.scroll_up();
-                            }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                app.scroll_down();
-                            }
+                        KeyCode::Char('q') => {
+                            app.should_quit = true;
+                            return Ok(());
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.scroll_up();
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.scroll_down();
+                        }
                             KeyCode::PageUp => {
                                 for _ in 0..5 {
                                     app.scroll_up();
@@ -86,12 +86,12 @@ fn run_app(
                                     app.scroll_down();
                                 }
                             }
-                            KeyCode::Esc => {
-                                if app.is_complete {
-                                    return Ok(());
-                                }
+                        KeyCode::Esc => {
+                            if app.is_complete {
+                                return Ok(());
                             }
-                            _ => {}
+                        }
+                        _ => {}
                         },
 
                         // Tela de resultado - scroll na resposta

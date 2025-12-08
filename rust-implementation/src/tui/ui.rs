@@ -116,11 +116,11 @@ fn render_input_screen(frame: &mut Frame<'_>, app: &App) {
                 ]))
                 .style(Style::default().bg(Color::DarkGray))
             } else {
-                ListItem::new(Line::from(vec![
+            ListItem::new(Line::from(vec![
                     Span::styled("   ", Style::default()),
                     Span::styled(format!("{} ", display_num), Style::default().fg(Color::DarkGray)),
-                    Span::raw(truncated),
-                ]))
+                Span::raw(truncated),
+            ]))
             }
         })
         .collect();
@@ -504,16 +504,18 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),   // Header
-            Constraint::Min(8),      // Resposta
-            Constraint::Length(7),   // Referências
-            Constraint::Length(6),   // Stats finais (aumentado)
+            Constraint::Length(3),   // Header com UUID
+            Constraint::Min(6),      // Resposta
+            Constraint::Length(6),   // Referências
+            Constraint::Length(5),   // Personas
+            Constraint::Length(5),   // Stats finais
             Constraint::Length(2),   // Ajuda
         ])
         .margin(1)
         .split(frame.area());
 
-    // Header
+    // Header com UUID
+    let session_id_short = &app.session_id[..8];
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
             " ✅ PESQUISA CONCLUÍDA ",
@@ -521,6 +523,14 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
+        Span::raw("  │  "),
+        Span::styled("🆔 ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            session_id_short,
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw("  │  "),
+        Span::styled("💾 JSON salvo", Style::default().fg(Color::DarkGray)),
     ]))
     .alignment(ratatui::layout::Alignment::Center)
     .block(
@@ -539,7 +549,7 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     let scroll_pos = app.result_scroll.min(max_scroll);
 
     let scroll_info = if total_lines > visible_height {
-        format!(" [{}/{}] ↑↓ PgUp/PgDn ", scroll_pos + 1, max_scroll + 1)
+        format!(" [{}/{}] ", scroll_pos + 1, max_scroll + 1)
     } else {
         String::new()
     };
@@ -560,7 +570,7 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     let refs_items: Vec<ListItem<'_>> = app
         .references
         .iter()
-        .take(5)
+        .take(4)
         .enumerate()
         .map(|(i, r)| {
             let truncated = truncate(r, (chunks[2].width as usize).saturating_sub(8));
@@ -576,68 +586,93 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
 
     let refs = List::new(refs_items).block(
         Block::default()
-            .title(" 📚 Referências ")
+            .title(format!(" 📚 Referências ({}) ", app.references.len()))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Blue)),
     );
     frame.render_widget(refs, chunks[2]);
+
+    // Personas utilizadas
+    let persona_items: Vec<Span<'_>> = app
+        .personas
+        .iter()
+        .map(|(name, stats)| {
+            Span::styled(
+                format!(" {} (🔍{} 📖{} 🎫{}) ", name, stats.searches, stats.reads, stats.tokens),
+                Style::default().fg(Color::Cyan),
+            )
+        })
+        .collect();
+
+    let personas_line = if persona_items.is_empty() {
+        Line::from(vec![Span::styled(" Nenhuma persona utilizada", Style::default().fg(Color::DarkGray))])
+    } else {
+        Line::from(persona_items)
+    };
+
+    let personas = Paragraph::new(Text::from(vec![Line::from(""), personas_line]))
+        .block(
+            Block::default()
+                .title(format!(" 👥 Personas ({}) ", app.personas.len()))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+    frame.render_widget(personas, chunks[3]);
 
     // Stats finais (com tempos detalhados)
     let stats_text = Text::from(vec![
         // Linha 1: Tokens e URLs
         Line::from(vec![
             Span::styled(" 🎫 ", Style::default().fg(Color::Magenta)),
-            Span::raw(format!("{} tokens", app.tokens_used)),
-            Span::raw("  │  "),
-            Span::styled("🔗 ", Style::default().fg(Color::Cyan)),
-            Span::raw(format!("{} URLs visitadas", app.visited_count)),
-            Span::raw("  │  "),
-            Span::styled("📊 ", Style::default().fg(Color::Green)),
-            Span::raw(format!("{} steps", app.current_step)),
+        Span::raw(format!("{} tokens", app.tokens_used)),
+        Span::raw("  │  "),
+        Span::styled("🔗 ", Style::default().fg(Color::Cyan)),
+        Span::raw(format!("{} URLs", app.visited_count)),
+        Span::raw("  │  "),
+        Span::styled("📊 ", Style::default().fg(Color::Green)),
+        Span::raw(format!("{} steps", app.current_step)),
         ]),
         // Linha 2: Tempos detalhados
         Line::from(vec![
-            Span::styled(" ⏱️  Total: ", Style::default().fg(Color::Yellow)),
+            Span::styled(" ⏱️  ", Style::default().fg(Color::Yellow)),
             Span::styled(
-                format!("{:.2}s", app.total_time_ms as f64 / 1000.0),
+                format!("{:.1}s", app.total_time_ms as f64 / 1000.0),
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
             ),
+            Span::raw(" total  │  "),
+            Span::styled("🔍", Style::default().fg(Color::Blue)),
+            Span::raw(format!(" {:.1}s", app.search_time_ms as f64 / 1000.0)),
             Span::raw("  │  "),
-            Span::styled("🔍 Busca: ", Style::default().fg(Color::Blue)),
-            Span::raw(format!("{:.2}s", app.search_time_ms as f64 / 1000.0)),
+            Span::styled("📖", Style::default().fg(Color::Green)),
+            Span::raw(format!(" {:.1}s", app.read_time_ms as f64 / 1000.0)),
             Span::raw("  │  "),
-            Span::styled("📖 Leitura: ", Style::default().fg(Color::Green)),
-            Span::raw(format!("{:.2}s", app.read_time_ms as f64 / 1000.0)),
-            Span::raw("  │  "),
-            Span::styled("🤖 LLM: ", Style::default().fg(Color::Magenta)),
-            Span::raw(format!("{:.2}s", app.llm_time_ms as f64 / 1000.0)),
+            Span::styled("🤖", Style::default().fg(Color::Magenta)),
+            Span::raw(format!(" {:.1}s", app.llm_time_ms as f64 / 1000.0)),
         ]),
     ]);
 
     let stats = Paragraph::new(stats_text)
-        .alignment(ratatui::layout::Alignment::Center)
-        .block(
-            Block::default()
-                .title(" 📊 Estatísticas Finais ")
-                .borders(Borders::ALL)
+    .alignment(ratatui::layout::Alignment::Center)
+    .block(
+        Block::default()
+                .title(" 📊 Estatísticas ")
+            .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow)),
-        );
-    frame.render_widget(stats, chunks[3]);
+    );
+    frame.render_widget(stats, chunks[4]);
 
     // Ajuda
     let help = Paragraph::new(Line::from(vec![
-        Span::styled("↑↓", Style::default().fg(Color::Yellow)),
+        Span::styled("↑↓/PgUp/Dn", Style::default().fg(Color::Yellow)),
         Span::raw(" Scroll  "),
-        Span::styled("PgUp/PgDn", Style::default().fg(Color::Yellow)),
-        Span::raw(" Página  "),
         Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::raw(" Nova pesquisa  "),
-        Span::styled("q/Esc", Style::default().fg(Color::Red)),
+        Span::raw(" Nova  "),
+        Span::styled("q", Style::default().fg(Color::Red)),
         Span::raw(" Sair"),
     ]))
     .alignment(ratatui::layout::Alignment::Center)
     .style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(help, chunks[4]);
+    frame.render_widget(help, chunks[5]);
 }
 
 /// Trunca uma string para o tamanho máximo

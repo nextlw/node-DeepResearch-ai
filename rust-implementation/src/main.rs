@@ -134,8 +134,8 @@ async fn main() -> anyhow::Result<()> {
         if filtered_args.len() >= 3 && filtered_args[0] == "--budget" {
             let budget: u64 = filtered_args[1].parse().unwrap_or(1_000_000);
             let question = filtered_args[2..].join(" ");
-            (Some(budget), question)
-        } else {
+        (Some(budget), question)
+    } else {
             (None, filtered_args.join(" "))
         }
     };
@@ -605,6 +605,7 @@ fn spawn_research_task(
                         is_active,
                     })
                 }
+                AgentProgress::VisitedUrl(url) => AppEvent::AddVisitedUrl(url),
             };
             let _ = tx_clone.send(app_event);
         });

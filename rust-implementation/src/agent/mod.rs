@@ -54,6 +54,8 @@ pub enum AgentProgress {
         /// Se a persona está ativa no momento
         is_active: bool,
     },
+    /// URL visitada com sucesso
+    VisitedUrl(String),
 }
 
 /// Tipo do callback de progresso
@@ -542,8 +544,8 @@ Available actions:
             match result {
                 Ok(r) => {
                     total_urls += r.urls.len();
-                    self.context.add_urls(r.urls);
-                    self.context.add_snippets(r.snippets);
+                self.context.add_urls(r.urls);
+                self.context.add_snippets(r.snippets);
                     success_count += 1;
                 }
                 Err(_) => {
@@ -671,6 +673,7 @@ Available actions:
                             }],
                         });
                         self.context.visited_urls.push(url.clone());
+                        self.emit(AgentProgress::VisitedUrl(url.to_string()));
                         success_count += 1;
                     }
                     Err(e) => {
@@ -712,7 +715,7 @@ Available actions:
                                 (jina, "jina")
                             } else if let Some(rust) = result.rust_result.clone() {
                                 (rust, "rust_local")
-                            } else {
+            } else {
                                 log::warn!("❌ Ambos métodos falharam para {}", result.url);
                                 self.context.bad_urls.push(result.url.clone());
                                 error_count += 1;
@@ -765,6 +768,7 @@ Available actions:
                         }],
                     });
                     self.context.visited_urls.push(result.url.clone());
+                    self.emit(AgentProgress::VisitedUrl(result.url.to_string()));
                     success_count += 1;
                 }
 
@@ -785,24 +789,25 @@ Available actions:
 
                 for (result, url) in web_results.into_iter().zip(web_urls.iter()) {
                     match result {
-                        Ok(content) => {
-                            self.context.add_knowledge(KnowledgeItem {
-                                question: self.context.current_question().to_string(),
-                                answer: content.text,
-                                item_type: KnowledgeType::Url,
-                                references: vec![Reference {
-                                    url: url.to_string(),
-                                    title: content.title,
-                                    exact_quote: None,
-                                    relevance_score: None,
-                                }],
-                            });
-                            self.context.visited_urls.push(url.clone());
+                    Ok(content) => {
+                        self.context.add_knowledge(KnowledgeItem {
+                            question: self.context.current_question().to_string(),
+                            answer: content.text,
+                            item_type: KnowledgeType::Url,
+                            references: vec![Reference {
+                                url: url.to_string(),
+                                title: content.title,
+                                exact_quote: None,
+                                relevance_score: None,
+                            }],
+                        });
+                        self.context.visited_urls.push(url.clone());
+                            self.emit(AgentProgress::VisitedUrl(url.to_string()));
                             success_count += 1;
-                        }
-                        Err(e) => {
+                    }
+                    Err(e) => {
                             log::warn!("❌ Falha ao ler URL {}: {}", url, e);
-                            self.context.bad_urls.push(url.clone());
+                        self.context.bad_urls.push(url.clone());
                             error_count += 1;
                         }
                     }
