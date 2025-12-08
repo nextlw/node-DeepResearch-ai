@@ -164,12 +164,30 @@ pub mod utils;
 /// - Ver estatísticas de tokens e tempo
 pub mod tui;
 
-/// Configuração do runtime e WebReader.
+/// Configuração do runtime, WebReader, LLM e Agente.
 ///
 /// Fornece configuração dinâmica via variáveis de ambiente:
+///
+/// **Runtime Tokio:**
 /// - `TOKIO_THREADS`: Número de threads do runtime (padrão: dinâmico)
 /// - `TOKIO_MAX_THREADS`: Máximo de threads (padrão: 16)
+/// - `TOKIO_MAX_BLOCKING`: Máximo de blocking threads (padrão: 512)
 /// - `WEBREADER`: Preferência de leitor ("jina", "rust", "compare")
+///
+/// **LLM:**
+/// - `LLM_PROVIDER`: Provider ("openai", "anthropic", "local") - padrão: "openai"
+/// - `LLM_MODEL`: Modelo principal (padrão: "gpt-4.1-mini")
+/// - `LLM_EMBEDDING_MODEL`: Modelo de embeddings (padrão: "text-embedding-3-small")
+/// - `LLM_API_BASE_URL`: URL base customizada (opcional)
+/// - `LLM_TEMPERATURE`: Temperatura padrão (padrão: 0.7)
+///
+/// **Agente:**
+/// - `AGENT_MIN_STEPS`: Mínimo de steps antes de ANSWER (padrão: 1)
+/// - `AGENT_ALLOW_DIRECT_ANSWER`: Permite resposta direta (padrão: false)
+/// - `AGENT_TOKEN_BUDGET`: Budget de tokens (padrão: 1000000)
+/// - `AGENT_MAX_URLS_PER_STEP`: Máximo de URLs por step (padrão: 10)
+/// - `AGENT_MAX_QUERIES_PER_STEP`: Máximo de queries por step (padrão: 5)
+/// - `AGENT_MAX_FAILURES`: Máximo de falhas consecutivas (padrão: 3)
 ///
 /// Também inclui:
 /// - Panic hook isolado para evitar envenenamento de threads
@@ -180,7 +198,8 @@ pub mod config;
 pub use agent::DeepResearchAgent;
 pub use config::{
     create_tokio_runtime, install_panic_hook, load_runtime_config, RuntimeConfig,
-    WebReaderPreference,
+    WebReaderPreference, LlmProvider, LlmConfig, AgentConfig, EmbeddingProvider,
+    load_llm_config, load_agent_config,
 };
 pub use evaluation::{EvaluationPipeline, EvaluationType};
 pub use performance::simd::cosine_similarity;

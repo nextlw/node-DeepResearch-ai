@@ -347,6 +347,62 @@ impl SearchClient for MockSearchClient {
 /// Re-exportado de `crate::config::WebReaderPreference` para conveniência.
 pub use crate::config::WebReaderPreference;
 
+/// Verifica se uma URL requer Jina Reader (JS-heavy, paywalls, redes sociais)
+///
+/// Essas URLs não funcionam bem com leitura Rust local porque:
+/// - Requerem JavaScript para renderizar conteúdo
+/// - Têm paywalls que Jina consegue contornar
+/// - Bloqueiam crawlers tradicionais
+fn url_requires_jina(url: &str) -> bool {
+    const JINA_REQUIRED_DOMAINS: &[&str] = &[
+        // Redes sociais que requerem JS
+        "tiktok.com",
+        "instagram.com",
+        "twitter.com",
+        "x.com",
+        "facebook.com",
+        "threads.net",
+        "snapchat.com",
+        "pinterest.com",
+        // Plataformas de vídeo (requerem JS)
+        "youtube.com",
+        "youtu.be",
+        "vimeo.com",
+        "twitch.tv",
+        "dailymotion.com",
+        // Apps e SPAs
+        "linkedin.com",
+        "discord.com",
+        "slack.com",
+        "notion.so",
+        "figma.com",
+        "canva.com",
+        "medium.com",
+        // Paywalls que Jina consegue ler
+        "wsj.com",
+        "ft.com",
+        "nytimes.com",
+        "washingtonpost.com",
+        "bloomberg.com",
+        "economist.com",
+        "reuters.com",
+        // URL shorteners (precisam resolver redirect)
+        "t.co",
+        "bit.ly",
+        "goo.gl",
+        "tinyurl.com",
+        "ow.ly",
+        // Google Apps (requerem JS)
+        "maps.google.com",
+        "drive.google.com",
+        "docs.google.com",
+        "sheets.google.com",
+    ];
+
+    let url_lower = url.to_lowercase();
+    JINA_REQUIRED_DOMAINS.iter().any(|domain| url_lower.contains(domain))
+}
+
 /// Cliente para Jina AI APIs
 pub struct JinaClient {
     /// Chave da API Jina
@@ -411,17 +467,60 @@ impl JinaClient {
     /// );
     /// ```
     pub fn with_preference(api_key: String, webreader_preference: WebReaderPreference) -> Self {
-        log::info!("🔧 JinaClient: WebReader preference = {}", webreader_preference);
+        // Carregar modelo de embedding do .env
+        let llm_config = crate::config::load_llm_config();
+        let embeddings_model = llm_config.jina_embedding_model.clone();
+
+        log::info!(
+            "🔧 JinaClient: WebReader={} | Embedding={}",
+            webreader_preference,
+            embeddings_model
+        );
+
         Self {
             api_key,
             search_endpoint: "https://svip.jina.ai/".into(),
             reader_endpoint: "https://r.jina.ai".into(),
             rerank_endpoint: "https://api.jina.ai/v1/rerank".into(),
             embeddings_endpoint: "https://api.jina.ai/v1/embeddings".into(),
-            embeddings_model: "jina-embeddings-v4".into(),
+            embeddings_model,
             client: reqwest::Client::new(),
             webreader_preference,
         }
+    }
+
+    /// Cria um novo cliente Jina AI com configuração completa.
+    ///
+    /// # Argumentos
+    /// * `api_key` - Sua chave de API Jina AI
+    /// * `webreader_preference` - Preferência de método de leitura
+    /// * `embedding_model` - Modelo de embedding (ex: "jina-embeddings-v4")
+    pub fn with_config(
+        api_key: String,
+        webreader_preference: WebReaderPreference,
+        embedding_model: String,
+    ) -> Self {
+        log::info!(
+            "🔧 JinaClient: WebReader={} | Embedding={}",
+            webreader_preference,
+            embedding_model
+        );
+
+        Self {
+            api_key,
+            search_endpoint: "https://svip.jina.ai/".into(),
+            reader_endpoint: "https://r.jina.ai".into(),
+            rerank_endpoint: "https://api.jina.ai/v1/rerank".into(),
+            embeddings_endpoint: "https://api.jina.ai/v1/embeddings".into(),
+            embeddings_model: embedding_model,
+            client: reqwest::Client::new(),
+            webreader_preference,
+        }
+    }
+
+    /// Retorna o modelo de embedding configurado
+    pub fn embedding_model(&self) -> &str {
+        &self.embeddings_model
     }
 
     /// Retorna a preferência de WebReader configurada.
@@ -1162,7 +1261,7 @@ impl SearchClient for JinaClient {
             .collect();
 
         let request = JinaRerankRequest {
-            model: "jina-reranker-v1-base-en".into(),
+            model: "jina-reranker-v2-base-multilingual".into(), // Multilingual para PT-BR
             query: query.to_string(),
             documents,
             top_n: Some(urls.len()),
@@ -1346,6 +1445,50 @@ impl SearchClient for JinaClient {
         use std::sync::atomic::Ordering;
 
         const MIN_CONTENT_LENGTH: usize = 100;
+
+        // 🔥 FORÇAR JINA para URLs que precisam de JS/paywall bypass
+        if url_requires_jina(url) {
+            progress.store(10, Ordering::Relaxed);
+            log::info!("🔄 [JINA-FORCED] URL requer Jina: {}", url);
+
+            let jina_start = std::time::Instant::now();
+            progress.store(30, Ordering::Relaxed);
+
+            let jina_result = self.read_url(url).await;
+            let jina_time = jina_start.elapsed().as_millis();
+
+            progress.store(90, Ordering::Relaxed);
+
+            match jina_result {
+                Ok(mut content) => {
+                    if content.text.len() >= MIN_CONTENT_LENGTH {
+                        content.read_time_ms = Some(jina_time);
+                        progress.store(100, Ordering::Relaxed);
+                        log::info!(
+                            "✅ [JINA-FORCED] {} | {}ms | {} bytes",
+                            url, jina_time, content.text.len()
+                        );
+                        let bytes = content.text.len();
+                        return (Ok(content), "jina_forced", 1, bytes);
+                    } else {
+                        progress.store(100, Ordering::Relaxed);
+                        log::warn!(
+                            "⚠️ [JINA-FORCED] {} | conteúdo curto ({} bytes)",
+                            url, content.text.len()
+                        );
+                        // Ainda retorna o que conseguiu, pode ser útil
+                        content.read_time_ms = Some(jina_time);
+                        let bytes = content.text.len();
+                        return (Ok(content), "jina_forced_partial", 1, bytes);
+                    }
+                }
+                Err(e) => {
+                    progress.store(100, Ordering::Relaxed);
+                    log::error!("❌ [JINA-FORCED] {} | falha: {}", url, e);
+                    return (Err(e), "jina_forced_failed", 1, 0);
+                }
+            }
+        }
 
         match self.webreader_preference {
             // Usar apenas Jina - sem fallback

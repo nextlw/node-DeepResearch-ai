@@ -12,6 +12,7 @@
 
 use deep_research::config::{
     create_tokio_runtime, install_panic_hook, load_runtime_config, RuntimeConfig,
+    load_llm_config, load_agent_config, LlmConfig, AgentConfig,
 };
 use deep_research::llm::OpenAiClient;
 use deep_research::prelude::*;
@@ -23,10 +24,25 @@ use std::sync::{Arc, OnceLock};
 
 /// Configuração global do runtime (carregada uma vez, thread-safe)
 static RUNTIME_CONFIG: OnceLock<RuntimeConfig> = OnceLock::new();
+/// Configuração global do LLM
+static LLM_CONFIG: OnceLock<LlmConfig> = OnceLock::new();
+/// Configuração global do agente
+static AGENT_CONFIG: OnceLock<AgentConfig> = OnceLock::new();
 
 /// Obtém a configuração do runtime (thread-safe)
 fn get_runtime_config() -> &'static RuntimeConfig {
     RUNTIME_CONFIG.get().expect("Runtime config not initialized")
+}
+
+/// Obtém a configuração do LLM (thread-safe)
+fn get_llm_config() -> &'static LlmConfig {
+    LLM_CONFIG.get().expect("LLM config not initialized")
+}
+
+/// Obtém a configuração do agente (thread-safe)
+#[allow(dead_code)]
+fn get_agent_config() -> &'static AgentConfig {
+    AGENT_CONFIG.get().expect("Agent config not initialized")
 }
 
 /// Tenta carregar o arquivo .env de múltiplos locais possíveis
@@ -88,6 +104,12 @@ fn main() -> anyhow::Result<()> {
     // Carregar configuração do runtime a partir do .env
     let config = load_runtime_config();
 
+    // Carregar configuração do LLM a partir do .env
+    let llm_config = load_llm_config();
+
+    // Carregar configuração do agente a partir do .env
+    let agent_config = load_agent_config();
+
     // Log da configuração efetiva
     let effective_threads = config.effective_worker_threads();
     if !is_tui_mode {
@@ -97,10 +119,28 @@ fn main() -> anyhow::Result<()> {
             config.max_threads,
             config.webreader
         );
+        log::info!(
+            "🤖 LLM: {} | Model: {}",
+            llm_config.provider,
+            llm_config.model
+        );
+        log::info!(
+            "🔢 Embeddings: {} | Model: {}",
+            llm_config.embedding_provider,
+            llm_config.active_embedding_model()
+        );
+        log::info!(
+            "⚙️  Agent: min_steps={} | allow_direct={} | budget={}",
+            agent_config.min_steps_before_answer,
+            agent_config.allow_direct_answer,
+            agent_config.default_token_budget
+        );
     }
 
-    // Armazenar configuração globalmente para acesso em outras funções (thread-safe)
+    // Armazenar configurações globalmente para acesso em outras funções (thread-safe)
     RUNTIME_CONFIG.set(config.clone()).expect("Runtime config already initialized");
+    LLM_CONFIG.set(llm_config.clone()).expect("LLM config already initialized");
+    AGENT_CONFIG.set(agent_config.clone()).expect("Agent config already initialized");
 
     // Instalar panic hook customizado (isolamento de threads)
     install_panic_hook();
@@ -217,8 +257,9 @@ async fn async_main(args: Vec<String>, is_tui_mode: bool) -> anyhow::Result<()> 
         std::process::exit(1);
     });
 
+    // Criar cliente LLM com configuração do .env
     let llm_client: Arc<dyn deep_research::llm::LlmClient> =
-        Arc::new(OpenAiClient::new(openai_key));
+        Arc::new(OpenAiClient::from_config(openai_key, get_llm_config()));
 
     // Usar preferência de WebReader da configuração global
     let webreader_pref = get_runtime_config().webreader;
@@ -616,9 +657,13 @@ fn spawn_research_task(
     // Obter preferência de WebReader da configuração global
     let webreader_pref = get_runtime_config().webreader;
 
+    // Clonar configuração do LLM para mover para a task
+    let llm_config = get_llm_config().clone();
+
     tokio::spawn(async move {
+        // Criar cliente LLM com configuração do .env
         let llm_client: Arc<dyn deep_research::llm::LlmClient> =
-            Arc::new(OpenAiClient::new(openai_key));
+            Arc::new(OpenAiClient::from_config(openai_key, &llm_config));
         let search_client: Arc<dyn deep_research::search::SearchClient> =
             Arc::new(JinaClient::with_preference(jina_key, webreader_pref));
 
@@ -839,7 +884,14 @@ fn spawn_research_task(
                 let refs: Vec<String> = result
                     .references
                     .iter()
-                    .map(|r| format!("{} - {}", r.title, r.url))
+                    .map(|r| {
+                        // Incluir score de relevância se disponível (referência semântica)
+                        if let Some(score) = r.relevance_score {
+                            format!("[{:.0}%] {} - {}", score * 100.0, r.title, r.url)
+                        } else {
+                            format!("{} - {}", r.title, r.url)
+                        }
+                    })
                     .collect();
                 let _ = tx.send(AppEvent::SetAnswer(answer.clone()));
                 let _ = tx.send(AppEvent::SetReferences(refs));

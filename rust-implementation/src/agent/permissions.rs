@@ -37,15 +37,32 @@ impl ActionPermissions {
     /// - `search`: Desabilitada se já tem 50+ URLs
     /// - `read`: Desabilitada se não há URLs disponíveis
     /// - `reflect`: Desabilitada se já tem muitas perguntas de gap
-    /// - `answer`: Habilitada após step 1 ou se allow_direct_answer
+    /// - `answer`: Habilitada após min_steps (carregado do .env) ou se allow_direct_answer
     /// - `coding`: Sempre habilitada (por padrão)
     pub fn from_context(ctx: &AgentContext) -> Self {
+        // Carregar configuração do agente do .env
+        let agent_config = crate::config::load_agent_config();
+
         Self {
             search: ctx.collected_urls.len() < MAX_URLS_BEFORE_DISABLE_SEARCH,
             read: ctx.available_urls() > 0,
             reflect: ctx.gap_questions.len() <= MAX_REFLECT_PER_STEP,
-            answer: ctx.total_step > 0 || ctx.allow_direct_answer,
+            // ANSWER só é permitido após min_steps OU se allow_direct_answer está habilitado
+            answer: ctx.total_step >= agent_config.min_steps_before_answer
+                || (ctx.allow_direct_answer && agent_config.allow_direct_answer),
             coding: true, // Coding geralmente está habilitado
+        }
+    }
+
+    /// Cria permissões baseadas no contexto e configuração específica
+    pub fn from_context_with_config(ctx: &AgentContext, config: &crate::config::AgentConfig) -> Self {
+        Self {
+            search: ctx.collected_urls.len() < MAX_URLS_BEFORE_DISABLE_SEARCH,
+            read: ctx.available_urls() > 0,
+            reflect: ctx.gap_questions.len() <= MAX_REFLECT_PER_STEP,
+            answer: ctx.total_step >= config.min_steps_before_answer
+                || (ctx.allow_direct_answer && config.allow_direct_answer),
+            coding: true,
         }
     }
 

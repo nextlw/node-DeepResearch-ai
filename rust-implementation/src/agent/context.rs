@@ -78,7 +78,7 @@ impl AgentContext {
             snippets: Vec::new(),
             diary: Vec::new(),
             total_step: 0,
-            allow_direct_answer: true,
+            allow_direct_answer: false, // Forçar pesquisa antes de responder
             all_keywords: Vec::new(),
             executed_query_embeddings: Vec::new(),
             executed_queries: Vec::new(),
@@ -170,6 +170,10 @@ impl AgentContext {
     }
 
     /// Verifica se uma URL é ruim (falhou anteriormente)
+    ///
+    /// NOTA: URLs de redes sociais, paywalls e JS-heavy agora são
+    /// automaticamente roteadas para Jina Reader em vez de bloqueadas.
+    /// Veja `search::url_requires_jina()` para a lista de domínios.
     pub fn is_url_bad(&self, url: &str) -> bool {
         self.bad_urls.contains(&url.to_string())
     }
@@ -227,7 +231,7 @@ impl AgentContext {
         self.snippets.clear();
         self.diary.clear();
         self.total_step = 0;
-        self.allow_direct_answer = true;
+        self.allow_direct_answer = false; // Forçar pesquisa antes de responder
         self.all_keywords.clear();
         self.executed_query_embeddings.clear();
         self.executed_queries.clear();

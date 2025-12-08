@@ -315,6 +315,10 @@ pub struct OpenAiClient {
     model: String,
     /// Modelo para geração de embeddings
     embedding_model: String,
+    /// URL base da API
+    api_base_url: String,
+    /// Temperatura padrão
+    default_temperature: f32,
     /// Cliente HTTP
     client: reqwest::Client,
     /// Contador de tokens de prompt (thread-safe)
@@ -330,7 +334,7 @@ impl OpenAiClient {
     /// * `api_key` - Sua chave de API OpenAI (começa com "sk-")
     ///
     /// # Modelos Padrão
-    /// - Texto: `gpt-4o-mini`
+    /// - Texto: `gpt-4.1-mini`
     /// - Embedding: `text-embedding-3-small`
     ///
     /// # Exemplo
@@ -342,6 +346,32 @@ impl OpenAiClient {
             api_key,
             model: "gpt-4.1-mini".into(), // 1M tokens context window, mais capaz
             embedding_model: "text-embedding-3-small".into(),
+            api_base_url: "https://api.openai.com/v1".into(),
+            default_temperature: 0.7,
+            client: reqwest::Client::new(),
+            total_prompt_tokens: std::sync::atomic::AtomicU64::new(0),
+            total_completion_tokens: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Cria um novo cliente OpenAI a partir de LlmConfig.
+    ///
+    /// # Argumentos
+    /// * `api_key` - Sua chave de API OpenAI
+    /// * `config` - Configuração do LLM carregada do .env
+    ///
+    /// # Exemplo
+    /// ```rust,ignore
+    /// let config = load_llm_config();
+    /// let client = OpenAiClient::from_config("sk-key".into(), &config);
+    /// ```
+    pub fn from_config(api_key: String, config: &crate::config::LlmConfig) -> Self {
+        Self {
+            api_key,
+            model: config.model.clone(),
+            embedding_model: config.embedding_model.clone(),
+            api_base_url: config.api_url().to_string(),
+            default_temperature: config.default_temperature,
             client: reqwest::Client::new(),
             total_prompt_tokens: std::sync::atomic::AtomicU64::new(0),
             total_completion_tokens: std::sync::atomic::AtomicU64::new(0),
@@ -365,6 +395,16 @@ impl OpenAiClient {
         self.get_total_prompt_tokens() + self.get_total_completion_tokens()
     }
 
+    /// Retorna o modelo atual em uso
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Retorna o modelo de embedding atual em uso
+    pub fn embedding_model(&self) -> &str {
+        &self.embedding_model
+    }
+
     /// Altera o modelo de texto usado pelo cliente.
     ///
     /// # Argumentos
@@ -378,6 +418,29 @@ impl OpenAiClient {
     pub fn with_model(mut self, model: &str) -> Self {
         self.model = model.into();
         self
+    }
+
+    /// Altera o modelo de embedding usado pelo cliente.
+    pub fn with_embedding_model(mut self, model: &str) -> Self {
+        self.embedding_model = model.into();
+        self
+    }
+
+    /// Altera a URL base da API.
+    pub fn with_api_base_url(mut self, url: &str) -> Self {
+        self.api_base_url = url.into();
+        self
+    }
+
+    /// Altera a temperatura padrão.
+    pub fn with_temperature(mut self, temp: f32) -> Self {
+        self.default_temperature = temp;
+        self
+    }
+
+    /// Retorna a URL completa para um endpoint.
+    fn endpoint(&self, path: &str) -> String {
+        format!("{}/{}", self.api_base_url.trim_end_matches('/'), path.trim_start_matches('/'))
     }
 }
 
@@ -530,7 +593,7 @@ impl LlmClient for OpenAiClient {
 
         let response = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(self.endpoint("chat/completions"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&request)
@@ -567,11 +630,12 @@ impl LlmClient for OpenAiClient {
 
         // Log token usage
         log::info!(
-            "🎫 Tokens: prompt={}, completion={}, total={} | Acumulado: {}",
+            "🎫 Tokens: prompt={}, completion={}, total={} | Acumulado: {} | Model: {}",
             chat_response.usage.prompt_tokens,
             chat_response.usage.completion_tokens,
             chat_response.usage.total_tokens,
-            self.get_total_tokens()
+            self.get_total_tokens(),
+            self.model
         );
 
         let content = chat_response
@@ -675,7 +739,7 @@ impl LlmClient for OpenAiClient {
 
         let response = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(self.endpoint("chat/completions"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&request)
@@ -710,9 +774,10 @@ impl LlmClient for OpenAiClient {
             std::sync::atomic::Ordering::Relaxed,
         );
         log::debug!(
-            "🎫 generate_answer tokens: {} | Acumulado: {}",
+            "🎫 generate_answer tokens: {} | Acumulado: {} | Model: {}",
             chat_response.usage.total_tokens,
-            self.get_total_tokens()
+            self.get_total_tokens(),
+            self.model
         );
 
         let answer = chat_response
@@ -740,7 +805,7 @@ impl LlmClient for OpenAiClient {
 
         let response = self
             .client
-            .post("https://api.openai.com/v1/embeddings")
+            .post(self.endpoint("embeddings"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&request)
@@ -771,10 +836,10 @@ impl LlmClient for OpenAiClient {
             .ok_or_else(|| LlmError::ParseError("No embedding data in response".into()))?;
 
         log::debug!(
-            "🔢 OpenAI Embedding: dim={} | {} prompt tokens | {} total tokens",
+            "🔢 Embedding: dim={} | {} tokens | Model: {}",
             embedding_data.embedding.len(),
             embedding_response.usage.prompt_tokens,
-            embedding_response.usage.total_tokens
+            self.embedding_model
         );
 
         Ok(EmbeddingResult {
@@ -796,7 +861,7 @@ impl LlmClient for OpenAiClient {
 
         let response = self
             .client
-            .post("https://api.openai.com/v1/embeddings")
+            .post(self.endpoint("embeddings"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&request)
@@ -825,11 +890,11 @@ impl LlmClient for OpenAiClient {
         let tokens_per_embedding = embedding_response.usage.prompt_tokens / data_len.max(1);
 
         log::info!(
-            "🔢 OpenAI Embeddings: {} vetores | dim={} | {} prompt tokens | {} total tokens",
+            "🔢 Embeddings: {} vetores | dim={} | {} tokens | Model: {}",
             data_len,
             embedding_response.data.first().map(|d| d.embedding.len()).unwrap_or(0),
             embedding_response.usage.prompt_tokens,
-            embedding_response.usage.total_tokens
+            self.embedding_model
         );
 
         let results: Vec<EmbeddingResult> = embedding_response
@@ -875,7 +940,7 @@ impl LlmClient for OpenAiClient {
 
         let response = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(self.endpoint("chat/completions"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&request)
@@ -971,7 +1036,7 @@ Respond with JSON: {"needs_definitive": true/false, "needs_freshness": true/fals
 
         let response = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(self.endpoint("chat/completions"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&request)

@@ -512,11 +512,47 @@ impl DeepResearchAgent {
                     .filter(|u| !self.context.is_url_visited(u) && !self.context.is_url_bad(u))
                     .collect();
 
-                // Se LLM escolheu URLs já visitadas, pegar as próximas não visitadas automaticamente
+                // Se LLM escolheu URLs já visitadas, usar RERANK para selecionar as melhores
                 if new_urls.is_empty() {
-                    let msg = "LLM escolheu URLs já visitadas, selecionando próximas disponíveis...";
-                    log::warn!("⚠️ {}", msg);
-                    self.emit(AgentProgress::Warning(msg.into()));
+                    let msg = "Usando Jina Rerank para selecionar URLs mais relevantes...";
+                    log::info!("🔄 {}", msg);
+                    self.emit(AgentProgress::Info(msg.into()));
+
+                    // Pegar URLs disponíveis (não visitadas, não ruins)
+                    let available_snippets: Vec<_> = self
+                        .context
+                        .collected_urls
+                        .iter()
+                        .filter(|u| {
+                            !self.context.is_url_visited(&u.url) && !self.context.is_url_bad(&u.url)
+                        })
+                        .cloned()
+                        .collect();
+
+                    if !available_snippets.is_empty() {
+                        // Usar rerank para ordenar por relevância à pergunta
+                        let query = &self.context.original_question;
+                        let reranked = self.search_client.rerank(query, &available_snippets).await;
+
+                        // Pegar as top N URLs mais relevantes
+                        new_urls = reranked
+                            .iter()
+                            .take(MAX_URLS_PER_STEP)
+                            .map(|s| s.url.clone())
+                            .collect();
+
+                        if !new_urls.is_empty() {
+                            self.emit(AgentProgress::Success(format!(
+                                "✅ Rerank selecionou {} URLs (top score: {:.0}%)",
+                                new_urls.len(),
+                                reranked.first().map(|s| s.jina_rerank_boost * 100.0).unwrap_or(0.0)
+                            )));
+                        }
+                    }
+                }
+
+                // Fallback: pegar próximas disponíveis sem rerank
+                if new_urls.is_empty() {
                     new_urls = self
                         .context
                         .collected_urls
@@ -1967,8 +2003,22 @@ Available actions:
 
         // Tentar construir referências semânticas
         self.emit(AgentProgress::Info(
-            "🔗 Construindo referências semânticas...".into(),
+            "🔗 Sistema de Referências Semânticas iniciado...".into(),
         ));
+
+        // Contar conhecimento disponível para matching
+        let web_sources: Vec<_> = self
+            .context
+            .knowledge
+            .iter()
+            .filter(|k| k.item_type == KnowledgeType::Url && !k.answer.is_empty())
+            .collect();
+
+        self.emit(AgentProgress::Info(format!(
+            "📊 Analisando {} fontes web ({} chars de resposta)",
+            web_sources.len(),
+            answer.len()
+        )));
 
         let config = ReferenceBuilderConfig::new(
             80,   // min_chunk_length
@@ -1978,12 +2028,19 @@ Available actions:
 
         let builder = ReferenceBuilder::new(self.llm_client.clone(), config);
 
+        self.emit(AgentProgress::Info(
+            "🧠 Gerando embeddings e calculando similaridade coseno (SIMD)...".into(),
+        ));
+
         match builder
             .build_references(answer, &self.context.knowledge)
             .await
         {
             Ok(result) => {
                 if result.references.is_empty() {
+                    self.emit(AgentProgress::Warning(
+                        "⚠️ Nenhum match semântico encontrado (threshold: 0.65)".into(),
+                    ));
                     log::warn!("📚 Nenhuma referência semântica encontrada, usando fallback");
                     let refs = if llm_references.is_empty() {
                         self.extract_references_from_knowledge()
@@ -1992,8 +2049,22 @@ Available actions:
                     };
                     (answer.to_string(), refs)
                 } else {
+                    // Emitir detalhes de cada referência encontrada
+                    for (i, r) in result.references.iter().enumerate() {
+                        let score = r.relevance_score.unwrap_or(0.0);
+                        let quote_preview = r.exact_quote.as_ref()
+                            .map(|q| q.chars().take(50).collect::<String>())
+                            .unwrap_or_else(|| "...".to_string());
+                        self.emit(AgentProgress::Info(format!(
+                            "   [^{}] {:.0}% - \"{}...\"",
+                            i + 1,
+                            score * 100.0,
+                            quote_preview
+                        )));
+                    }
+
                     self.emit(AgentProgress::Success(format!(
-                        "✅ {} referências semânticas com marcadores inseridos",
+                        "✅ {} referências semânticas inseridas na resposta",
                         result.references.len()
                     )));
                     log::info!(
@@ -2006,7 +2077,7 @@ Available actions:
             Err(e) => {
                 log::error!("📚 Erro ao construir referências semânticas: {:?}", e);
                 self.emit(AgentProgress::Warning(format!(
-                    "⚠️ Fallback para referências simples: {}",
+                    "⚠️ Fallback Jaccard: {}",
                     e
                 )));
                 let refs = if llm_references.is_empty() {
