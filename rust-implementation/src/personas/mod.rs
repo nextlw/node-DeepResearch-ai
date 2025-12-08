@@ -97,7 +97,7 @@ pub fn extract_main_topic(query: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ");
-    
+
     // Se a filtragem removeu tudo, retorna a query original sem stop words iniciais
     if result.is_empty() {
         query.to_string()

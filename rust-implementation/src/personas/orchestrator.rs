@@ -293,7 +293,7 @@ mod tests {
         let par_sources: std::collections::HashSet<_> =
             parallel.iter().map(|wq| wq.source_persona).collect();
         assert_eq!(seq_sources, par_sources);
-        
+
         // Verifica que todas as queries não estão vazias
         for wq in &sequential {
             assert!(!wq.query.q.is_empty(), "Query não deve estar vazia");

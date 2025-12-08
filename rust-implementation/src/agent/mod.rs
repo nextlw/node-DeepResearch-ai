@@ -149,10 +149,10 @@ impl DeepResearchAgent {
 
         // 3. Gerar prompt e obter decisão do LLM (com timing)
         let prompt = self.build_prompt(&permissions, &current_question);
-        
+
         // Capturar tokens antes da chamada
         let tokens_before = self.llm_client.get_total_tokens();
-        
+
         let llm_timer = ActionTimer::start("LLM decide_action");
         let action = match self.llm_client.decide_action(&prompt, &permissions).await {
             Ok(a) => a,
@@ -160,7 +160,7 @@ impl DeepResearchAgent {
         };
         let llm_time = llm_timer.stop();
         self.timing_stats.add_llm_time(llm_time);
-        
+
         // Rastrear tokens usados nesta operação
         let tokens_after = self.llm_client.get_total_tokens();
         let prompt_used = self.llm_client.get_prompt_tokens().saturating_sub(tokens_before);
@@ -171,12 +171,12 @@ impl DeepResearchAgent {
             prompt_used,
             completion_used,
         );
-        
+
         // Atualizar budget_used no estado
         self.update_budget_used();
-        
-        log::debug!("⏱️  LLM decision: {}ms | 🎟️ Tokens: {} ({:.1}% budget)", 
-            llm_time, 
+
+        log::debug!("⏱️  LLM decision: {}ms | 🎟️ Tokens: {} ({:.1}% budget)",
+            llm_time,
             tokens_after - tokens_before,
             self.token_tracker.budget_used_percentage() * 100.0
         );
@@ -658,7 +658,7 @@ Available actions:
     fn build_result(self) -> ResearchResult {
         // Usar tokens do tracker (rastreados durante execução)
         let token_usage = self.token_tracker.get_total_usage();
-        
+
         log::info!(
             "📊 Token usage final: {} prompt + {} completion = {} total ({:.1}% do budget)",
             token_usage.prompt_tokens,
