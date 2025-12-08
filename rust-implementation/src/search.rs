@@ -342,6 +342,11 @@ impl SearchClient for MockSearchClient {
 // IMPLEMENTAÇÃO JINA (STUB)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+/// Preferência de método para leitura de URLs.
+///
+/// Re-exportado de `crate::config::WebReaderPreference` para conveniência.
+pub use crate::config::WebReaderPreference;
+
 /// Cliente para Jina AI APIs
 pub struct JinaClient {
     /// Chave da API Jina
@@ -358,6 +363,8 @@ pub struct JinaClient {
     embeddings_model: String,
     /// Cliente HTTP
     client: reqwest::Client,
+    /// Preferência de método de leitura de URLs
+    webreader_preference: WebReaderPreference,
 }
 
 /// Resultado de embedding Jina
@@ -387,6 +394,24 @@ impl JinaClient {
     /// let results = client.search(&query).await?;
     /// ```
     pub fn new(api_key: String) -> Self {
+        Self::with_preference(api_key, WebReaderPreference::default())
+    }
+
+    /// Cria um novo cliente Jina AI com preferência de WebReader.
+    ///
+    /// # Argumentos
+    /// * `api_key` - Sua chave de API Jina AI
+    /// * `webreader_preference` - Preferência de método de leitura (Jina, Rust, Compare)
+    ///
+    /// # Exemplo
+    /// ```rust,ignore
+    /// let client = JinaClient::with_preference(
+    ///     "jina_api_key".into(),
+    ///     WebReaderPreference::RustOnly,
+    /// );
+    /// ```
+    pub fn with_preference(api_key: String, webreader_preference: WebReaderPreference) -> Self {
+        log::info!("🔧 JinaClient: WebReader preference = {}", webreader_preference);
         Self {
             api_key,
             search_endpoint: "https://svip.jina.ai/".into(),
@@ -395,7 +420,13 @@ impl JinaClient {
             embeddings_endpoint: "https://api.jina.ai/v1/embeddings".into(),
             embeddings_model: "jina-embeddings-v4".into(),
             client: reqwest::Client::new(),
+            webreader_preference,
         }
+    }
+
+    /// Retorna a preferência de WebReader configurada.
+    pub fn webreader_preference(&self) -> WebReaderPreference {
+        self.webreader_preference
     }
 
     /// Gera embeddings para um único texto usando Jina Embeddings v3
@@ -618,7 +649,11 @@ impl JinaClient {
         })
     }
 
-    /// Lê uma URL usando Rust local primeiro, Jina como fallback (versão simples)
+    /// Lê uma URL usando o método configurado por WebReaderPreference.
+    ///
+    /// - `JinaOnly`: Usa apenas Jina Reader API
+    /// - `RustOnly`: Usa apenas Rust local + Readability
+    /// - `Compare`: Tenta Rust primeiro, Jina como fallback (padrão)
     ///
     /// Retorna (Result, método_usado, tentativas)
     async fn read_url_with_fallback(
@@ -629,62 +664,147 @@ impl JinaClient {
 
         const MIN_CONTENT_LENGTH: usize = 100;
 
-        // 1. Tentar Rust local primeiro
-        let reader = FileReader::new();
-        let rust_start = std::time::Instant::now();
-        let rust_result = reader.read_url(url).await;
-        let rust_time = rust_start.elapsed().as_millis();
+        match self.webreader_preference {
+            // Usar apenas Jina - sem fallback
+            WebReaderPreference::JinaOnly => {
+                log::debug!("📖 [JINA-ONLY] Lendo: {}", url);
+                let jina_start = std::time::Instant::now();
+                let jina_result = self.read_url(url).await;
+                let jina_time = jina_start.elapsed().as_millis();
 
-        if let Ok(file_content) = rust_result {
-            if file_content.text.len() >= MIN_CONTENT_LENGTH {
-                log::info!(
-                    "✅ [RUST+Readability] {} | {}ms | {} bytes | {} palavras",
-                    url, rust_time, file_content.text.len(), file_content.word_count
-                );
-                return (
-                    Ok(UrlContent {
-                        title: file_content.title.unwrap_or_default(),
-                        text: file_content.text,
-                        url: file_content.source,
-                        word_count: file_content.word_count,
-                        read_time_ms: Some(rust_time),
-                        source: Some("rust_local".to_string()),
-                    }),
-                    "rust_local",
-                    1,
-                );
-            }
-            log::warn!("⚠️ [RUST] {} conteúdo curto ({} bytes)", url, file_content.text.len());
-        } else if let Err(ref e) = rust_result {
-            log::warn!("⚠️ [RUST] {} falhou ({}ms): {}", url, rust_time, e);
-        }
-
-        // 2. Fallback para Jina
-        let jina_start = std::time::Instant::now();
-        let jina_result = self.read_url(url).await;
-        let jina_time = jina_start.elapsed().as_millis();
-
-        match jina_result {
-            Ok(mut content) => {
-                if content.text.len() >= MIN_CONTENT_LENGTH {
-                    content.read_time_ms = Some(rust_time + jina_time);
-                    log::info!("✅ [JINA-FALLBACK] {} | {}ms | {} bytes", url, jina_time, content.text.len());
-                    (Ok(content), "jina", 2)
-                } else {
-                    log::error!("❌ [AMBOS FALHARAM] {} | conteúdo insuficiente (<{} bytes)", url, MIN_CONTENT_LENGTH);
-                    (
-                        Err(SearchError::ExtractionError(format!(
-                            "Conteúdo muito curto em ambos os métodos para {}",
-                            url
-                        ))),
-                        "failed",
-                        2,
-                    )
+                match jina_result {
+                    Ok(mut content) => {
+                        if content.text.len() >= MIN_CONTENT_LENGTH {
+                            content.read_time_ms = Some(jina_time);
+                            log::info!("✅ [JINA-ONLY] {} | {}ms | {} bytes", url, jina_time, content.text.len());
+                            (Ok(content), "jina", 1)
+                        } else {
+                            log::error!("❌ [JINA-ONLY] {} | conteúdo insuficiente (<{} bytes)", url, MIN_CONTENT_LENGTH);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto para {}",
+                                    url
+                                ))),
+                                "failed",
+                                1,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("❌ [JINA-ONLY] {} | Erro: {}", url, e);
+                        (Err(e), "failed", 1)
+                    }
                 }
             }
-            Err(e) => {
-                log::error!("❌ [AMBOS FALHARAM] {} | Rust e Jina: {}", url, e);
-                (Err(e), "failed", 2)
+
+            // Usar apenas Rust local - sem fallback
+            WebReaderPreference::RustOnly => {
+                log::debug!("📖 [RUST-ONLY] Lendo: {}", url);
+                let reader = FileReader::new();
+                let rust_start = std::time::Instant::now();
+                let rust_result = reader.read_url(url).await;
+                let rust_time = rust_start.elapsed().as_millis();
+
+                match rust_result {
+                    Ok(file_content) => {
+                        if file_content.text.len() >= MIN_CONTENT_LENGTH {
+                            log::info!(
+                                "✅ [RUST-ONLY] {} | {}ms | {} bytes | {} palavras",
+                                url, rust_time, file_content.text.len(), file_content.word_count
+                            );
+                            (
+                                Ok(UrlContent {
+                                    title: file_content.title.unwrap_or_default(),
+                                    text: file_content.text,
+                                    url: file_content.source,
+                                    word_count: file_content.word_count,
+                                    read_time_ms: Some(rust_time),
+                                    source: Some("rust_local".to_string()),
+                                }),
+                                "rust_local",
+                                1,
+                            )
+                        } else {
+                            log::error!("❌ [RUST-ONLY] {} | conteúdo insuficiente (<{} bytes)", url, MIN_CONTENT_LENGTH);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto para {}",
+                                    url
+                                ))),
+                                "failed",
+                                1,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("❌ [RUST-ONLY] {} | Erro: {}", url, e);
+                        (Err(SearchError::FetchError(e.to_string())), "failed", 1)
+                    }
+                }
+            }
+
+            // Comportamento padrão: Rust primeiro, Jina como fallback
+            WebReaderPreference::Compare => {
+                log::debug!("📖 [COMPARE] Lendo (Rust→Jina): {}", url);
+
+                // 1. Tentar Rust local primeiro
+                let reader = FileReader::new();
+                let rust_start = std::time::Instant::now();
+                let rust_result = reader.read_url(url).await;
+                let rust_time = rust_start.elapsed().as_millis();
+
+                if let Ok(file_content) = rust_result {
+                    if file_content.text.len() >= MIN_CONTENT_LENGTH {
+                        log::info!(
+                            "✅ [RUST+Readability] {} | {}ms | {} bytes | {} palavras",
+                            url, rust_time, file_content.text.len(), file_content.word_count
+                        );
+                        return (
+                            Ok(UrlContent {
+                                title: file_content.title.unwrap_or_default(),
+                                text: file_content.text,
+                                url: file_content.source,
+                                word_count: file_content.word_count,
+                                read_time_ms: Some(rust_time),
+                                source: Some("rust_local".to_string()),
+                            }),
+                            "rust_local",
+                            1,
+                        );
+                    }
+                    log::warn!("⚠️ [RUST] {} conteúdo curto ({} bytes)", url, file_content.text.len());
+                } else if let Err(ref e) = rust_result {
+                    log::warn!("⚠️ [RUST] {} falhou ({}ms): {}", url, rust_time, e);
+                }
+
+                // 2. Fallback para Jina
+                let jina_start = std::time::Instant::now();
+                let jina_result = self.read_url(url).await;
+                let jina_time = jina_start.elapsed().as_millis();
+
+                match jina_result {
+                    Ok(mut content) => {
+                        if content.text.len() >= MIN_CONTENT_LENGTH {
+                            content.read_time_ms = Some(rust_time + jina_time);
+                            log::info!("✅ [JINA-FALLBACK] {} | {}ms | {} bytes", url, jina_time, content.text.len());
+                            (Ok(content), "jina", 2)
+                        } else {
+                            log::error!("❌ [AMBOS FALHARAM] {} | conteúdo insuficiente (<{} bytes)", url, MIN_CONTENT_LENGTH);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto em ambos os métodos para {}",
+                                    url
+                                ))),
+                                "failed",
+                                2,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("❌ [AMBOS FALHARAM] {} | Rust e Jina: {}", url, e);
+                        (Err(e), "failed", 2)
+                    }
+                }
             }
         }
     }
@@ -1227,81 +1347,185 @@ impl SearchClient for JinaClient {
 
         const MIN_CONTENT_LENGTH: usize = 100;
 
-        // Fase 1: Rust local (0-50%)
-        progress.store(5, Ordering::Relaxed);
+        match self.webreader_preference {
+            // Usar apenas Jina - sem fallback
+            WebReaderPreference::JinaOnly => {
+                progress.store(10, Ordering::Relaxed);
+                log::debug!("📖 [JINA-ONLY] Lendo com progresso: {}", url);
 
-        let reader = FileReader::new();
-        let rust_start = std::time::Instant::now();
+                let jina_start = std::time::Instant::now();
+                progress.store(30, Ordering::Relaxed);
 
-        progress.store(15, Ordering::Relaxed);
-        let rust_result = reader.read_url(url).await;
-        let rust_time = rust_start.elapsed().as_millis();
+                let jina_result = self.read_url(url).await;
+                let jina_time = jina_start.elapsed().as_millis();
 
-        progress.store(45, Ordering::Relaxed);
+                progress.store(90, Ordering::Relaxed);
 
-        if let Ok(file_content) = rust_result {
-            if file_content.text.len() >= MIN_CONTENT_LENGTH {
-                progress.store(100, Ordering::Relaxed);
-                log::info!(
-                    "✅ [RUST+Readability] {} | {}ms | {} bytes",
-                    url, rust_time, file_content.text.len()
-                );
-                let bytes = file_content.text.len();
-                return (
-                    Ok(UrlContent {
-                        title: file_content.title.unwrap_or_default(),
-                        text: file_content.text,
-                        url: file_content.source,
-                        word_count: file_content.word_count,
-                        read_time_ms: Some(rust_time),
-                        source: Some("rust_local".to_string()),
-                    }),
-                    "rust_local",
-                    1,
-                    bytes,
-                );
-            }
-            log::warn!("⚠️ [RUST] {} conteúdo curto ({} bytes)", url, file_content.text.len());
-        } else if let Err(ref e) = rust_result {
-            log::warn!("⚠️ [RUST] {} falhou: {}", url, e);
-        }
-
-        // Fase 2: Jina fallback (50-100%)
-        progress.store(55, Ordering::Relaxed);
-
-        let jina_start = std::time::Instant::now();
-        progress.store(65, Ordering::Relaxed);
-
-        let jina_result = self.read_url(url).await;
-        let jina_time = jina_start.elapsed().as_millis();
-
-        progress.store(90, Ordering::Relaxed);
-
-        match jina_result {
-            Ok(mut content) => {
-                if content.text.len() >= MIN_CONTENT_LENGTH {
-                    content.read_time_ms = Some(rust_time + jina_time);
-                    progress.store(100, Ordering::Relaxed);
-                    log::info!("✅ [JINA-FALLBACK] {} | {}ms | {} bytes", url, jina_time, content.text.len());
-                    let bytes = content.text.len();
-                    (Ok(content), "jina", 2, bytes)
-                } else {
-                    progress.store(100, Ordering::Relaxed);
-                    log::error!("❌ [AMBOS] {} | conteúdo insuficiente", url);
-                    (
-                        Err(SearchError::ExtractionError(format!(
-                            "Conteúdo muito curto em ambos os métodos para {}", url
-                        ))),
-                        "failed",
-                        2,
-                        0,
-                    )
+                match jina_result {
+                    Ok(mut content) => {
+                        if content.text.len() >= MIN_CONTENT_LENGTH {
+                            content.read_time_ms = Some(jina_time);
+                            progress.store(100, Ordering::Relaxed);
+                            log::info!("✅ [JINA-ONLY] {} | {}ms | {} bytes", url, jina_time, content.text.len());
+                            let bytes = content.text.len();
+                            (Ok(content), "jina", 1, bytes)
+                        } else {
+                            progress.store(100, Ordering::Relaxed);
+                            log::error!("❌ [JINA-ONLY] {} | conteúdo insuficiente", url);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto para {}", url
+                                ))),
+                                "failed",
+                                1,
+                                0,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        progress.store(100, Ordering::Relaxed);
+                        log::error!("❌ [JINA-ONLY] {} | falha: {}", url, e);
+                        (Err(e), "failed", 1, 0)
+                    }
                 }
             }
-            Err(e) => {
-                progress.store(100, Ordering::Relaxed);
-                log::error!("❌ [AMBOS] {} | falha: {}", url, e);
-                (Err(e), "failed", 2, 0)
+
+            // Usar apenas Rust local - sem fallback
+            WebReaderPreference::RustOnly => {
+                progress.store(10, Ordering::Relaxed);
+                log::debug!("📖 [RUST-ONLY] Lendo com progresso: {}", url);
+
+                let reader = FileReader::new();
+                let rust_start = std::time::Instant::now();
+                progress.store(30, Ordering::Relaxed);
+
+                let rust_result = reader.read_url(url).await;
+                let rust_time = rust_start.elapsed().as_millis();
+
+                progress.store(90, Ordering::Relaxed);
+
+                match rust_result {
+                    Ok(file_content) => {
+                        if file_content.text.len() >= MIN_CONTENT_LENGTH {
+                            progress.store(100, Ordering::Relaxed);
+                            log::info!(
+                                "✅ [RUST-ONLY] {} | {}ms | {} bytes",
+                                url, rust_time, file_content.text.len()
+                            );
+                            let bytes = file_content.text.len();
+                            (
+                                Ok(UrlContent {
+                                    title: file_content.title.unwrap_or_default(),
+                                    text: file_content.text,
+                                    url: file_content.source,
+                                    word_count: file_content.word_count,
+                                    read_time_ms: Some(rust_time),
+                                    source: Some("rust_local".to_string()),
+                                }),
+                                "rust_local",
+                                1,
+                                bytes,
+                            )
+                        } else {
+                            progress.store(100, Ordering::Relaxed);
+                            log::error!("❌ [RUST-ONLY] {} | conteúdo insuficiente", url);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto para {}", url
+                                ))),
+                                "failed",
+                                1,
+                                0,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        progress.store(100, Ordering::Relaxed);
+                        log::error!("❌ [RUST-ONLY] {} | falha: {}", url, e);
+                        (Err(SearchError::FetchError(e.to_string())), "failed", 1, 0)
+                    }
+                }
+            }
+
+            // Comportamento padrão: Rust primeiro, Jina como fallback
+            WebReaderPreference::Compare => {
+                // Fase 1: Rust local (0-50%)
+                progress.store(5, Ordering::Relaxed);
+
+                let reader = FileReader::new();
+                let rust_start = std::time::Instant::now();
+
+                progress.store(15, Ordering::Relaxed);
+                let rust_result = reader.read_url(url).await;
+                let rust_time = rust_start.elapsed().as_millis();
+
+                progress.store(45, Ordering::Relaxed);
+
+                if let Ok(file_content) = rust_result {
+                    if file_content.text.len() >= MIN_CONTENT_LENGTH {
+                        progress.store(100, Ordering::Relaxed);
+                        log::info!(
+                            "✅ [RUST+Readability] {} | {}ms | {} bytes",
+                            url, rust_time, file_content.text.len()
+                        );
+                        let bytes = file_content.text.len();
+                        return (
+                            Ok(UrlContent {
+                                title: file_content.title.unwrap_or_default(),
+                                text: file_content.text,
+                                url: file_content.source,
+                                word_count: file_content.word_count,
+                                read_time_ms: Some(rust_time),
+                                source: Some("rust_local".to_string()),
+                            }),
+                            "rust_local",
+                            1,
+                            bytes,
+                        );
+                    }
+                    log::warn!("⚠️ [RUST] {} conteúdo curto ({} bytes)", url, file_content.text.len());
+                } else if let Err(ref e) = rust_result {
+                    log::warn!("⚠️ [RUST] {} falhou: {}", url, e);
+                }
+
+                // Fase 2: Jina fallback (50-100%)
+                progress.store(55, Ordering::Relaxed);
+
+                let jina_start = std::time::Instant::now();
+                progress.store(65, Ordering::Relaxed);
+
+                let jina_result = self.read_url(url).await;
+                let jina_time = jina_start.elapsed().as_millis();
+
+                progress.store(90, Ordering::Relaxed);
+
+                match jina_result {
+                    Ok(mut content) => {
+                        if content.text.len() >= MIN_CONTENT_LENGTH {
+                            content.read_time_ms = Some(rust_time + jina_time);
+                            progress.store(100, Ordering::Relaxed);
+                            log::info!("✅ [JINA-FALLBACK] {} | {}ms | {} bytes", url, jina_time, content.text.len());
+                            let bytes = content.text.len();
+                            (Ok(content), "jina", 2, bytes)
+                        } else {
+                            progress.store(100, Ordering::Relaxed);
+                            log::error!("❌ [AMBOS] {} | conteúdo insuficiente", url);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto em ambos os métodos para {}", url
+                                ))),
+                                "failed",
+                                2,
+                                0,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        progress.store(100, Ordering::Relaxed);
+                        log::error!("❌ [AMBOS] {} | falha: {}", url, e);
+                        (Err(e), "failed", 2, 0)
+                    }
+                }
             }
         }
     }

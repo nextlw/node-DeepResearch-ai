@@ -10,13 +10,24 @@
 //   deep-research-cli --budget 500000 "pergunta complexa"
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+use deep_research::config::{
+    create_tokio_runtime, install_panic_hook, load_runtime_config, RuntimeConfig,
+};
 use deep_research::llm::OpenAiClient;
 use deep_research::prelude::*;
 use deep_research::reader_comparison::ReaderComparison;
 use deep_research::search::JinaClient;
 use deep_research::tui::create_event_channel;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// Configuração global do runtime (carregada uma vez, thread-safe)
+static RUNTIME_CONFIG: OnceLock<RuntimeConfig> = OnceLock::new();
+
+/// Obtém a configuração do runtime (thread-safe)
+fn get_runtime_config() -> &'static RuntimeConfig {
+    RUNTIME_CONFIG.get().expect("Runtime config not initialized")
+}
 
 /// Tenta carregar o arquivo .env de múltiplos locais possíveis
 fn load_dotenv() {
@@ -60,8 +71,7 @@ fn load_dotenv() {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     // Carregar .env PRIMEIRO, antes de qualquer coisa
     load_dotenv();
 
@@ -74,6 +84,35 @@ async fn main() -> anyhow::Result<()> {
     if !is_tui_mode {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     }
+
+    // Carregar configuração do runtime a partir do .env
+    let config = load_runtime_config();
+
+    // Log da configuração efetiva
+    let effective_threads = config.effective_worker_threads();
+    if !is_tui_mode {
+        log::info!(
+            "🚀 Runtime: {} threads (max: {}) | WebReader: {}",
+            effective_threads,
+            config.max_threads,
+            config.webreader
+        );
+    }
+
+    // Armazenar configuração globalmente para acesso em outras funções (thread-safe)
+    RUNTIME_CONFIG.set(config.clone()).expect("Runtime config already initialized");
+
+    // Instalar panic hook customizado (isolamento de threads)
+    install_panic_hook();
+
+    // Criar runtime Tokio com configuração customizada
+    let runtime = create_tokio_runtime(&config)?;
+
+    // Executar main async dentro do runtime customizado
+    runtime.block_on(async_main(args, is_tui_mode))
+}
+
+async fn async_main(args: Vec<String>, is_tui_mode: bool) -> anyhow::Result<()> {
 
     if args.len() < 2 {
         eprintln!("Deep Research CLI v{}", deep_research::VERSION);
@@ -180,8 +219,11 @@ async fn main() -> anyhow::Result<()> {
 
     let llm_client: Arc<dyn deep_research::llm::LlmClient> =
         Arc::new(OpenAiClient::new(openai_key));
+
+    // Usar preferência de WebReader da configuração global
+    let webreader_pref = get_runtime_config().webreader;
     let search_client: Arc<dyn deep_research::search::SearchClient> =
-        Arc::new(JinaClient::new(jina_key));
+        Arc::new(JinaClient::with_preference(jina_key, webreader_pref));
 
     // Criar e executar agente
     let agent = DeepResearchAgent::new(llm_client, search_client, budget)
@@ -571,11 +613,14 @@ fn spawn_research_task(
     use deep_research::agent::AgentProgress;
     use deep_research::tui::{AppEvent, LogEntry, LogLevel};
 
+    // Obter preferência de WebReader da configuração global
+    let webreader_pref = get_runtime_config().webreader;
+
     tokio::spawn(async move {
         let llm_client: Arc<dyn deep_research::llm::LlmClient> =
             Arc::new(OpenAiClient::new(openai_key));
         let search_client: Arc<dyn deep_research::search::SearchClient> =
-            Arc::new(JinaClient::new(jina_key));
+            Arc::new(JinaClient::with_preference(jina_key, webreader_pref));
 
         // Criar callback para enviar eventos em tempo real para a TUI
         let tx_clone = tx.clone();

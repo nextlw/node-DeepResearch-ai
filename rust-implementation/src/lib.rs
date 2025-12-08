@@ -164,8 +164,24 @@ pub mod utils;
 /// - Ver estatísticas de tokens e tempo
 pub mod tui;
 
+/// Configuração do runtime e WebReader.
+///
+/// Fornece configuração dinâmica via variáveis de ambiente:
+/// - `TOKIO_THREADS`: Número de threads do runtime (padrão: dinâmico)
+/// - `TOKIO_MAX_THREADS`: Máximo de threads (padrão: 16)
+/// - `WEBREADER`: Preferência de leitor ("jina", "rust", "compare")
+///
+/// Também inclui:
+/// - Panic hook isolado para evitar envenenamento de threads
+/// - Construtor de runtime Tokio customizado
+pub mod config;
+
 // Re-exports principais
 pub use agent::DeepResearchAgent;
+pub use config::{
+    create_tokio_runtime, install_panic_hook, load_runtime_config, RuntimeConfig,
+    WebReaderPreference,
+};
 pub use evaluation::{EvaluationPipeline, EvaluationType};
 pub use performance::simd::cosine_similarity;
 pub use personas::PersonaOrchestrator;
