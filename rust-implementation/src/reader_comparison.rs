@@ -120,9 +120,10 @@ impl ReaderComparison {
 
         #[derive(Deserialize)]
         struct JinaResponse {
-            #[allow(dead_code)]
             code: i32,
             data: Option<JinaData>,
+            #[serde(default)]
+            message: Option<String>,
         }
 
         #[derive(Deserialize)]
@@ -147,25 +148,44 @@ impl ReaderComparison {
 
         match result {
             Ok(response) => {
-                if !response.status().is_success() {
+                let http_status = response.status();
+                if !http_status.is_success() {
                     return Some(ReaderResult {
                         title: String::new(),
                         content: String::new(),
                         word_count: 0,
                         time_ms: elapsed,
                         source: "jina".to_string(),
-                        error: Some(format!("HTTP {}", response.status())),
+                        error: Some(format!("HTTP {}", http_status)),
                     });
                 }
 
                 match response.json::<JinaResponse>().await {
                     Ok(data) => {
+                        // Validar código da API Jina (200 = sucesso)
+                        if data.code != 200 {
+                            let error_msg = data.message.unwrap_or_else(|| {
+                                format!("Jina API error code: {}", data.code)
+                            });
+                            log::warn!("⚠️ Jina API retornou código {}: {}", data.code, error_msg);
+                            return Some(ReaderResult {
+                                title: String::new(),
+                                content: String::new(),
+                                word_count: 0,
+                                time_ms: elapsed,
+                                source: "jina".to_string(),
+                                error: Some(error_msg),
+                            });
+                        }
+
                         let content = data
                             .data
                             .as_ref()
                             .map(|d| d.content.clone())
                             .unwrap_or_default();
                         let word_count = content.split_whitespace().count();
+
+                        log::debug!("✅ Jina API code={} | {} palavras em {}ms", data.code, word_count, elapsed);
 
                         Some(ReaderResult {
                             title: data
@@ -186,7 +206,7 @@ impl ReaderComparison {
                         word_count: 0,
                         time_ms: elapsed,
                         source: "jina".to_string(),
-                        error: Some(e.to_string()),
+                        error: Some(format!("JSON parse error: {}", e)),
                     }),
                 }
             }
