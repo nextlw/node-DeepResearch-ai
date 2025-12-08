@@ -293,7 +293,7 @@ pub struct SessionStats {
 }
 
 /// Estado da tela
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppScreen {
     /// Tela de input da pergunta
     Input,
@@ -301,6 +301,19 @@ pub enum AppScreen {
     Research,
     /// Tela de resultado
     Result,
+    /// Aguardando input do usuário (pergunta do agente)
+    ///
+    /// Compatível com OpenAI Responses API (input_required).
+    InputRequired {
+        /// ID da pergunta pendente
+        question_id: String,
+        /// Tipo da pergunta
+        question_type: String,
+        /// Texto da pergunta
+        question: String,
+        /// Opções de resposta (se aplicável)
+        options: Option<Vec<String>>,
+    },
 }
 
 /// Eventos que podem ser enviados para a TUI
@@ -395,6 +408,28 @@ pub enum AppEvent {
         improvement: String,
         /// Tempo de execução em ms
         duration_ms: u128,
+    },
+    /// Agente fez uma pergunta ao usuário (interação)
+    ///
+    /// Compatível com OpenAI Responses API (input_required).
+    AgentQuestion {
+        /// ID único da pergunta
+        question_id: String,
+        /// Tipo da pergunta (clarification, confirmation, preference, suggestion)
+        question_type: String,
+        /// Texto da pergunta
+        question: String,
+        /// Opções de resposta (se aplicável)
+        options: Option<Vec<String>>,
+        /// Se é blocking (agente pausado aguardando)
+        is_blocking: bool,
+    },
+    /// Resposta do usuário enviada ao agente
+    UserResponse {
+        /// ID da pergunta respondida (None se espontânea)
+        question_id: Option<String>,
+        /// Conteúdo da resposta
+        response: String,
     },
 }
 
@@ -753,6 +788,38 @@ impl App {
                     "💡 {}",
                     improvement
                 )));
+            }
+            // Eventos de interação com usuário
+            AppEvent::AgentQuestion { question_id, question_type, question, options, is_blocking } => {
+                self.logs.push_back(LogEntry::info(format!(
+                    "❓ [{}] {}",
+                    question_type, question
+                )));
+
+                if is_blocking {
+                    // Mudar para tela de input necessário
+                    self.screen = AppScreen::InputRequired {
+                        question_id,
+                        question_type,
+                        question,
+                        options,
+                    };
+                    // Limpar input para a resposta
+                    self.input_text.clear();
+                    self.cursor_pos = 0;
+                }
+            }
+            AppEvent::UserResponse { question_id, response } => {
+                self.logs.push_back(LogEntry::success(format!(
+                    "✅ Resposta enviada: {}",
+                    response
+                )));
+                // Se estava aguardando input, voltar para tela de pesquisa
+                if matches!(self.screen, AppScreen::InputRequired { .. }) {
+                    self.screen = AppScreen::Research;
+                }
+                // A resposta será processada pelo agente via canal
+                let _ = question_id; // Usar se necessário para rastrear
             }
         }
     }

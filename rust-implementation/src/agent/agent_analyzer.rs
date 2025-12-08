@@ -148,6 +148,38 @@ fn format_diary_for_analysis(diary: &[DiaryEntry], original_question: &str) -> S
                     step_num, sessions_loaded, think
                 ));
             }
+            DiaryEntry::UserQuestion {
+                question_type,
+                question,
+                was_blocking,
+                think,
+                ..
+            } => {
+                output.push_str(&format!(
+                    "At step {}, you took the **ask_user** action to request information from the user:\n\
+                    Question type: {:?}\n\
+                    Question: {}\n\
+                    Blocking: {}\n\
+                    Think: {}\n\n",
+                    step_num, question_type, question, was_blocking, think
+                ));
+            }
+            DiaryEntry::UserResponse {
+                response,
+                was_spontaneous,
+                ..
+            } => {
+                let action_type = if *was_spontaneous {
+                    "spontaneous user message"
+                } else {
+                    "user response"
+                };
+                output.push_str(&format!(
+                    "At step {}, you received a **{}**:\n\
+                    Response: {}\n\n",
+                    step_num, action_type, response
+                ));
+            }
         }
     }
 

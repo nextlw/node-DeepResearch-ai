@@ -30,6 +30,8 @@ pub struct ActionPermissions {
     pub coding: bool,
     /// Pode acessar histórico de sessões
     pub history: bool,
+    /// Pode perguntar ao usuário (interação)
+    pub ask_user: bool,
 }
 
 impl ActionPermissions {
@@ -55,6 +57,7 @@ impl ActionPermissions {
                 || (ctx.allow_direct_answer && agent_config.allow_direct_answer),
             coding: true, // Coding geralmente está habilitado
             history: true, // History sempre habilitado
+            ask_user: true, // Ask user sempre habilitado
         }
     }
 
@@ -68,6 +71,7 @@ impl ActionPermissions {
                 || (ctx.allow_direct_answer && config.allow_direct_answer),
             coding: true,
             history: true,
+            ask_user: true,
         }
     }
 
@@ -80,6 +84,7 @@ impl ActionPermissions {
             answer: true,
             coding: true,
             history: true,
+            ask_user: true,
         }
     }
 
@@ -92,6 +97,7 @@ impl ActionPermissions {
             answer: false,
             coding: false,
             history: false,
+            ask_user: false,
         }
     }
 
@@ -104,12 +110,13 @@ impl ActionPermissions {
             answer: true,
             coding: false,
             history: false,
+            ask_user: true, // Pode perguntar mesmo em beast mode
         }
     }
 
     /// Lista de ações permitidas (para logging/debug)
     pub fn allowed_actions(&self) -> Vec<&'static str> {
-        let mut actions = Vec::with_capacity(6);
+        let mut actions = Vec::with_capacity(7);
         if self.search {
             actions.push("search");
         }
@@ -128,6 +135,9 @@ impl ActionPermissions {
         if self.history {
             actions.push("history");
         }
+        if self.ask_user {
+            actions.push("ask_user");
+        }
         actions
     }
 
@@ -140,6 +150,7 @@ impl ActionPermissions {
             self.answer,
             self.coding,
             self.history,
+            self.ask_user,
         ]
         .iter()
         .filter(|&&x| x)
@@ -148,7 +159,7 @@ impl ActionPermissions {
 
     /// Verifica se pelo menos uma ação está permitida
     pub fn has_any_allowed(&self) -> bool {
-        self.search || self.read || self.reflect || self.answer || self.coding || self.history
+        self.search || self.read || self.reflect || self.answer || self.coding || self.history || self.ask_user
     }
 
     /// Verifica se uma ação específica está permitida
@@ -160,6 +171,7 @@ impl ActionPermissions {
             "answer" => self.answer,
             "coding" => self.coding,
             "history" => self.history,
+            "ask_user" => self.ask_user,
             _ => false,
         }
     }
@@ -214,7 +226,8 @@ mod tests {
         assert!(perms.answer);
         assert!(perms.coding);
         assert!(perms.history);
-        assert_eq!(perms.count_allowed(), 6);
+        assert!(perms.ask_user);
+        assert_eq!(perms.count_allowed(), 7);
     }
 
     #[test]
@@ -226,6 +239,7 @@ mod tests {
         assert!(!perms.answer);
         assert!(!perms.coding);
         assert!(!perms.history);
+        assert!(!perms.ask_user);
         assert_eq!(perms.count_allowed(), 0);
     }
 
@@ -238,7 +252,8 @@ mod tests {
         assert!(perms.answer);
         assert!(!perms.coding);
         assert!(!perms.history);
-        assert_eq!(perms.count_allowed(), 1);
+        assert!(perms.ask_user);
+        assert_eq!(perms.count_allowed(), 2);
     }
 
     #[test]
@@ -250,6 +265,7 @@ mod tests {
             answer: false,
             coding: true,
             history: true,
+            ask_user: false,
         };
         let actions = perms.allowed_actions();
         assert_eq!(actions, vec!["search", "reflect", "coding", "history"]);
@@ -267,6 +283,7 @@ mod tests {
         assert!(perms.answer);
         assert!(perms.coding);
         assert!(perms.history);
+        assert!(perms.ask_user);
     }
 
     #[test]
@@ -278,6 +295,7 @@ mod tests {
             answer: true,
             coding: false,
             history: true,
+            ask_user: true,
         };
 
         assert!(perms.is_allowed("search"));
@@ -286,6 +304,7 @@ mod tests {
         assert!(perms.is_allowed("answer"));
         assert!(!perms.is_allowed("coding"));
         assert!(perms.is_allowed("history"));
+        assert!(perms.is_allowed("ask_user"));
         assert!(!perms.is_allowed("unknown"));
     }
 }

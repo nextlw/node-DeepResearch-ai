@@ -12,10 +12,13 @@ use super::app::{App, AppScreen, LogLevel, ReadMethod, TaskStatus, AgentAnalyzer
 
 /// Renderiza a interface completa
 pub fn render(frame: &mut Frame<'_>, app: &App) {
-    match app.screen {
+    match &app.screen {
         AppScreen::Input => render_input_screen(frame, app),
         AppScreen::Research => render_research_screen(frame, app),
         AppScreen::Result => render_result_screen(frame, app),
+        AppScreen::InputRequired { question_id, question_type, question, options } => {
+            render_input_required_screen(frame, app, question_id, question_type, question, options.as_ref());
+        }
     }
 }
 
@@ -914,6 +917,122 @@ fn render_progress(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .label(label);
 
     frame.render_widget(gauge, area);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TELA DE INPUT REQUERIDO (PERGUNTA DO AGENTE)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Renderiza tela quando o agente precisa de input do usuário
+///
+/// Compatível com OpenAI Responses API (input_required state).
+fn render_input_required_screen(
+    frame: &mut Frame<'_>,
+    app: &App,
+    question_id: &str,
+    question_type: &str,
+    question: &str,
+    options: Option<&Vec<String>>,
+) {
+    let area = frame.area();
+
+    // Layout vertical
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),   // Header
+            Constraint::Length(3),   // Status
+            Constraint::Min(5),      // Pergunta e opções
+            Constraint::Length(4),   // Input
+            Constraint::Length(2),   // Ajuda
+        ])
+        .margin(2)
+        .split(area);
+
+    // Header
+    let header_text = format!("❓ ENTRADA REQUERIDA - {}", question_type.to_uppercase());
+    let header = Paragraph::new(header_text)
+        .style(Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD))
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title(" 🤖 Agente aguardando resposta "));
+    frame.render_widget(header, chunks[0]);
+
+    // Status
+    let status = Paragraph::new(format!(
+        "ID: {} │ Step: {} │ Tokens: {}",
+        &question_id[..8],
+        app.current_step,
+        app.tokens_used
+    ))
+    .style(Style::default().fg(Color::DarkGray))
+    .alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(status, chunks[1]);
+
+    // Pergunta e opções
+    let mut question_lines = vec![
+        Line::from(vec![
+            Span::styled("Pergunta: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(question, Style::default().fg(Color::White))),
+        Line::from(""),
+    ];
+
+    // Adicionar opções se houver
+    if let Some(opts) = options {
+        question_lines.push(Line::from(vec![
+            Span::styled("Opções:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        ]));
+        for (i, opt) in opts.iter().enumerate() {
+            question_lines.push(Line::from(vec![
+                Span::styled(format!("  {}. ", i + 1), Style::default().fg(Color::Yellow)),
+                Span::styled(opt, Style::default().fg(Color::White)),
+            ]));
+        }
+    }
+
+    let question_widget = Paragraph::new(question_lines)
+        .wrap(Wrap { trim: false })
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" Pergunta do Agente "));
+    frame.render_widget(question_widget, chunks[2]);
+
+    // Input área
+    let input_title = if options.is_some() {
+        " Digite número ou resposta "
+    } else {
+        " Sua resposta "
+    };
+
+    let input_text = if app.input_text.is_empty() {
+        vec![
+            Span::styled("█", Style::default().fg(Color::Green).add_modifier(Modifier::SLOW_BLINK)),
+        ]
+    } else {
+        vec![
+            Span::styled(&app.input_text, Style::default().fg(Color::White)),
+            Span::styled("█", Style::default().fg(Color::Green).add_modifier(Modifier::SLOW_BLINK)),
+        ]
+    };
+
+    let input_widget = Paragraph::new(Line::from(input_text))
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green))
+            .title(input_title));
+    frame.render_widget(input_widget, chunks[3]);
+
+    // Ajuda
+    let help = Paragraph::new("Enter: Enviar │ Esc: Cancelar (continua sem resposta)")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(help, chunks[4]);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

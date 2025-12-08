@@ -160,6 +160,52 @@ fn run_app(
                             }
                             _ => {}
                         },
+
+                        // Tela de input requerido pelo agente
+                        AppScreen::InputRequired { .. } => match key.code {
+                            KeyCode::Enter => {
+                                // Enviar resposta
+                                if !app.input_text.is_empty() {
+                                    // Extrair question_id se disponível
+                                    let question_id = if let AppScreen::InputRequired { question_id, .. } = &app.screen {
+                                        Some(question_id.clone())
+                                    } else {
+                                        None
+                                    };
+
+                                    let response = app.input_text.clone();
+                                    app.handle_event(AppEvent::UserResponse {
+                                        question_id,
+                                        response,
+                                    });
+                                    app.input_text.clear();
+                                    app.cursor_pos = 0;
+                                }
+                            }
+                            KeyCode::Char(c) => {
+                                app.input_char(c);
+                            }
+                            KeyCode::Backspace => {
+                                app.input_backspace();
+                            }
+                            KeyCode::Left => {
+                                app.cursor_left();
+                            }
+                            KeyCode::Right => {
+                                app.cursor_right();
+                            }
+                            KeyCode::Home => {
+                                app.cursor_home();
+                            }
+                            KeyCode::End => {
+                                app.cursor_end();
+                            }
+                            KeyCode::Esc => {
+                                // Cancelar - voltar para pesquisa
+                                app.screen = AppScreen::Research;
+                            }
+                            _ => {}
+                        },
                     }
                 }
 

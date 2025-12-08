@@ -2,6 +2,7 @@
 // ESTADOS DO AGENTE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+use crate::agent::interaction::QuestionType;
 use crate::types::{KnowledgeItem, Reference};
 
 /// Estado do agente - transições explícitas
@@ -33,6 +34,22 @@ pub enum AgentState {
         attempts: u32,
         /// Motivo da última falha
         last_failure: String,
+    },
+
+    /// Aguardando input do usuário
+    ///
+    /// Compatível com OpenAI Responses API (input_required state).
+    /// O agente pausou a execução e está esperando que o usuário
+    /// responda a uma pergunta antes de continuar.
+    InputRequired {
+        /// ID único da pergunta pendente
+        question_id: String,
+        /// Texto da pergunta sendo feita
+        question: String,
+        /// Tipo da pergunta
+        question_type: QuestionType,
+        /// Opções de resposta (se aplicável)
+        options: Option<Vec<String>>,
     },
 
     /// Pesquisa concluída com sucesso
@@ -77,17 +94,37 @@ impl AgentState {
         matches!(self, AgentState::BeastMode { .. })
     }
 
+    /// Verifica se o estado é de aguardando input do usuário
+    ///
+    /// Compatível com OpenAI Responses API (input_required)
+    pub fn is_input_required(&self) -> bool {
+        matches!(self, AgentState::InputRequired { .. })
+    }
+
+    /// Verifica se o agente está pausado esperando algo
+    pub fn is_waiting(&self) -> bool {
+        self.is_input_required()
+    }
+
     /// Verifica se uma transição é válida
     pub fn can_transition_to(&self, target: &AgentState) -> bool {
         matches!(
             (self, target),
-            // De Processing pode ir para BeastMode, Completed ou Failed
+            // De Processing pode ir para BeastMode, Completed, Failed ou InputRequired
             (AgentState::Processing { .. }, AgentState::BeastMode { .. }) |
             (AgentState::Processing { .. }, AgentState::Completed { .. }) |
             (AgentState::Processing { .. }, AgentState::Failed { .. }) |
-            // De BeastMode pode ir para Completed ou Failed
+            (AgentState::Processing { .. }, AgentState::InputRequired { .. }) |
+            // De BeastMode pode ir para Completed, Failed ou InputRequired
             (AgentState::BeastMode { .. }, AgentState::Completed { .. }) |
-            (AgentState::BeastMode { .. }, AgentState::Failed { .. }) // Estados terminais não podem transicionar
+            (AgentState::BeastMode { .. }, AgentState::Failed { .. }) |
+            (AgentState::BeastMode { .. }, AgentState::InputRequired { .. }) |
+            // De InputRequired pode voltar para Processing (após receber resposta)
+            (AgentState::InputRequired { .. }, AgentState::Processing { .. }) |
+            (AgentState::InputRequired { .. }, AgentState::BeastMode { .. }) |
+            (AgentState::InputRequired { .. }, AgentState::Completed { .. }) |
+            (AgentState::InputRequired { .. }, AgentState::Failed { .. })
+            // Estados terminais não podem transicionar
         )
     }
 
@@ -117,6 +154,20 @@ pub enum StepResult {
     Completed(AnswerResult),
     /// Erro durante execução
     Error(String),
+    /// Aguardando input do usuário (blocking)
+    ///
+    /// Compatível com OpenAI Responses API (input_required).
+    /// O agente pausou e está esperando resposta do usuário.
+    InputRequired {
+        /// ID da pergunta pendente
+        question_id: String,
+        /// Texto da pergunta
+        question: String,
+        /// Tipo da pergunta
+        question_type: QuestionType,
+        /// Opções de resposta (se aplicável)
+        options: Option<Vec<String>>,
+    },
 }
 
 /// Resultado de uma resposta que foi aceita pela avaliação.

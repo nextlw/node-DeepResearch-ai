@@ -92,6 +92,9 @@ crossterm = "0.28"
 # Clipboard support (cross-platform)
 arboard = "3.4"
 
+# JavaScript engine (sandbox para execução de código)
+boa_engine = "0.20"
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # OPTIONAL: Backends de produção (Railway)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

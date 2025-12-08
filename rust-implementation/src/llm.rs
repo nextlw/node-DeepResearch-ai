@@ -141,6 +141,25 @@ pub trait LlmClient: Send + Sync {
         question: &str,
     ) -> Result<Vec<crate::evaluation::EvaluationType>, LlmError>;
 
+    /// Gera código JavaScript para resolver um problema
+    ///
+    /// Este método é usado pelo CodeSandbox para gerar código que será
+    /// executado no Boa Engine. Suporta retry com aprendizado de erros.
+    ///
+    /// # Arguments
+    /// * `problem` - Descrição do problema a resolver
+    /// * `available_vars` - Descrição das variáveis disponíveis no contexto
+    /// * `previous_attempts` - Tentativas anteriores com seus erros (para retry)
+    ///
+    /// # Returns
+    /// `CodeGenResponse` com o código gerado e raciocínio
+    async fn generate_code(
+        &self,
+        problem: &str,
+        available_vars: &str,
+        previous_attempts: &[(String, Option<String>)],
+    ) -> Result<CodeGenResponse, LlmError>;
+
     /// Retorna tokens de prompt acumulados (implementação opcional)
     fn get_prompt_tokens(&self) -> u64 {
         0
@@ -173,6 +192,17 @@ pub struct EvaluationResponse {
     ///
     /// Valores baixos indicam que o avaliador não tem certeza.
     pub confidence: f32,
+}
+
+/// Resposta de geração de código pelo LLM.
+///
+/// Usada pelo CodeSandbox para executar código gerado dinamicamente.
+#[derive(Debug, Clone)]
+pub struct CodeGenResponse {
+    /// Código JavaScript gerado.
+    pub code: String,
+    /// Raciocínio do LLM sobre a solução.
+    pub think: String,
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -300,6 +330,18 @@ impl LlmClient for MockLlmClient {
         _question: &str,
     ) -> Result<Vec<crate::evaluation::EvaluationType>, LlmError> {
         Ok(vec![crate::evaluation::EvaluationType::Definitive])
+    }
+
+    async fn generate_code(
+        &self,
+        _problem: &str,
+        _available_vars: &str,
+        _previous_attempts: &[(String, Option<String>)],
+    ) -> Result<CodeGenResponse, LlmError> {
+        Ok(CodeGenResponse {
+            code: "return 42;".into(),
+            think: "Mock code generation".into(),
+        })
     }
 }
 
@@ -524,6 +566,13 @@ struct ActionJson {
     count: Option<usize>,
     /// Filtro de texto para history
     filter: Option<String>,
+    /// Campos para ask_user
+    #[serde(rename = "questionType")]
+    question_type: Option<String>,
+    question: Option<String>,
+    options: Option<Vec<String>>,
+    #[serde(rename = "isBlocking")]
+    is_blocking: Option<bool>,
     think: String,
 }
 
@@ -571,6 +620,11 @@ impl LlmClient for OpenAiClient {
         }
         if permissions.history {
             system_prompt.push_str("- history: {\"action\": \"history\", \"count\": 5, \"filter\": \"optional search term\", \"think\": \"reasoning\"}\n");
+        }
+        if permissions.ask_user {
+            system_prompt.push_str("- ask_user: {\"action\": \"ask_user\", \"questionType\": \"clarification|confirmation|preference|suggestion\", \"question\": \"question for user\", \"options\": [\"opt1\", \"opt2\"] (optional), \"isBlocking\": true, \"think\": \"why asking\"}\n");
+            system_prompt.push_str("  Use ask_user when you need CRITICAL information from the user that cannot be found through search.\n");
+            system_prompt.push_str("  Types: clarification (missing vital info), confirmation (before important action), preference (choose between options), suggestion (non-critical feedback)\n");
         }
 
         system_prompt.push_str("\nRespond ONLY with valid JSON, no other text.");
@@ -706,7 +760,8 @@ impl LlmClient for OpenAiClient {
                 })
             }
             "coding" => Ok(AgentAction::Coding {
-                code: action_json.code.unwrap_or_default(),
+                problem: action_json.code.unwrap_or_default(),
+                context_vars: None, // LLM não especifica context_vars, usa todo o knowledge
                 think: action_json.think,
             }),
             "history" => Ok(AgentAction::History {
@@ -714,6 +769,29 @@ impl LlmClient for OpenAiClient {
                 filter: action_json.filter,
                 think: action_json.think,
             }),
+            "ask_user" | "askuser" | "ask" => {
+                // Parsear tipo de pergunta
+                let question_type = action_json
+                    .question_type
+                    .as_deref()
+                    .and_then(crate::agent::QuestionType::from_str)
+                    .unwrap_or(crate::agent::QuestionType::Clarification);
+
+                // Por padrão, Clarification e Confirmation são blocking
+                let is_blocking = action_json.is_blocking.unwrap_or_else(|| {
+                    question_type.is_blocking_by_default()
+                });
+
+                Ok(AgentAction::AskUser {
+                    question_type,
+                    question: action_json.question.unwrap_or_else(|| {
+                        "Poderia fornecer mais informações?".into()
+                    }),
+                    options: action_json.options,
+                    is_blocking,
+                    think: action_json.think,
+                })
+            }
             _ => Err(LlmError::ParseError(format!(
                 "Unknown action: {}",
                 action_json.action
@@ -1147,6 +1225,145 @@ Respond with JSON: {"needs_definitive": true/false, "needs_freshness": true/fals
         }
 
         Ok(types)
+    }
+
+    async fn generate_code(
+        &self,
+        problem: &str,
+        available_vars: &str,
+        previous_attempts: &[(String, Option<String>)],
+    ) -> Result<CodeGenResponse, LlmError> {
+        // Construir contexto de tentativas anteriores
+        let previous_context = if !previous_attempts.is_empty() {
+            let attempts_text: Vec<String> = previous_attempts
+                .iter()
+                .enumerate()
+                .map(|(i, (code, error))| {
+                    format!(
+                        "<bad-attempt-{}>\n{}\n{}</bad-attempt-{}>",
+                        i + 1,
+                        code,
+                        error
+                            .as_ref()
+                            .map(|e| format!("Error: {}", e))
+                            .unwrap_or_default(),
+                        i + 1
+                    )
+                })
+                .collect();
+            format!(
+                "\nPrevious attempts and their errors:\n{}\n",
+                attempts_text.join("\n")
+            )
+        } else {
+            String::new()
+        };
+
+        let system_prompt = format!(
+            r#"You are an expert JavaScript programmer. Your task is to generate JavaScript code to solve the given problem.
+
+<rules>
+1. Generate plain JavaScript code that returns the result directly
+2. You can access any of these available variables directly:
+{}
+3. You don't have access to any third party libraries that need to be installed, so you must write complete, self-contained code.
+4. Must have a return statement.
+</rules>
+{}
+<example>
+Available variables:
+numbers (Array<number>) e.g. [1, 2, 3, 4, 5, 6]
+threshold (number) e.g. 4
+
+Problem: Sum all numbers above threshold
+
+Response:
+{{"think": "I need to filter numbers above threshold and sum them", "code": "return numbers.filter(n => n > threshold).reduce((a, b) => a + b, 0);"}}
+</example>"#,
+            available_vars, previous_context
+        );
+
+        let messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: system_prompt,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: format!("Problem: {}", problem),
+            },
+        ];
+
+        let request = ChatRequest {
+            model: self.model.clone(),
+            messages,
+            temperature: Some(0.2), // Baixa temperatura para código mais consistente
+            response_format: Some(serde_json::json!({"type": "json_object"})),
+        };
+
+        let response = self
+            .client
+            .post(self.endpoint("chat/completions"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+        if response.status() == 429 {
+            return Err(LlmError::RateLimitError);
+        }
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError(format!(
+                "OpenAI API error: {}",
+                error_text
+            )));
+        }
+
+        let chat_response: ChatResponse = response
+            .json()
+            .await
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        // Acumular tokens
+        self.total_prompt_tokens.fetch_add(
+            chat_response.usage.prompt_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.total_completion_tokens.fetch_add(
+            chat_response.usage.completion_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        log::debug!(
+            "🎫 generate_code tokens: {} | Acumulado: {}",
+            chat_response.usage.total_tokens,
+            self.get_total_tokens()
+        );
+
+        let content = chat_response
+            .choices
+            .first()
+            .ok_or_else(|| LlmError::ParseError("No choices in response".into()))?
+            .message
+            .content
+            .clone();
+
+        #[derive(Deserialize)]
+        struct CodeGenJson {
+            code: String,
+            think: String,
+        }
+
+        let code_gen_json: CodeGenJson = serde_json::from_str(&content)
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse code gen JSON: {}", e)))?;
+
+        Ok(CodeGenResponse {
+            code: code_gen_json.code,
+            think: code_gen_json.think,
+        })
     }
 
     fn get_prompt_tokens(&self) -> u64 {

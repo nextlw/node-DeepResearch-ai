@@ -211,7 +211,8 @@ fn bench_agent_actions(c: &mut Criterion) {
     group.bench_function("create_coding", |bencher| {
         bencher.iter(|| {
             black_box(AgentAction::Coding {
-                code: "const data = JSON.parse(input); return data.map(x => x * 2);".to_string(),
+                problem: "Processar array de dados JSON e dobrar cada valor numérico".to_string(),
+                context_vars: None,
                 think: "Processing data with JavaScript.".to_string(),
             })
         })

@@ -453,6 +453,7 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     };
     use deep_research::tui::{App, AppScreen};
+    use deep_research::agent::UserResponse;
     use ratatui::{backend::CrosstermBackend, Terminal};
     use std::io;
     use std::time::Duration;
@@ -482,19 +483,26 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
         App::with_question(question.to_string())
     };
 
-    // Canal para eventos
+    // Canal para eventos da TUI
     let (tx, rx) = create_event_channel();
+
+    // Canal para enviar respostas do usuário de volta para o agente
+    // Usamos Option para poder substituir quando uma nova pesquisa inicia
+    let mut user_response_tx: Option<tokio::sync::mpsc::Sender<UserResponse>> = None;
 
     // Handle de tarefa do agente (opcional)
     let mut agent_task: Option<tokio::task::JoinHandle<_>> = None;
 
     // Se já tem pergunta, iniciar pesquisa
     if !question.is_empty() {
+        let (new_tx, new_rx) = tokio::sync::mpsc::channel::<UserResponse>(16);
+        user_response_tx = Some(new_tx);
         agent_task = Some(spawn_research_task(
             question.to_string(),
             openai_key.clone(),
             jina_key.clone(),
             tx.clone(),
+            new_rx,
         ));
     }
 
@@ -522,11 +530,17 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                                     if !app.input_text.is_empty() {
                                         let q = app.input_text.clone();
                                         app.start_research();
+
+                                        // Criar novo canal para resposta do usuário para esta pesquisa
+                                        let (new_tx, new_rx) = tokio::sync::mpsc::channel::<UserResponse>(16);
+                                        user_response_tx = Some(new_tx);
+
                                         agent_task = Some(spawn_research_task(
                                             q,
                                             openai_key.clone(),
                                             jina_key.clone(),
                                             tx.clone(),
+                                            new_rx,
                                         ));
                                     }
                                 }
@@ -583,6 +597,51 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                                 KeyCode::PageDown => app.result_page_down(),
                                 KeyCode::Home => app.result_scroll = 0,
                                 KeyCode::End => app.result_scroll = usize::MAX,
+                                _ => {}
+                            }
+                        }
+                        // Tela de input requerido pelo agente
+                        AppScreen::InputRequired { ref question_id, .. } => {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    // Enviar resposta do usuário
+                                    if !app.input_text.is_empty() {
+                                        let response_text = app.input_text.clone();
+                                        let qid = question_id.clone();
+
+                                        // Enviar para a TUI (atualiza UI)
+                                        app.handle_event(deep_research::tui::AppEvent::UserResponse {
+                                            question_id: Some(qid.clone()),
+                                            response: response_text.clone(),
+                                        });
+
+                                        // Enviar para o agente via canal
+                                        if let Some(ref tx) = user_response_tx {
+                                            let user_resp = UserResponse::to_question(qid, response_text);
+                                            let _ = tx.try_send(user_resp);
+                                        }
+
+                                        app.input_text.clear();
+                                        app.cursor_pos = 0;
+                                    }
+                                }
+                                KeyCode::Char(c) => app.input_char(c),
+                                KeyCode::Backspace => app.input_backspace(),
+                                KeyCode::Delete => app.input_delete(),
+                                KeyCode::Left => app.cursor_left(),
+                                KeyCode::Right => app.cursor_right(),
+                                KeyCode::Home => app.cursor_home(),
+                                KeyCode::End => app.cursor_end(),
+                                KeyCode::Esc => {
+                                    // Cancelar - voltar para pesquisa sem resposta
+                                    // Enviar resposta vazia para desbloquear o agente
+                                    if let Some(ref tx) = user_response_tx {
+                                        let qid = question_id.clone();
+                                        let user_resp = UserResponse::to_question(qid, "[cancelado]");
+                                        let _ = tx.try_send(user_resp);
+                                    }
+                                    app.screen = AppScreen::Research;
+                                }
                                 _ => {}
                             }
                         }
@@ -650,6 +709,7 @@ fn spawn_research_task(
     openai_key: String,
     jina_key: String,
     tx: std::sync::mpsc::Sender<deep_research::tui::AppEvent>,
+    mut user_response_rx: tokio::sync::mpsc::Receiver<deep_research::agent::UserResponse>,
 ) -> tokio::task::JoinHandle<deep_research::agent::ResearchResult> {
     use deep_research::agent::AgentProgress;
     use deep_research::tui::{AppEvent, LogEntry, LogLevel};
@@ -823,13 +883,63 @@ fn spawn_research_task(
                             duration_ms)
                     ))
                 }
+                // Eventos de interação com usuário
+                AgentProgress::AgentQuestion { question_id, question_type, question, options, is_blocking } => {
+                    // Enviar evento para a TUI mostrar a pergunta
+                    let _ = tx_clone.send(AppEvent::AgentQuestion {
+                        question_id: question_id.clone(),
+                        question_type: question_type.clone(),
+                        question: question.clone(),
+                        options: options.clone(),
+                        is_blocking,
+                    });
+                    let icon = if is_blocking { "⏸️" } else { "💬" };
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("{} [{}] Pergunta ao usuário: {:.50}...",
+                            icon, question_type, question)
+                    ))
+                }
+                AgentProgress::UserResponseReceived { question_id, response, was_spontaneous } => {
+                    let icon = if was_spontaneous { "💬" } else { "✅" };
+                    let msg = if let Some(qid) = question_id {
+                        format!("{} Resposta recebida ({}): {:.50}...", icon, qid, response)
+                    } else {
+                        format!("{} Mensagem do usuário: {:.50}...", icon, response)
+                    };
+                    AppEvent::Log(LogEntry::new(LogLevel::Success, msg))
+                }
+                AgentProgress::ResumedAfterInput { question_id } => {
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("▶️ Retomando execução após resposta ({})", question_id)
+                    ))
+                }
             };
             let _ = tx_clone.send(app_event);
         });
 
-        // Criar agente com callback de progresso
-        let agent = DeepResearchAgent::new(llm_client, search_client, None)
-            .with_progress_callback(progress_callback);
+        // Criar agente com callback de progresso e canais de interação
+        let (agent, response_tx, _question_rx) = DeepResearchAgent::new(llm_client, search_client, None)
+            .with_progress_callback(progress_callback)
+            .with_interaction_channels(16);
+
+        // Spawn task para receber respostas do usuário da TUI e enviar para o agente
+        let tx_for_bridge = tx.clone();
+        tokio::spawn(async move {
+            while let Some(user_resp) = user_response_rx.recv().await {
+                // Enviar resposta para o InteractionHub do agente
+                if response_tx.send(user_resp.clone()).await.is_err() {
+                    // Canal fechado, agente terminou
+                    break;
+                }
+                // Log de debug
+                let _ = tx_for_bridge.send(AppEvent::Log(LogEntry::new(
+                    LogLevel::Info,
+                    format!("📨 Resposta enviada ao agente: {:.30}...", user_resp.content)
+                )));
+            }
+        });
 
         let result = agent.run(question).await;
 
