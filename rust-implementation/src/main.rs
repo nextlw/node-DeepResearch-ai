@@ -530,6 +530,7 @@ fn spawn_research_task(
     jina_key: String,
     tx: std::sync::mpsc::Sender<deep_research::tui::AppEvent>,
 ) -> tokio::task::JoinHandle<deep_research::agent::ResearchResult> {
+    use deep_research::agent::AgentProgress;
     use deep_research::tui::{AppEvent, LogEntry, LogLevel};
 
     tokio::spawn(async move {
@@ -538,19 +539,62 @@ fn spawn_research_task(
         let search_client: Arc<dyn deep_research::search::SearchClient> =
             Arc::new(JinaClient::new(jina_key));
 
-        let agent = DeepResearchAgent::new(llm_client, search_client, None);
+        // Criar callback para enviar eventos em tempo real para a TUI
+        let tx_clone = tx.clone();
+        let progress_callback = Arc::new(move |event: AgentProgress| {
+            let app_event = match event {
+                AgentProgress::Info(msg) => AppEvent::Log(LogEntry::new(LogLevel::Info, msg)),
+                AgentProgress::Success(msg) => AppEvent::Log(LogEntry::new(LogLevel::Success, msg)),
+                AgentProgress::Warning(msg) => AppEvent::Log(LogEntry::new(LogLevel::Warning, msg)),
+                AgentProgress::Error(msg) => AppEvent::Log(LogEntry::new(LogLevel::Error, msg)),
+                AgentProgress::Step(step) => AppEvent::SetStep(step),
+                AgentProgress::Action(action) => AppEvent::SetAction(action),
+                AgentProgress::Think(think) => AppEvent::SetThink(think),
+                AgentProgress::Urls(total, visited) => {
+                    let _ = tx_clone.send(AppEvent::SetUrlCount(total));
+                    AppEvent::SetVisitedCount(visited)
+                }
+                AgentProgress::Tokens(tokens) => AppEvent::SetTokens(tokens),
+            };
+            let _ = tx_clone.send(app_event);
+        });
 
-        // Enviar evento inicial
-        let _ = tx.send(AppEvent::Log(LogEntry::new(
-            LogLevel::Info,
-            "Iniciando pesquisa...",
-        )));
-        let _ = tx.send(AppEvent::SetAction("Buscando".into()));
+        // Criar agente com callback de progresso
+        let agent = DeepResearchAgent::new(llm_client, search_client, None)
+            .with_progress_callback(progress_callback);
 
         let result = agent.run(question).await;
 
-        // Enviar estatísticas finais
-        let _ = tx.send(AppEvent::SetStep(result.visited_urls.len()));
+        // Enviar estatísticas finais detalhadas
+        let _ = tx.send(AppEvent::Log(LogEntry::new(
+            LogLevel::Info,
+            format!(
+                "📊 Estatísticas: {} steps | {} URLs visitadas | {} tokens",
+                result.visited_urls.len(),
+                result.visited_urls.len(),
+                result.token_usage.total_tokens
+            ),
+        )));
+        let _ = tx.send(AppEvent::Log(LogEntry::new(
+            LogLevel::Info,
+            format!(
+                "⏱️ Tempo: {:.1}s total | {:.1}s busca | {:.1}s leitura | {:.1}s LLM",
+                result.total_time_ms as f64 / 1000.0,
+                result.search_time_ms as f64 / 1000.0,
+                result.read_time_ms as f64 / 1000.0,
+                result.llm_time_ms as f64 / 1000.0
+            ),
+        )));
+        let _ = tx.send(AppEvent::Log(LogEntry::new(
+            LogLevel::Info,
+            format!(
+                "🎟️ Tokens: {} prompt + {} completion = {} total",
+                result.token_usage.prompt_tokens,
+                result.token_usage.completion_tokens,
+                result.token_usage.total_tokens
+            ),
+        )));
+
         let _ = tx.send(AppEvent::SetVisitedCount(result.visited_urls.len()));
         let _ = tx.send(AppEvent::SetTokens(result.token_usage.total_tokens));
 
@@ -559,7 +603,7 @@ fn spawn_research_task(
             if let Some(ref answer) = result.answer {
                 let _ = tx.send(AppEvent::Log(LogEntry::new(
                     LogLevel::Success,
-                    format!("Resposta gerada ({} chars)", answer.len()),
+                    format!("✅ Resposta gerada ({} chars, {} referências)", answer.len(), result.references.len()),
                 )));
                 let refs: Vec<String> = result
                     .references

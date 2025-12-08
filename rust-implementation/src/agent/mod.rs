@@ -18,6 +18,32 @@ use crate::types::*;
 use crate::utils::{ActionTimer, TimingStats, TokenTracker, TrackerStats};
 use std::sync::Arc;
 
+/// Evento de progresso do agente para callbacks em tempo real
+#[derive(Debug, Clone)]
+pub enum AgentProgress {
+    /// Log informativo
+    Info(String),
+    /// Log de sucesso
+    Success(String),
+    /// Log de aviso
+    Warning(String),
+    /// Log de erro
+    Error(String),
+    /// Atualiza step atual
+    Step(usize),
+    /// Atualiza ação atual
+    Action(String),
+    /// Atualiza raciocínio atual
+    Think(String),
+    /// Atualiza contagem de URLs (total, visitadas)
+    Urls(usize, usize),
+    /// Atualiza tokens usados
+    Tokens(u64),
+}
+
+/// Tipo do callback de progresso
+pub type ProgressCallback = Arc<dyn Fn(AgentProgress) + Send + Sync>;
+
 /// Máximo de queries por passo (reservado para expansão futura)
 #[allow(dead_code)]
 const MAX_QUERIES_PER_STEP: usize = 5;
@@ -37,6 +63,8 @@ pub struct DeepResearchAgent {
     token_tracker: TokenTracker,
     timing_stats: TimingStats,
     start_time: std::time::Instant,
+    /// Callback opcional para progresso em tempo real
+    progress_callback: Option<ProgressCallback>,
 }
 
 impl DeepResearchAgent {
@@ -59,6 +87,20 @@ impl DeepResearchAgent {
             token_tracker: TokenTracker::new(token_budget),
             timing_stats: TimingStats::new(),
             start_time: std::time::Instant::now(),
+            progress_callback: None,
+        }
+    }
+
+    /// Configura callback de progresso para updates em tempo real
+    pub fn with_progress_callback(mut self, callback: ProgressCallback) -> Self {
+        self.progress_callback = Some(callback);
+        self
+    }
+
+    /// Envia evento de progresso se callback configurado
+    fn emit(&self, event: AgentProgress) {
+        if let Some(cb) = &self.progress_callback {
+            cb(event);
         }
     }
 
@@ -66,17 +108,24 @@ impl DeepResearchAgent {
     pub async fn run(mut self, question: String) -> ResearchResult {
         // Inicialização
         self.context.original_question = question.clone();
-        self.context.gap_questions.push(question);
+        self.context.gap_questions.push(question.clone());
+
+        // Emitir início
+        self.emit(AgentProgress::Info(format!("Iniciando pesquisa: {}", question)));
+        self.emit(AgentProgress::Step(0));
+        self.emit(AgentProgress::Action("Inicializando...".into()));
 
         // Loop principal com pattern matching exaustivo
         loop {
             match &self.state {
                 AgentState::Processing { .. } if self.token_tracker.should_enter_beast_mode() => {
                     // Transição para Beast Mode (>= 85% do budget de tokens)
-                    log::warn!(
-                        "⚠️ Budget de tokens em {:.1}% - entrando em Beast Mode",
+                    let msg = format!(
+                        "Budget de tokens em {:.1}% - entrando em Beast Mode",
                         self.token_tracker.budget_used_percentage() * 100.0
                     );
+                    log::warn!("⚠️ {}", msg);
+                    self.emit(AgentProgress::Warning(msg));
                     self.state = AgentState::BeastMode {
                         attempts: 0,
                         last_failure: "Budget exhausted".into(),
@@ -188,9 +237,21 @@ impl DeepResearchAgent {
             action.think().chars().take(150).collect::<String>()
         );
 
+        // Emitir progresso para TUI
+        self.emit(AgentProgress::Step(self.context.total_step));
+        self.emit(AgentProgress::Action(action.name().to_string()));
+        self.emit(AgentProgress::Think(action.think().chars().take(200).collect()));
+        self.emit(AgentProgress::Tokens(self.token_tracker.total_tokens()));
+        self.emit(AgentProgress::Urls(
+            self.context.collected_urls.len(),
+            self.context.visited_urls.len(),
+        ));
+
         // 4. Executar ação escolhida - pattern matching garante cobertura total
         match action {
             AgentAction::Search { queries, think } => {
+                let query_list: Vec<_> = queries.iter().map(|q| q.q.clone()).collect();
+                self.emit(AgentProgress::Info(format!("🔍 Buscando: {}", query_list.join(", "))));
                 log::debug!(
                     "🔍 Queries: {:?}",
                     queries.iter().map(|q| &q.q).collect::<Vec<_>>()
@@ -206,9 +267,9 @@ impl DeepResearchAgent {
 
                 // Se LLM escolheu URLs já visitadas, pegar as próximas não visitadas automaticamente
                 if new_urls.is_empty() {
-                    log::warn!(
-                        "⚠️ LLM escolheu URLs já visitadas, selecionando próximas disponíveis..."
-                    );
+                    let msg = "LLM escolheu URLs já visitadas, selecionando próximas disponíveis...";
+                    log::warn!("⚠️ {}", msg);
+                    self.emit(AgentProgress::Warning(msg.into()));
                     new_urls = self
                         .context
                         .collected_urls
@@ -223,12 +284,19 @@ impl DeepResearchAgent {
 
                 // Se ainda não há URLs disponíveis, tentar responder
                 if new_urls.is_empty() {
-                    log::warn!("⚠️ Nenhuma URL disponível! Tentando gerar resposta...");
+                    let msg = "Nenhuma URL disponível! Tentando gerar resposta...";
+                    log::warn!("⚠️ {}", msg);
+                    self.emit(AgentProgress::Warning(msg.into()));
                     self.context.total_step += 1;
                     // Forçar tentativa de resposta
                     return StepResult::Continue;
                 }
 
+                self.emit(AgentProgress::Info(format!(
+                    "📖 Lendo {} URLs: {}",
+                    new_urls.len(),
+                    new_urls.iter().take(2).cloned().collect::<Vec<_>>().join(", ")
+                )));
                 log::info!(
                     "📖 URLs selecionadas ({} novas): {:?}",
                     new_urls.len(),
@@ -240,6 +308,10 @@ impl DeepResearchAgent {
                 gap_questions,
                 think,
             } => {
+                self.emit(AgentProgress::Info(format!(
+                    "🤔 Refletindo: {} novas perguntas",
+                    gap_questions.len()
+                )));
                 log::debug!("🤔 Gap questions: {:?}", gap_questions);
                 self.execute_reflect(gap_questions, think).await
             }
@@ -248,6 +320,11 @@ impl DeepResearchAgent {
                 references,
                 think,
             } => {
+                self.emit(AgentProgress::Success(format!(
+                    "✍️ Gerando resposta ({} chars, {} refs)",
+                    answer.len(),
+                    references.len()
+                )));
                 log::info!(
                     "✍️ Resposta proposta ({} chars, {} refs)",
                     answer.len(),
