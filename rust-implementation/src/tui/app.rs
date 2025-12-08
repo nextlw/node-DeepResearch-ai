@@ -106,6 +106,103 @@ pub struct SystemMetrics {
     pub cpu_percent: f32,
 }
 
+/// Estado de uma tarefa paralela
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TaskStatus {
+    /// Aguardando início
+    Pending,
+    /// Em execução
+    Running,
+    /// Concluída com sucesso
+    Completed,
+    /// Falhou
+    Failed(String),
+}
+
+/// Método de leitura usado
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ReadMethod {
+    /// Jina API Reader
+    Jina,
+    /// Sistema local (Rust + LLM)
+    RustLocal,
+    /// Leitura de arquivo local
+    FileRead,
+    /// Não especificado
+    Unknown,
+}
+
+impl std::fmt::Display for ReadMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadMethod::Jina => write!(f, "Jina API"),
+            ReadMethod::RustLocal => write!(f, "Rust+LLM"),
+            ReadMethod::FileRead => write!(f, "File"),
+            ReadMethod::Unknown => write!(f, "???"),
+        }
+    }
+}
+
+/// Tarefa paralela sendo monitorada
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParallelTask {
+    /// ID único da tarefa
+    pub id: String,
+    /// ID do batch (agrupa tarefas paralelas)
+    pub batch_id: String,
+    /// Tipo da tarefa (Read, Search, etc)
+    pub task_type: String,
+    /// Descrição/URL sendo processada
+    pub description: String,
+    /// Dados/variáveis alocados
+    pub data_info: String,
+    /// Status atual
+    pub status: TaskStatus,
+    /// Timestamp de início (ms desde epoch)
+    pub started_at: u128,
+    /// Tempo de execução em ms
+    pub elapsed_ms: u128,
+    /// Thread ID (se disponível)
+    pub thread_id: Option<String>,
+    /// Progresso em porcentagem (0-100)
+    #[serde(default)]
+    pub progress: u8,
+    /// Método de leitura usado
+    #[serde(default)]
+    pub read_method: ReadMethod,
+    /// Bytes processados
+    #[serde(default)]
+    pub bytes_processed: usize,
+    /// Total de bytes esperado
+    #[serde(default)]
+    pub bytes_total: usize,
+}
+
+impl Default for ReadMethod {
+    fn default() -> Self {
+        ReadMethod::Unknown
+    }
+}
+
+/// Batch de tarefas paralelas
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParallelBatch {
+    /// ID do batch
+    pub id: String,
+    /// Tipo do batch
+    pub batch_type: String,
+    /// Tarefas no batch
+    pub tasks: Vec<ParallelTask>,
+    /// Timestamp de início
+    pub started_at: u128,
+    /// Tempo total do batch
+    pub total_elapsed_ms: u128,
+    /// Quantas tarefas completaram
+    pub completed: usize,
+    /// Quantas falharam
+    pub failed: usize,
+}
+
 /// Sessão de pesquisa completa (para salvar em JSON)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResearchSession {
@@ -135,6 +232,15 @@ pub struct ResearchSession {
     pub success: bool,
     /// Mensagem de erro (se houver)
     pub error: Option<String>,
+    /// Batches de tarefas paralelas executados
+    #[serde(default)]
+    pub parallel_batches: Vec<ParallelBatch>,
+    /// Todas as tarefas paralelas
+    #[serde(default)]
+    pub all_tasks: Vec<ParallelTask>,
+    /// Steps completados
+    #[serde(default)]
+    pub completed_steps: Vec<CompletedStep>,
 }
 
 /// Estatísticas de tempo da sessão
@@ -216,6 +322,39 @@ pub enum AppEvent {
     Error(String),
     /// Adiciona URL visitada
     AddVisitedUrl(String),
+    /// Inicia um novo batch de tarefas paralelas.
+    ///
+    /// Usado para agrupar múltiplas operações assíncronas que serão
+    /// executadas em paralelo, como buscas em múltiplas URLs ou
+    /// processamento de múltiplos documentos.
+    StartBatch {
+        /// Identificador único do batch
+        batch_id: String,
+        /// Tipo do batch (ex: "search", "read", "process")
+        batch_type: String,
+        /// Número total de tarefas no batch
+        task_count: usize,
+    },
+    /// Atualiza o estado de uma tarefa específica no batch atual.
+    ///
+    /// Permite rastrear o progresso individual de cada tarefa paralela,
+    /// mostrando status como "pending", "running", "completed" ou "failed".
+    UpdateTask(ParallelTask),
+    /// Finaliza um batch de tarefas paralelas.
+    ///
+    /// Marca o término de todas as tarefas do batch, registrando
+    /// estatísticas de execução como tempo total e contagem de
+    /// sucessos/falhas.
+    EndBatch {
+        /// Identificador único do batch sendo finalizado
+        batch_id: String,
+        /// Tempo total de execução do batch em milissegundos
+        total_ms: u128,
+        /// Número de tarefas concluídas com sucesso
+        success_count: usize,
+        /// Número de tarefas que falharam
+        fail_count: usize,
+    },
 }
 
 /// Estado da aplicação
@@ -286,6 +425,29 @@ pub struct App {
     pub history_selected: Option<usize>,
     /// Sessões anteriores carregadas
     pub saved_sessions: Vec<ResearchSession>,
+    /// Batches de tarefas paralelas em andamento
+    pub active_batches: HashMap<String, ParallelBatch>,
+    /// Histórico de batches completados
+    pub completed_batches: Vec<ParallelBatch>,
+    /// Todas as tarefas (para visualização)
+    pub all_tasks: Vec<ParallelTask>,
+    /// Histórico de steps completados
+    pub completed_steps: Vec<CompletedStep>,
+}
+
+/// Step completado para histórico
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletedStep {
+    /// Número do step
+    pub step_num: usize,
+    /// Ação executada
+    pub action: String,
+    /// Raciocínio do agente
+    pub think: String,
+    /// Timestamp de conclusão
+    pub completed_at: String,
+    /// Status de sucesso
+    pub success: bool,
 }
 
 impl Default for App {
@@ -331,6 +493,10 @@ impl App {
             result_scroll: 0,
             history_selected: None,
             saved_sessions: Vec::new(),
+            active_batches: HashMap::new(),
+            completed_batches: Vec::new(),
+            all_tasks: Vec::new(),
+            completed_steps: Vec::new(),
         };
         // Carregar sessões anteriores
         app.load_sessions();
@@ -361,6 +527,10 @@ impl App {
             self.screen = AppScreen::Research;
             self.start_time = Some(Instant::now());
             self.visited_urls.clear();
+            self.completed_steps.clear();
+            self.active_batches.clear();
+            self.completed_batches.clear();
+            self.all_tasks.clear();
             self.logs.push_back(LogEntry::info(format!(
                 "Pesquisa iniciada (ID: {})",
                 &self.session_id[..8]
@@ -382,6 +552,16 @@ impl App {
                 }
             }
             AppEvent::SetStep(step) => {
+                // Se mudou de step, salvar o anterior como completado
+                if step > self.current_step && self.current_step > 0 {
+                    self.completed_steps.push(CompletedStep {
+                        step_num: self.current_step,
+                        action: self.current_action.clone(),
+                        think: self.current_think.clone(),
+                        completed_at: chrono::Local::now().format("%H:%M:%S").to_string(),
+                        success: true,
+                    });
+                }
                 self.current_step = step;
             }
             AppEvent::SetAction(action) => {
@@ -436,6 +616,62 @@ impl App {
             AppEvent::AddVisitedUrl(url) => {
                 if !self.visited_urls.contains(&url) {
                     self.visited_urls.push(url);
+                }
+            }
+            AppEvent::StartBatch { batch_id, batch_type, task_count } => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                let batch = ParallelBatch {
+                    id: batch_id.clone(),
+                    batch_type: batch_type.clone(),
+                    tasks: Vec::with_capacity(task_count),
+                    started_at: now,
+                    total_elapsed_ms: 0,
+                    completed: 0,
+                    failed: 0,
+                };
+                self.active_batches.insert(batch_id.clone(), batch);
+                self.logs.push_back(LogEntry::info(format!(
+                    "⚡ Batch {} iniciado: {} tarefas {}",
+                    &batch_id[..8], task_count, batch_type
+                )));
+            }
+            AppEvent::UpdateTask(task) => {
+                // Atualizar no batch ativo
+                if let Some(batch) = self.active_batches.get_mut(&task.batch_id) {
+                    // Encontrar ou adicionar tarefa
+                    if let Some(existing) = batch.tasks.iter_mut().find(|t| t.id == task.id) {
+                        *existing = task.clone();
+                    } else {
+                        batch.tasks.push(task.clone());
+                    }
+                    // Atualizar contadores
+                    batch.completed = batch.tasks.iter()
+                        .filter(|t| matches!(t.status, TaskStatus::Completed))
+                        .count();
+                    batch.failed = batch.tasks.iter()
+                        .filter(|t| matches!(t.status, TaskStatus::Failed(_)))
+                        .count();
+                }
+                // Atualizar lista geral
+                if let Some(existing) = self.all_tasks.iter_mut().find(|t| t.id == task.id) {
+                    *existing = task;
+                } else {
+                    self.all_tasks.push(task);
+                }
+            }
+            AppEvent::EndBatch { batch_id, total_ms, success_count, fail_count } => {
+                if let Some(mut batch) = self.active_batches.remove(&batch_id) {
+                    batch.total_elapsed_ms = total_ms;
+                    batch.completed = success_count;
+                    batch.failed = fail_count;
+                    self.logs.push_back(LogEntry::success(format!(
+                        "⚡ Batch {} completo: {}ms | ✅{} ❌{}",
+                        &batch_id[..8], total_ms, success_count, fail_count
+                    )));
+                    self.completed_batches.push(batch);
                 }
             }
         }
@@ -674,16 +910,31 @@ impl App {
         self.result_scroll = 0;
         self.history_selected = None;
         self.personas.clear();
+        self.active_batches.clear();
+        self.completed_batches.clear();
+        self.all_tasks.clear();
+        self.completed_steps.clear();
     }
 
     // ─────────────────────────────────────────────────────────────────
     // Persistência de sessões
     // ─────────────────────────────────────────────────────────────────
 
-    /// Retorna o diretório de sessões
+    /// Retorna o diretório de sessões (no projeto)
     fn sessions_dir() -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".deep-research").join("sessions")
+        // Usar CARGO_MANIFEST_DIR em tempo de compilação ou diretório atual
+        let base = option_env!("CARGO_MANIFEST_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        base.join("sessions")
+    }
+
+    /// Retorna o diretório de logs (no projeto)
+    fn logs_dir() -> PathBuf {
+        let base = option_env!("CARGO_MANIFEST_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        base.join("logs")
     }
 
     /// Converte o estado atual para ResearchSession
@@ -712,38 +963,208 @@ impl App {
             },
             success: self.error.is_none() && self.answer.is_some(),
             error: self.error.clone(),
+            parallel_batches: self.completed_batches.clone(),
+            all_tasks: self.all_tasks.clone(),
+            completed_steps: self.completed_steps.clone(),
         }
     }
 
-    /// Salva a sessão atual em arquivo JSON
+    /// Salva a sessão atual em arquivo JSON e logs em TXT
     pub fn save_session(&self) {
         let session = self.to_session();
-        let dir = Self::sessions_dir();
+        let sessions_dir = Self::sessions_dir();
+        let logs_dir = Self::logs_dir();
 
-        // Criar diretório se não existir
-        if let Err(e) = std::fs::create_dir_all(&dir) {
+        // Criar diretórios se não existirem
+        if let Err(e) = std::fs::create_dir_all(&sessions_dir) {
             log::warn!("Falha ao criar diretório de sessões: {}", e);
             return;
         }
+        if let Err(e) = std::fs::create_dir_all(&logs_dir) {
+            log::warn!("Falha ao criar diretório de logs: {}", e);
+        }
 
-        // Nome do arquivo: timestamp_uuid.json
+        // Nome base: timestamp_uuid
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let filename = format!("{}_{}.json", timestamp, &self.session_id[..8]);
-        let filepath = dir.join(&filename);
+        let base_name = format!("{}_{}", timestamp, &self.session_id[..8]);
 
-        // Serializar e salvar
+        // Salvar JSON
+        let json_path = sessions_dir.join(format!("{}.json", base_name));
         match serde_json::to_string_pretty(&session) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&filepath, json) {
-                    log::warn!("Falha ao salvar sessão: {}", e);
+                if let Err(e) = std::fs::write(&json_path, &json) {
+                    log::warn!("Falha ao salvar sessão JSON: {}", e);
                 } else {
-                    log::info!("💾 Sessão salva: {}", filepath.display());
+                    log::info!("💾 Sessão JSON: {}", json_path.display());
                 }
             }
             Err(e) => {
                 log::warn!("Falha ao serializar sessão: {}", e);
             }
         }
+
+        // Salvar logs em TXT
+        let logs_path = logs_dir.join(format!("{}.txt", base_name));
+        let logs_content = self.format_logs_for_txt();
+        if let Err(e) = std::fs::write(&logs_path, &logs_content) {
+            log::warn!("Falha ao salvar logs TXT: {}", e);
+        } else {
+            log::info!("📄 Logs TXT: {}", logs_path.display());
+        }
+    }
+
+    /// Formata logs para arquivo TXT
+    fn format_logs_for_txt(&self) -> String {
+        let mut output = String::new();
+
+        // Header
+        output.push_str("═══════════════════════════════════════════════════════════════════\n");
+        output.push_str(&format!(" DEEP RESEARCH - Session {}\n", &self.session_id[..8]));
+        output.push_str("═══════════════════════════════════════════════════════════════════\n\n");
+
+        output.push_str(&format!("📅 Início: {}\n", self.started_at));
+        output.push_str(&format!("❓ Pergunta: {}\n", self.question));
+        output.push_str(&format!("📊 Steps: {} | URLs: {} | Tokens: {}\n",
+            self.current_step, self.visited_count, self.tokens_used));
+        output.push_str(&format!("⏱️  Tempo: {:.1}s total | {:.1}s busca | {:.1}s leitura | {:.1}s LLM\n\n",
+            self.total_time_ms as f64 / 1000.0,
+            self.search_time_ms as f64 / 1000.0,
+            self.read_time_ms as f64 / 1000.0,
+            self.llm_time_ms as f64 / 1000.0));
+
+        // Logs
+        output.push_str("───────────────────────────────────────────────────────────────────\n");
+        output.push_str(" LOGS\n");
+        output.push_str("───────────────────────────────────────────────────────────────────\n\n");
+
+        for entry in &self.logs {
+            let level_str = match entry.level {
+                LogLevel::Info => "INFO",
+                LogLevel::Success => "OK  ",
+                LogLevel::Warning => "WARN",
+                LogLevel::Error => "ERR ",
+                LogLevel::Debug => "DBG ",
+            };
+            output.push_str(&format!("[{}] {} {}\n", entry.timestamp, level_str, entry.message));
+        }
+
+        // URLs visitadas
+        if !self.visited_urls.is_empty() {
+            output.push_str("\n───────────────────────────────────────────────────────────────────\n");
+            output.push_str(" URLs VISITADAS\n");
+            output.push_str("───────────────────────────────────────────────────────────────────\n\n");
+            for (i, url) in self.visited_urls.iter().enumerate() {
+                output.push_str(&format!("{}. {}\n", i + 1, url));
+            }
+        }
+
+        // Referências
+        if !self.references.is_empty() {
+            output.push_str("\n───────────────────────────────────────────────────────────────────\n");
+            output.push_str(" REFERÊNCIAS\n");
+            output.push_str("───────────────────────────────────────────────────────────────────\n\n");
+            for (i, reference) in self.references.iter().enumerate() {
+                output.push_str(&format!("{}. {}\n", i + 1, reference));
+            }
+        }
+
+        // Resposta
+        if let Some(answer) = &self.answer {
+            output.push_str("\n═══════════════════════════════════════════════════════════════════\n");
+            output.push_str(" RESPOSTA FINAL\n");
+            output.push_str("═══════════════════════════════════════════════════════════════════\n\n");
+            output.push_str(answer);
+            output.push_str("\n");
+        }
+
+        // Steps Completados
+        if !self.completed_steps.is_empty() {
+            output.push_str("\n───────────────────────────────────────────────────────────────────\n");
+            output.push_str(" STEPS EXECUTADOS\n");
+            output.push_str("───────────────────────────────────────────────────────────────────\n\n");
+            for step in &self.completed_steps {
+                let status = if step.success { "✅" } else { "❌" };
+                output.push_str(&format!("{} Step #{} [{}] - {}\n",
+                    status, step.step_num, step.completed_at, step.action));
+                if !step.think.is_empty() {
+                    let think_short = if step.think.len() > 100 {
+                        format!("{}...", &step.think[..100])
+                    } else {
+                        step.think.clone()
+                    };
+                    output.push_str(&format!("   └─ Raciocínio: {}\n", think_short));
+                }
+            }
+        }
+
+        // Personas
+        if !self.personas.is_empty() {
+            output.push_str("\n───────────────────────────────────────────────────────────────────\n");
+            output.push_str(" PERSONAS UTILIZADAS\n");
+            output.push_str("───────────────────────────────────────────────────────────────────\n\n");
+            for (name, stats) in &self.personas {
+                output.push_str(&format!("• {} - Buscas: {} | Leituras: {} | Tokens: {}\n",
+                    name, stats.searches, stats.reads, stats.tokens));
+            }
+        }
+
+        // Batches Paralelos
+        if !self.completed_batches.is_empty() {
+            output.push_str("\n───────────────────────────────────────────────────────────────────\n");
+            output.push_str(" EXECUÇÕES PARALELAS\n");
+            output.push_str("───────────────────────────────────────────────────────────────────\n\n");
+            for batch in &self.completed_batches {
+                output.push_str(&format!("📦 Batch {} [{}]\n", &batch.id[..8], batch.batch_type));
+                output.push_str(&format!("   Tempo total: {}ms | Tarefas: {} | ✅{} ❌{}\n",
+                    batch.total_elapsed_ms, batch.tasks.len(), batch.completed, batch.failed));
+                for task in &batch.tasks {
+                    let status_str = match &task.status {
+                        TaskStatus::Pending => "⏳",
+                        TaskStatus::Running => "🔄",
+                        TaskStatus::Completed => "✅",
+                        TaskStatus::Failed(_) => "❌",
+                    };
+                    output.push_str(&format!("   {} {} | {}ms | {}\n",
+                        status_str, task.task_type, task.elapsed_ms, task.description));
+                    if !task.data_info.is_empty() {
+                        output.push_str(&format!("      └─ Dados: {}\n", task.data_info));
+                    }
+                }
+                output.push_str("\n");
+            }
+        }
+
+        // Todas as Tarefas (detalhado)
+        if !self.all_tasks.is_empty() {
+            output.push_str("\n───────────────────────────────────────────────────────────────────\n");
+            output.push_str(" TODAS AS TAREFAS (DETALHADO)\n");
+            output.push_str("───────────────────────────────────────────────────────────────────\n\n");
+            for task in &self.all_tasks {
+                let status_str = match &task.status {
+                    TaskStatus::Pending => "PEND",
+                    TaskStatus::Running => "RUN ",
+                    TaskStatus::Completed => "OK  ",
+                    TaskStatus::Failed(e) => &format!("FAIL: {}", e),
+                };
+                output.push_str(&format!("[{}] {} | {}ms | Batch: {} | Thread: {}\n",
+                    status_str,
+                    task.task_type,
+                    task.elapsed_ms,
+                    &task.batch_id[..8],
+                    task.thread_id.as_deref().unwrap_or("N/A")
+                ));
+                output.push_str(&format!("    URL: {}\n", task.description));
+                if !task.data_info.is_empty() {
+                    output.push_str(&format!("    Dados: {}\n", task.data_info));
+                }
+            }
+        }
+
+        output.push_str("\n═══════════════════════════════════════════════════════════════════\n");
+        output.push_str(&format!(" FIM - Session {}\n", self.session_id));
+        output.push_str("═══════════════════════════════════════════════════════════════════\n");
+
+        output
     }
 
     /// Carrega sessões anteriores do diretório

@@ -56,6 +56,53 @@ pub enum AgentProgress {
     },
     /// URL visitada com sucesso
     VisitedUrl(String),
+    /// Início de um batch paralelo
+    BatchStart {
+        /// ID único do batch
+        batch_id: String,
+        /// Tipo do batch (ex: "WebRead", "Search")
+        batch_type: String,
+        /// Número de tarefas no batch
+        task_count: usize,
+    },
+    /// Atualização de tarefa paralela
+    TaskUpdate {
+        /// ID único da tarefa
+        task_id: String,
+        /// ID do batch pai
+        batch_id: String,
+        /// Tipo da tarefa
+        task_type: String,
+        /// Descrição/URL
+        description: String,
+        /// Informações sobre dados alocados
+        data_info: String,
+        /// Status: "pending", "running", "completed", "failed:msg"
+        status: String,
+        /// Tempo de execução em ms
+        elapsed_ms: u128,
+        /// ID da thread (se disponível)
+        thread_id: Option<String>,
+        /// Progresso em porcentagem (0-100)
+        progress: u8,
+        /// Método de leitura: "jina", "rust_local", "file", "unknown"
+        read_method: String,
+        /// Bytes processados
+        bytes_processed: usize,
+        /// Total de bytes esperado
+        bytes_total: usize,
+    },
+    /// Fim de um batch paralelo
+    BatchEnd {
+        /// ID do batch finalizado
+        batch_id: String,
+        /// Tempo total em ms
+        total_ms: u128,
+        /// Tarefas bem sucedidas
+        success_count: usize,
+        /// Tarefas que falharam
+        fail_count: usize,
+    },
 }
 
 /// Tipo do callback de progresso
@@ -96,6 +143,8 @@ pub struct DeepResearchAgent {
     rust_wins: usize,
     /// Empates
     ties: usize,
+    /// Idioma das respostas
+    response_language: crate::types::Language,
 }
 
 impl DeepResearchAgent {
@@ -105,6 +154,13 @@ impl DeepResearchAgent {
         search_client: Arc<dyn SearchClient>,
         token_budget: Option<u64>,
     ) -> Self {
+        // Carregar idioma da variável de ambiente
+        let response_language = std::env::var("RESPONSE_LANGUAGE")
+            .map(|s| crate::types::Language::from_str(&s))
+            .unwrap_or(crate::types::Language::Portuguese); // Padrão: Português
+
+        log::info!("🌐 Idioma de resposta: {}", response_language.display_name());
+
         Self {
             state: AgentState::Processing {
                 step: 0,
@@ -126,7 +182,15 @@ impl DeepResearchAgent {
             jina_wins: 0,
             rust_wins: 0,
             ties: 0,
+            response_language,
         }
+    }
+
+    /// Define o idioma das respostas
+    pub fn with_response_language(mut self, language: crate::types::Language) -> Self {
+        self.response_language = language;
+        log::info!("🌐 Idioma de resposta definido: {}", language.display_name());
+        self
     }
 
     /// Configura callback de progresso para updates em tempo real
@@ -379,25 +443,32 @@ impl DeepResearchAgent {
                 references,
                 think,
             } => {
+                // Se LLM não retornou referências, extrair do conhecimento coletado
+                let final_references = if references.is_empty() {
+                    self.extract_references_from_knowledge()
+                } else {
+                    references
+                };
+
                 self.emit(AgentProgress::Success(format!(
                     "✍️ Gerando resposta ({} chars, {} refs)",
                     answer.len(),
-                    references.len()
+                    final_references.len()
                 )));
                 log::info!(
                     "✍️ Resposta proposta ({} chars, {} refs)",
                     answer.len(),
-                    references.len()
+                    final_references.len()
                 );
                 log::info!("💭 Raciocínio: {}", think);
                 log::info!("📝 Resposta:\n{}", answer);
-                if !references.is_empty() {
+                if !final_references.is_empty() {
                     log::info!("📚 Referências:");
-                    for r in &references {
+                    for r in &final_references {
                         log::info!("   - {} ({})", r.title, r.url);
                     }
                 }
-                self.execute_answer(answer, references, think).await
+                self.execute_answer(answer, final_references, think).await
             }
             AgentAction::Coding { code, think } => self.execute_coding(code, think).await,
         }
@@ -444,8 +515,12 @@ impl DeepResearchAgent {
     }
 
     fn build_system_prompt(&self, permissions: &ActionPermissions) -> String {
-        let mut prompt = String::from(
+        let language_instruction = self.response_language.llm_instruction();
+
+        let mut prompt = format!(
             r#"You are a research agent. Your goal is to find accurate information efficiently.
+
+{}
 
 CRITICAL RULES:
 1. NEVER read the same URL twice - pick DIFFERENT URLs from the available list
@@ -455,6 +530,7 @@ CRITICAL RULES:
 
 Available actions:
 "#,
+            language_instruction
         );
 
         if permissions.search {
@@ -605,15 +681,27 @@ Available actions:
     async fn execute_read(&mut self, urls: Vec<Url>, think: String) -> StepResult {
         use crate::utils::{FileReader, FileType};
         use futures::future::join_all;
+        use uuid::Uuid;
 
         let read_timer = ActionTimer::start("Read URLs");
         let urls_to_read: Vec<_> = urls.into_iter().take(MAX_URLS_PER_STEP).collect();
         let num_urls = urls_to_read.len();
 
-        log::info!("📖 Lendo {} URLs em PARALELO...", num_urls);
+        // Gerar batch ID único
+        let batch_id = Uuid::new_v4().to_string();
+        let batch_type = "WebRead".to_string();
+
+        log::info!("📖 Lendo {} URLs em PARALELO (Batch: {})...", num_urls, &batch_id[..8]);
+
+        // Emitir início do batch
+        self.emit(AgentProgress::BatchStart {
+            batch_id: batch_id.clone(),
+            batch_type: batch_type.clone(),
+            task_count: num_urls,
+        });
         self.emit(AgentProgress::Info(format!(
-            "⚡ Iniciando leitura paralela de {} URLs",
-            num_urls
+            "⚡ Batch {} iniciado: {} tarefas paralelas",
+            &batch_id[..8], num_urls
         )));
 
         // Separar URLs de arquivo e URLs web
@@ -644,6 +732,26 @@ Available actions:
         // Ler arquivos em paralelo
         if !file_urls.is_empty() {
             log::info!("📥 Lendo {} arquivos em paralelo...", file_urls.len());
+
+            // Emitir tarefas pendentes
+            for (url, _) in &file_urls {
+                let task_id = Uuid::new_v4().to_string();
+                self.emit(AgentProgress::TaskUpdate {
+                    task_id: task_id.clone(),
+                    batch_id: batch_id.clone(),
+                    task_type: "FileRead".to_string(),
+                    description: url.to_string(),
+                    data_info: "Carregando arquivo...".to_string(),
+                    status: "running".to_string(),
+                    elapsed_ms: 0,
+                    thread_id: Some(format!("{:?}", std::thread::current().id())),
+                    progress: 0,
+                    read_method: "file".to_string(),
+                    bytes_processed: 0,
+                    bytes_total: 0,
+                });
+            }
+
             let file_futures: Vec<_> = file_urls
                 .iter()
                 .map(|(url, _)| file_reader.read_url(url))
@@ -652,6 +760,7 @@ Available actions:
             let file_results = join_all(file_futures).await;
 
             for (result, (url, file_type)) in file_results.into_iter().zip(file_urls.iter()) {
+                let task_id = Uuid::new_v4().to_string();
                 match result {
                     Ok(file_content) => {
                         log::info!(
@@ -659,6 +768,21 @@ Available actions:
                             file_content.word_count,
                             file_content.size_bytes
                         );
+                        // Emitir tarefa completada
+                        self.emit(AgentProgress::TaskUpdate {
+                            task_id: task_id.clone(),
+                            batch_id: batch_id.clone(),
+                            task_type: "FileRead".to_string(),
+                            description: url.to_string(),
+                            data_info: format!("{} palavras | {} bytes", file_content.word_count, file_content.size_bytes),
+                            status: "completed".to_string(),
+                            elapsed_ms: 0,
+                            thread_id: Some(format!("{:?}", std::thread::current().id())),
+                            progress: 100,
+                            read_method: "file".to_string(),
+                            bytes_processed: file_content.size_bytes as usize,
+                            bytes_total: file_content.size_bytes as usize,
+                        });
                         self.context.add_knowledge(KnowledgeItem {
                             question: self.context.current_question().to_string(),
                             answer: file_content.text,
@@ -678,6 +802,21 @@ Available actions:
                     }
                     Err(e) => {
                         log::warn!("❌ Falha ao ler arquivo {}: {}", url, e);
+                        // Emitir tarefa falha
+                        self.emit(AgentProgress::TaskUpdate {
+                            task_id: task_id.clone(),
+                            batch_id: batch_id.clone(),
+                            task_type: "FileRead".to_string(),
+                            description: url.to_string(),
+                            data_info: "Erro na leitura".to_string(),
+                            status: format!("failed:{}", e),
+                            elapsed_ms: 0,
+                            thread_id: Some(format!("{:?}", std::thread::current().id())),
+                            progress: 0,
+                            read_method: "file".to_string(),
+                            bytes_processed: 0,
+                            bytes_total: 0,
+                        });
                         self.context.bad_urls.push(url.clone());
                         error_count += 1;
                     }
@@ -687,6 +826,26 @@ Available actions:
 
         // Ler URLs web em paralelo
         if !web_urls.is_empty() {
+            // Emitir tarefas pendentes para URLs web
+            let read_method_str = if self.enable_comparative_read { "jina+rust" } else { "jina" };
+            for url in &web_urls {
+                let task_id = Uuid::new_v4().to_string();
+                self.emit(AgentProgress::TaskUpdate {
+                    task_id: task_id.clone(),
+                    batch_id: batch_id.clone(),
+                    task_type: "WebRead".to_string(),
+                    description: url.to_string(),
+                    data_info: format!("Iniciando via {}...", read_method_str),
+                    status: "running".to_string(),
+                    elapsed_ms: 0,
+                    thread_id: Some(format!("{:?}", std::thread::current().id())),
+                    progress: 10,
+                    read_method: read_method_str.to_string(),
+                    bytes_processed: 0,
+                    bytes_total: 0,
+                });
+            }
+
             if self.enable_comparative_read {
                 // Modo de comparação: Jina vs Rust local
                 log::info!("🔬 Lendo {} URLs web em modo COMPARATIVO (Jina vs Rust)...", web_urls.len());
@@ -818,6 +977,14 @@ Available actions:
         let read_time = read_timer.stop();
         self.timing_stats.add_read_time(read_time);
 
+        // Emitir fim do batch
+        self.emit(AgentProgress::BatchEnd {
+            batch_id: batch_id.clone(),
+            total_ms: read_time,
+            success_count,
+            fail_count: error_count,
+        });
+
         // Incrementar contador de leituras
         self.read_count += 1;
 
@@ -829,7 +996,8 @@ Available actions:
         };
 
         log::info!(
-            "📖 Leitura PARALELA concluída: {} URLs em {}ms (média: {:.1}ms/URL) | ✅ {} ok | ❌ {} erros",
+            "📖 Batch {} concluído: {} URLs em {}ms (média: {:.1}ms/URL) | ✅ {} ok | ❌ {} erros",
+            &batch_id[..8],
             num_urls,
             read_time,
             avg_time_per_url,
@@ -839,8 +1007,8 @@ Available actions:
 
         // Emitir log detalhado sobre paralelismo
         self.emit(AgentProgress::Success(format!(
-            "⚡ Leitura #{} paralela: {} URLs em {:.2}s ({:.0}ms/URL) | ✅{} ❌{}",
-            self.read_count,
+            "⚡ Batch {} concluído: {} URLs em {:.2}s ({:.0}ms/URL) | ✅{} ❌{}",
+            &batch_id[..8],
             num_urls,
             read_time as f64 / 1000.0,
             avg_time_per_url,
@@ -1121,5 +1289,44 @@ Available actions:
     async fn execute_sandbox(&self, _code: &str) -> Result<String, AgentError> {
         // Implementação de sandbox
         Ok("Sandbox output".into())
+    }
+
+    /// Extrai referências do conhecimento coletado
+    fn extract_references_from_knowledge(&self) -> Vec<Reference> {
+        use std::collections::HashSet;
+
+        let mut seen_urls = HashSet::new();
+        let mut refs = Vec::new();
+
+        // Extrair referências do conhecimento (KnowledgeItem)
+        for item in &self.context.knowledge {
+            if item.item_type == KnowledgeType::Url {
+                for reference in &item.references {
+                    if !reference.url.is_empty() && !seen_urls.contains(&reference.url) {
+                        seen_urls.insert(reference.url.clone());
+                        refs.push(reference.clone());
+                    }
+                }
+            }
+        }
+
+        // Se ainda não temos referências, usar URLs visitadas
+        if refs.is_empty() {
+            for url in &self.context.visited_urls {
+                let url_str = url.to_string();
+                if !seen_urls.contains(&url_str) {
+                    seen_urls.insert(url_str.clone());
+                    refs.push(Reference {
+                        url: url_str,
+                        title: "Fonte visitada".to_string(),
+                        exact_quote: None,
+                        relevance_score: None,
+                    });
+                }
+            }
+        }
+
+        log::info!("📚 Extraídas {} referências do conhecimento", refs.len());
+        refs
     }
 }
