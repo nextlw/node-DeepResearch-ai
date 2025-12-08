@@ -483,7 +483,7 @@ Available actions:
             .join("\n\n")
     }
 
-    /// Executa ação de busca
+    /// Executa ação de busca (em paralelo)
     async fn execute_search(&mut self, queries: Vec<SerpQuery>, think: String) -> StepResult {
         use crate::personas::PersonaOrchestrator;
         let search_timer = ActionTimer::start("Search");
@@ -501,14 +501,33 @@ Available actions:
             .dedup_queries(expanded.iter().map(|wq| wq.query.clone()).collect())
             .await;
 
+        let num_queries = unique.len();
+        log::info!("🔍 Executando {} buscas em PARALELO...", num_queries);
+        self.emit(AgentProgress::Info(format!(
+            "⚡ Iniciando {} buscas paralelas",
+            num_queries
+        )));
+
         // Executar buscas em paralelo
         let results = self.search_client.search_batch(&unique).await;
 
+        // Contar sucessos e erros
+        let mut success_count = 0;
+        let mut error_count = 0;
+        let mut total_urls = 0;
+
         // Adicionar URLs ao contexto
         for result in results {
-            if let Ok(r) = result {
-                self.context.add_urls(r.urls);
-                self.context.add_snippets(r.snippets);
+            match result {
+                Ok(r) => {
+                    total_urls += r.urls.len();
+                    self.context.add_urls(r.urls);
+                    self.context.add_snippets(r.snippets);
+                    success_count += 1;
+                }
+                Err(_) => {
+                    error_count += 1;
+                }
             }
         }
 
@@ -518,17 +537,33 @@ Available actions:
         // Incrementar contador de buscas
         self.search_count += 1;
 
+        // Calcular tempo médio por query (demonstra eficiência do paralelismo)
+        let avg_time_per_query = if num_queries > 0 {
+            search_time as f64 / num_queries as f64
+        } else {
+            0.0
+        };
+
         log::info!(
-            "🔍 Busca concluída: {} URLs encontradas ({}ms)",
-            self.context.collected_urls.len(),
-            search_time
+            "🔍 Busca PARALELA concluída: {} queries em {}ms (média: {:.1}ms/query) | {} URLs encontradas | ✅ {} ok | ❌ {} erros",
+            num_queries,
+            search_time,
+            avg_time_per_query,
+            total_urls,
+            success_count,
+            error_count
         );
 
-        // Emitir log e atualizar persona
+        // Emitir log detalhado sobre paralelismo
         self.emit(AgentProgress::Success(format!(
-            "🔍 Busca #{}: {} URLs encontradas",
+            "⚡ Busca #{} paralela: {} queries em {:.2}s ({:.0}ms/q) | {} URLs | ✅{} ❌{}",
             self.search_count,
-            self.context.collected_urls.len()
+            num_queries,
+            search_time as f64 / 1000.0,
+            avg_time_per_query,
+            total_urls,
+            success_count,
+            error_count
         )));
         self.emit_persona_stats(true);
 
@@ -543,16 +578,27 @@ Available actions:
         StepResult::Continue
     }
 
-    /// Executa ação de leitura de URL
+    /// Executa ação de leitura de URL (em paralelo)
     async fn execute_read(&mut self, urls: Vec<Url>, think: String) -> StepResult {
         use crate::utils::{FileReader, FileType};
+        use futures::future::join_all;
 
         let read_timer = ActionTimer::start("Read URLs");
-        log::info!("📖 Lendo {} URLs...", urls.len().min(MAX_URLS_PER_STEP));
-        let file_reader = FileReader::new();
+        let urls_to_read: Vec<_> = urls.into_iter().take(MAX_URLS_PER_STEP).collect();
+        let num_urls = urls_to_read.len();
 
-        for url in urls.iter().take(MAX_URLS_PER_STEP) {
-            // Detectar se é arquivo para download direto (PDF, JSON, etc.)
+        log::info!("📖 Lendo {} URLs em PARALELO...", num_urls);
+        self.emit(AgentProgress::Info(format!(
+            "⚡ Iniciando leitura paralela de {} URLs",
+            num_urls
+        )));
+
+        // Separar URLs de arquivo e URLs web
+        let file_reader = FileReader::new();
+        let mut file_urls = Vec::new();
+        let mut web_urls = Vec::new();
+
+        for url in &urls_to_read {
             let file_type = FileType::from_url(url);
             let is_file = matches!(
                 file_type,
@@ -562,18 +608,34 @@ Available actions:
                     | FileType::Text
                     | FileType::Markdown
             );
-
             if is_file {
-                // Usar FileReader para arquivos
-                log::info!("📥 Detectado arquivo {:?}: {}", file_type, url);
-                match file_reader.read_url(url).await {
+                file_urls.push((url.clone(), file_type));
+            } else {
+                web_urls.push(url.clone());
+            }
+        }
+
+        let mut success_count = 0;
+        let mut error_count = 0;
+
+        // Ler arquivos em paralelo
+        if !file_urls.is_empty() {
+            log::info!("📥 Lendo {} arquivos em paralelo...", file_urls.len());
+            let file_futures: Vec<_> = file_urls
+                .iter()
+                .map(|(url, _)| file_reader.read_url(url))
+                .collect();
+
+            let file_results = join_all(file_futures).await;
+
+            for (result, (url, file_type)) in file_results.into_iter().zip(file_urls.iter()) {
+                match result {
                     Ok(file_content) => {
                         log::info!(
                             "✅ Arquivo lido: {} palavras | {} bytes",
                             file_content.word_count,
                             file_content.size_bytes
                         );
-
                         self.context.add_knowledge(KnowledgeItem {
                             question: self.context.current_question().to_string(),
                             answer: file_content.text,
@@ -588,15 +650,24 @@ Available actions:
                             }],
                         });
                         self.context.visited_urls.push(url.clone());
+                        success_count += 1;
                     }
                     Err(e) => {
                         log::warn!("❌ Falha ao ler arquivo {}: {}", url, e);
                         self.context.bad_urls.push(url.clone());
+                        error_count += 1;
                     }
                 }
-            } else {
-                // Usar Jina Reader para páginas web
-                match self.search_client.read_url(url).await {
+            }
+        }
+
+        // Ler URLs web em paralelo usando read_urls_batch
+        if !web_urls.is_empty() {
+            log::info!("🌐 Lendo {} URLs web em paralelo...", web_urls.len());
+            let web_results = self.search_client.read_urls_batch(&web_urls).await;
+
+            for (result, url) in web_results.into_iter().zip(web_urls.iter()) {
+                match result {
                     Ok(content) => {
                         self.context.add_knowledge(KnowledgeItem {
                             question: self.context.current_question().to_string(),
@@ -610,10 +681,12 @@ Available actions:
                             }],
                         });
                         self.context.visited_urls.push(url.clone());
+                        success_count += 1;
                     }
                     Err(e) => {
-                        log::warn!("Failed to read URL {}: {}", url, e);
+                        log::warn!("❌ Falha ao ler URL {}: {}", url, e);
                         self.context.bad_urls.push(url.clone());
+                        error_count += 1;
                     }
                 }
             }
@@ -625,18 +698,36 @@ Available actions:
         // Incrementar contador de leituras
         self.read_count += 1;
 
-        log::info!("📖 Leitura concluída ({}ms)", read_time);
+        // Calcular tempo médio por URL (demonstra eficiência do paralelismo)
+        let avg_time_per_url = if num_urls > 0 {
+            read_time as f64 / num_urls as f64
+        } else {
+            0.0
+        };
 
-        // Emitir log e atualizar persona
+        log::info!(
+            "📖 Leitura PARALELA concluída: {} URLs em {}ms (média: {:.1}ms/URL) | ✅ {} ok | ❌ {} erros",
+            num_urls,
+            read_time,
+            avg_time_per_url,
+            success_count,
+            error_count
+        );
+
+        // Emitir log detalhado sobre paralelismo
         self.emit(AgentProgress::Success(format!(
-            "📖 Leitura #{}: {} URLs processadas",
+            "⚡ Leitura #{} paralela: {} URLs em {:.2}s ({:.0}ms/URL) | ✅{} ❌{}",
             self.read_count,
-            urls.len().min(MAX_URLS_PER_STEP)
+            num_urls,
+            read_time as f64 / 1000.0,
+            avg_time_per_url,
+            success_count,
+            error_count
         )));
         self.emit_persona_stats(true);
 
         self.context.diary.push(DiaryEntry::Read {
-            urls: urls.clone(),
+            urls: urls_to_read.clone(),
             think,
         });
 
