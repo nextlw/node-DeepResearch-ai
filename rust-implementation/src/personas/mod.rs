@@ -57,17 +57,53 @@ pub struct WeightedQuery {
 
 /// Funções auxiliares para extração de tópico
 pub fn extract_main_topic(query: &str) -> String {
-    // Implementação simplificada - remove stop words e extrai substantivos principais
+    // Remove stop words preservando o contexto completo da query
+    // NÃO limita o número de palavras para manter a semântica intacta
     let stop_words = [
-        "the", "a", "an", "is", "are", "was", "were", "what", "how", "why", "when", "where",
+        // Inglês - artigos e pronomes
+        "the", "a", "an", "this", "that", "these", "those",
+        // Inglês - verbos auxiliares
+        "is", "are", "was", "were", "be", "been", "being",
+        "do", "does", "did", "have", "has", "had",
+        "will", "would", "could", "should", "can", "may", "might",
+        // Inglês - interrogativos
+        "what", "how", "why", "when", "where", "which", "who", "whom",
+        // Inglês - preposições comuns no início
+        "to", "for", "of", "in", "on", "at", "by", "with",
+        // Inglês - outros
+        "i", "me", "my", "you", "your", "we", "our", "it", "its",
+        "please", "tell", "explain", "describe", "show",
+        // Português - artigos
+        "o", "a", "os", "as", "um", "uma", "uns", "umas",
+        // Português - verbos auxiliares
+        "é", "são", "foi", "foram", "ser", "estar", "está", "estão",
+        // Português - interrogativos
+        "que", "qual", "quais", "como", "porque", "por", "onde", "quando", "quem",
+        // Português - preposições
+        "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas",
+        "para", "com", "sem", "sobre",
+        // Português - outros
+        "eu", "me", "meu", "minha", "você", "seu", "sua",
+        "por favor", "explique", "descreva", "mostre",
     ];
 
-    query
+    let result: String = query
         .split_whitespace()
-        .filter(|word| !stop_words.contains(&word.to_lowercase().as_str()))
-        .take(3)
+        .filter(|word| {
+            let lower = word.to_lowercase();
+            // Remove pontuação para comparação
+            let clean: &str = lower.trim_matches(|c: char| !c.is_alphanumeric());
+            !stop_words.contains(&clean)
+        })
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" ");
+    
+    // Se a filtragem removeu tudo, retorna a query original sem stop words iniciais
+    if result.is_empty() {
+        query.to_string()
+    } else {
+        result
+    }
 }
 
 /// Nega uma suposição (para Reality Skepticalist)
@@ -120,10 +156,53 @@ mod tests {
 
     #[test]
     fn test_extract_main_topic() {
+        // Teste básico - remove stop words
         let topic = extract_main_topic("What is the best programming language");
         assert!(!topic.contains("what"));
         assert!(!topic.contains("is"));
         assert!(!topic.contains("the"));
+        assert!(topic.contains("best"));
+        assert!(topic.contains("programming"));
+        assert!(topic.contains("language"));
+    }
+
+    #[test]
+    fn test_extract_main_topic_preserves_context() {
+        // Teste crítico: NÃO deve cortar a query!
+        let topic = extract_main_topic("What is the best programming language for web development in 2024");
+        assert!(topic.contains("best"));
+        assert!(topic.contains("programming"));
+        assert!(topic.contains("language"));
+        assert!(topic.contains("web"));
+        assert!(topic.contains("development"));
+        assert!(topic.contains("2024"));
+    }
+
+    #[test]
+    fn test_extract_main_topic_portuguese() {
+        let topic = extract_main_topic("Qual é a melhor linguagem de programação para iniciantes");
+        assert!(topic.contains("melhor"));
+        assert!(topic.contains("linguagem"));
+        assert!(topic.contains("programação"));
+        assert!(topic.contains("iniciantes"));
+        // Stop words removidas
+        assert!(!topic.to_lowercase().contains("qual"));
+        assert!(!topic.to_lowercase().contains(" é "));
+    }
+
+    #[test]
+    fn test_extract_main_topic_long_query() {
+        // Query longa não deve ser cortada
+        let topic = extract_main_topic("How to implement authentication with OAuth2 and JWT tokens in a React application with Node.js backend");
+        assert!(topic.contains("implement"));
+        assert!(topic.contains("authentication"));
+        assert!(topic.contains("OAuth2"));
+        assert!(topic.contains("JWT"));
+        assert!(topic.contains("tokens"));
+        assert!(topic.contains("React"));
+        assert!(topic.contains("application"));
+        assert!(topic.contains("Node.js"));
+        assert!(topic.contains("backend"));
     }
 
     #[test]

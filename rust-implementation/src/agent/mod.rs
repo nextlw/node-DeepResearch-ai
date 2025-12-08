@@ -23,7 +23,8 @@ use std::sync::Arc;
 const MAX_QUERIES_PER_STEP: usize = 5;
 /// Máximo de URLs por passo
 const MAX_URLS_PER_STEP: usize = 5;
-/// Máximo de steps antes de forçar resposta
+/// Máximo de steps antes de forçar resposta (reservado para expansão futura)
+#[allow(dead_code)]
 const MAX_STEPS_BEFORE_ANSWER: usize = 15;
 
 /// Agente principal de pesquisa profunda
@@ -32,6 +33,7 @@ pub struct DeepResearchAgent {
     context: AgentContext,
     llm_client: Arc<dyn LlmClient>,
     search_client: Arc<dyn SearchClient>,
+    /// Rastreador de tokens para controle de budget
     token_tracker: TokenTracker,
     timing_stats: TimingStats,
     start_time: std::time::Instant,
@@ -143,6 +145,10 @@ impl DeepResearchAgent {
 
         // 3. Gerar prompt e obter decisão do LLM (com timing)
         let prompt = self.build_prompt(&permissions, &current_question);
+        
+        // Capturar tokens antes da chamada
+        let tokens_before = self.llm_client.get_total_tokens();
+        
         let llm_timer = ActionTimer::start("LLM decide_action");
         let action = match self.llm_client.decide_action(&prompt, &permissions).await {
             Ok(a) => a,
@@ -150,7 +156,26 @@ impl DeepResearchAgent {
         };
         let llm_time = llm_timer.stop();
         self.timing_stats.add_llm_time(llm_time);
-        log::debug!("⏱️  LLM decision: {}ms", llm_time);
+        
+        // Rastrear tokens usados nesta operação
+        let tokens_after = self.llm_client.get_total_tokens();
+        let prompt_used = self.llm_client.get_prompt_tokens().saturating_sub(tokens_before);
+        let completion_used = tokens_after.saturating_sub(tokens_before).saturating_sub(prompt_used);
+        self.token_tracker.track(
+            self.context.total_step,
+            &format!("decide_action:{}", action.name()),
+            prompt_used,
+            completion_used,
+        );
+        
+        // Atualizar budget_used no estado
+        self.update_budget_used();
+        
+        log::debug!("⏱️  LLM decision: {}ms | 🎟️ Tokens: {} ({:.1}% budget)", 
+            llm_time, 
+            tokens_after - tokens_before,
+            self.token_tracker.budget_used_percentage() * 100.0
+        );
 
         log::info!(
             "📍 Step {} | Action: {} | Think: {}",

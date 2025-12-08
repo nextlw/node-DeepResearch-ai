@@ -287,11 +287,19 @@ mod tests {
         // Mesmo número de resultados
         assert_eq!(sequential.len(), parallel.len());
 
-        // Mesmas queries (ordem pode variar devido ao paralelismo)
-        let seq_queries: std::collections::HashSet<_> =
-            sequential.iter().map(|wq| &wq.query.q).collect();
-        let par_queries: std::collections::HashSet<_> =
-            parallel.iter().map(|wq| &wq.query.q).collect();
-        assert_eq!(seq_queries, par_queries);
+        // Mesmas fontes de persona (a query pode variar devido à aleatoriedade do ExpertSkeptic)
+        let seq_sources: std::collections::HashSet<_> =
+            sequential.iter().map(|wq| wq.source_persona).collect();
+        let par_sources: std::collections::HashSet<_> =
+            parallel.iter().map(|wq| wq.source_persona).collect();
+        assert_eq!(seq_sources, par_sources);
+        
+        // Verifica que todas as queries não estão vazias
+        for wq in &sequential {
+            assert!(!wq.query.q.is_empty(), "Query não deve estar vazia");
+        }
+        for wq in &parallel {
+            assert!(!wq.query.q.is_empty(), "Query não deve estar vazia");
+        }
     }
 }

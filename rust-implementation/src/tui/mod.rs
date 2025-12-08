@@ -28,5 +28,5 @@ mod runner;
 pub mod ui;
 
 pub use agent_adapter::AgentTuiAdapter;
-pub use app::{App, AppEvent, LogEntry, LogLevel};
+pub use app::{App, AppEvent, AppScreen, LogEntry, LogLevel, PersonaStats, SystemMetrics};
 pub use runner::{create_event_channel, run_tui, TuiLogger};

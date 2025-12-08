@@ -24,7 +24,7 @@ pub fn run_tui(question: String, event_rx: Receiver<AppEvent>) -> io::Result<App
     let mut terminal = Terminal::new(backend)?;
 
     // Criar app
-    let mut app = App::new(question);
+    let mut app = App::with_question(question);
 
     // Loop principal
     let result = run_app(&mut terminal, &mut app, event_rx);
