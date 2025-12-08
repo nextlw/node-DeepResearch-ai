@@ -95,53 +95,71 @@ pub fn create_event_channel() -> (Sender<AppEvent>, Receiver<AppEvent>) {
     mpsc::channel()
 }
 
-/// Wrapper para enviar logs formatados
+/// Wrapper para enviar logs e eventos formatados para a TUI.
+///
+/// Encapsula o canal de comunicação com a interface gráfica,
+/// fornecendo métodos convenientes para diferentes tipos de log.
 pub struct TuiLogger {
     tx: Sender<AppEvent>,
 }
 
 impl TuiLogger {
+    /// Cria um novo logger para a TUI.
+    ///
+    /// # Argumentos
+    ///
+    /// * `tx` - Canal de envio para eventos da aplicação
     pub fn new(tx: Sender<AppEvent>) -> Self {
         Self { tx }
     }
 
+    /// Envia uma mensagem informativa (azul).
     pub fn info(&self, msg: impl Into<String>) {
         let _ = self.tx.send(AppEvent::Log(LogEntry::info(msg)));
     }
 
+    /// Envia uma mensagem de sucesso (verde).
     pub fn success(&self, msg: impl Into<String>) {
         let _ = self.tx.send(AppEvent::Log(LogEntry::success(msg)));
     }
 
+    /// Envia uma mensagem de aviso (amarelo).
     pub fn warning(&self, msg: impl Into<String>) {
         let _ = self.tx.send(AppEvent::Log(LogEntry::warning(msg)));
     }
 
+    /// Envia uma mensagem de erro (vermelho).
     pub fn error(&self, msg: impl Into<String>) {
         let _ = self.tx.send(AppEvent::Log(LogEntry::error(msg)));
     }
 
+    /// Define o passo atual da pesquisa.
     pub fn set_step(&self, step: usize) {
         let _ = self.tx.send(AppEvent::SetStep(step));
     }
 
+    /// Define a ação atual sendo executada.
     pub fn set_action(&self, action: impl Into<String>) {
         let _ = self.tx.send(AppEvent::SetAction(action.into()));
     }
 
+    /// Define o pensamento/raciocínio atual do agente.
     pub fn set_think(&self, think: impl Into<String>) {
         let _ = self.tx.send(AppEvent::SetThink(think.into()));
     }
 
+    /// Atualiza contadores de URLs (total e visitadas).
     pub fn set_urls(&self, total: usize, visited: usize) {
         let _ = self.tx.send(AppEvent::SetUrlCount(total));
         let _ = self.tx.send(AppEvent::SetVisitedCount(visited));
     }
 
+    /// Atualiza o contador de tokens consumidos.
     pub fn set_tokens(&self, tokens: u64) {
         let _ = self.tx.send(AppEvent::SetTokens(tokens));
     }
 
+    /// Marca a pesquisa como completa com resposta e referências.
     pub fn complete(&self, answer: String, references: Vec<String>) {
         let _ = self.tx.send(AppEvent::SetAnswer(answer));
         let _ = self.tx.send(AppEvent::SetReferences(references));

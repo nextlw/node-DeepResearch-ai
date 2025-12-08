@@ -124,11 +124,14 @@ pub struct ComparativeReadResult {
     pub faster: ReadMethod,
 }
 
-/// Método de leitura
+/// Método de leitura utilizado para extração de conteúdo de URLs.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReadMethod {
+    /// Jina Reader API - extração especializada via API externa
     Jina,
+    /// Rust local + processamento LLM - download direto e parsing local
     RustLocal,
+    /// Empate - ambos métodos tiveram performance similar
     Tie,
 }
 

@@ -473,9 +473,9 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),   // Header
-            Constraint::Min(10),     // Resposta
-            Constraint::Length(8),   // Referências
-            Constraint::Length(3),   // Stats finais
+            Constraint::Min(8),      // Resposta
+            Constraint::Length(7),   // Referências
+            Constraint::Length(6),   // Stats finais (aumentado)
             Constraint::Length(2),   // Ajuda
         ])
         .margin(1)
@@ -537,26 +537,46 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     );
     frame.render_widget(refs, chunks[2]);
 
-    // Stats finais
-    let stats = Paragraph::new(Line::from(vec![
-        Span::styled(" ⏱️  ", Style::default().fg(Color::Yellow)),
-        Span::raw(format!("{:.2}s", app.elapsed_secs())),
-        Span::raw("  │  "),
-        Span::styled("🎫 ", Style::default().fg(Color::Magenta)),
-        Span::raw(format!("{} tokens", app.tokens_used)),
-        Span::raw("  │  "),
-        Span::styled("🔗 ", Style::default().fg(Color::Cyan)),
-        Span::raw(format!("{} URLs", app.visited_count)),
-        Span::raw("  │  "),
-        Span::styled("📊 ", Style::default().fg(Color::Green)),
-        Span::raw(format!("{} steps", app.current_step)),
-    ]))
-    .alignment(ratatui::layout::Alignment::Center)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
+    // Stats finais (com tempos detalhados)
+    let stats_text = Text::from(vec![
+        // Linha 1: Tokens e URLs
+        Line::from(vec![
+            Span::styled(" 🎫 ", Style::default().fg(Color::Magenta)),
+            Span::raw(format!("{} tokens", app.tokens_used)),
+            Span::raw("  │  "),
+            Span::styled("🔗 ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{} URLs visitadas", app.visited_count)),
+            Span::raw("  │  "),
+            Span::styled("📊 ", Style::default().fg(Color::Green)),
+            Span::raw(format!("{} steps", app.current_step)),
+        ]),
+        // Linha 2: Tempos detalhados
+        Line::from(vec![
+            Span::styled(" ⏱️  Total: ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("{:.2}s", app.total_time_ms as f64 / 1000.0),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  │  "),
+            Span::styled("🔍 Busca: ", Style::default().fg(Color::Blue)),
+            Span::raw(format!("{:.2}s", app.search_time_ms as f64 / 1000.0)),
+            Span::raw("  │  "),
+            Span::styled("📖 Leitura: ", Style::default().fg(Color::Green)),
+            Span::raw(format!("{:.2}s", app.read_time_ms as f64 / 1000.0)),
+            Span::raw("  │  "),
+            Span::styled("🤖 LLM: ", Style::default().fg(Color::Magenta)),
+            Span::raw(format!("{:.2}s", app.llm_time_ms as f64 / 1000.0)),
+        ]),
+    ]);
+
+    let stats = Paragraph::new(stats_text)
+        .alignment(ratatui::layout::Alignment::Center)
+        .block(
+            Block::default()
+                .title(" 📊 Estatísticas Finais ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        );
     frame.render_widget(stats, chunks[3]);
 
     // Ajuda

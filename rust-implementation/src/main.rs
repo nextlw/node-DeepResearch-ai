@@ -610,6 +610,14 @@ fn spawn_research_task(
         let _ = tx.send(AppEvent::SetVisitedCount(result.visited_urls.len()));
         let _ = tx.send(AppEvent::SetTokens(result.token_usage.total_tokens));
 
+        // Enviar tempos detalhados
+        let _ = tx.send(AppEvent::SetTimes {
+            total_ms: result.total_time_ms,
+            search_ms: result.search_time_ms,
+            read_ms: result.read_time_ms,
+            llm_ms: result.llm_time_ms,
+        });
+
         // Enviar resultado
         if result.success {
             if let Some(ref answer) = result.answer {

@@ -138,6 +138,17 @@ pub enum AppEvent {
     UpdateMetrics(SystemMetrics),
     /// Atualiza stats de persona
     UpdatePersona(PersonaStats),
+    /// Define tempos detalhados (total, search, read, llm) em ms
+    SetTimes {
+        /// Tempo total de execução em milissegundos
+        total_ms: u128,
+        /// Tempo gasto em buscas em milissegundos
+        search_ms: u128,
+        /// Tempo gasto em leituras em milissegundos
+        read_ms: u128,
+        /// Tempo gasto em chamadas LLM em milissegundos
+        llm_ms: u128,
+    },
     /// Pesquisa concluída
     Complete,
     /// Erro fatal
@@ -180,6 +191,14 @@ pub struct App {
     pub start_time: Option<Instant>,
     /// Tempo final (congelado quando completa)
     pub final_elapsed_secs: Option<f64>,
+    /// Tempo total em ms
+    pub total_time_ms: u128,
+    /// Tempo de busca em ms
+    pub search_time_ms: u128,
+    /// Tempo de leitura em ms
+    pub read_time_ms: u128,
+    /// Tempo de LLM em ms
+    pub llm_time_ms: u128,
     /// Scroll position dos logs
     pub log_scroll: usize,
     /// Se deve sair
@@ -221,6 +240,10 @@ impl App {
             error: None,
             start_time: None,
             final_elapsed_secs: None,
+            total_time_ms: 0,
+            search_time_ms: 0,
+            read_time_ms: 0,
+            llm_time_ms: 0,
             log_scroll: 0,
             should_quit: false,
             metrics: SystemMetrics::default(),
@@ -294,6 +317,12 @@ impl App {
             }
             AppEvent::UpdatePersona(stats) => {
                 self.personas.insert(stats.name.clone(), stats);
+            }
+            AppEvent::SetTimes { total_ms, search_ms, read_ms, llm_ms } => {
+                self.total_time_ms = total_ms;
+                self.search_time_ms = search_ms;
+                self.read_time_ms = read_ms;
+                self.llm_time_ms = llm_ms;
             }
             AppEvent::Complete => {
                 self.is_complete = true;
@@ -463,6 +492,10 @@ impl App {
         self.error = None;
         self.start_time = None;
         self.final_elapsed_secs = None;
+        self.total_time_ms = 0;
+        self.search_time_ms = 0;
+        self.read_time_ms = 0;
+        self.llm_time_ms = 0;
         self.log_scroll = 0;
         self.personas.clear();
     }

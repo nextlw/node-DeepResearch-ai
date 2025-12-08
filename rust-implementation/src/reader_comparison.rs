@@ -10,9 +10,10 @@
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
-/// Resultado de uma leitura comparativa
+/// Resultado de uma leitura comparativa entre Jina e Rust+OpenAI.
 #[derive(Debug, Clone)]
 pub struct ComparisonResult {
+    /// URL que foi processada
     pub url: String,
     /// Resultado do Jina Reader
     pub jina: Option<ReaderResult>,
@@ -24,14 +25,20 @@ pub struct ComparisonResult {
     pub time_diff_ms: i128,
 }
 
-/// Resultado individual de um reader
+/// Resultado individual de um reader.
 #[derive(Debug, Clone)]
 pub struct ReaderResult {
+    /// Título extraído da página
     pub title: String,
+    /// Conteúdo textual extraído
     pub content: String,
+    /// Contagem de palavras no conteúdo
     pub word_count: usize,
+    /// Tempo de processamento em milissegundos
     pub time_ms: u128,
+    /// Identificador do método usado (ex: "jina", "rust+openai")
     pub source: String,
+    /// Mensagem de erro, se ocorreu falha
     pub error: Option<String>,
 }
 
@@ -43,6 +50,12 @@ pub struct ReaderComparison {
 }
 
 impl ReaderComparison {
+    /// Cria uma nova instância do comparador de readers.
+    ///
+    /// # Argumentos
+    ///
+    /// * `jina_api_key` - Chave da API Jina para extração de conteúdo
+    /// * `openai_api_key` - Chave da API OpenAI para processamento LLM
     pub fn new(jina_api_key: String, openai_api_key: String) -> Self {
         Self {
             jina_api_key,

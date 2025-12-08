@@ -41,11 +41,17 @@ pub enum AgentProgress {
     Tokens(u64),
     /// Atualiza stats de persona (nome, searches, reads, answers, tokens, is_active)
     Persona {
+        /// Nome da persona ativa
         name: String,
+        /// Número de buscas realizadas
         searches: usize,
+        /// Número de leituras realizadas
         reads: usize,
+        /// Número de respostas geradas
         answers: usize,
+        /// Total de tokens consumidos
         tokens: u64,
+        /// Se a persona está ativa no momento
         is_active: bool,
     },
 }
