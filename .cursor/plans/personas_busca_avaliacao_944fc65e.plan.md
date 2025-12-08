@@ -1,24 +1,35 @@
-- id: setup-person-2
-  content: Configurar ambiente local para Pessoa 2 (Personas/Busca) e rodar benchmarks de personas
-  status: pending
-- id: setup-person-3
-  content: Configurar ambiente local para Pessoa 3 (Performance) e rodar bench E2E para baseline
-  status: pending
-
 ---
-
-# Plano de Testes Distribuídos: DeepResearch AI (Rust)
-
-Objetivo - micro passos
-Quais testes vão ser necessários
-Evidências - estabalecer as evidências necessárias
-comparação de benchmark com antes e depois
-
-## 👥 Divisão de Responsabilidades
-
-### 👤 Pessoa 2: Personas, Busca e Avaliação (Domínio)
-
-**Foco:** Garantir que as diferentes personalidades (Research, Academic, etc.) se comportem como esperado, que a busca retorne resultados relevantes e que o sistema de avaliação julgue corretamente as respostas.
+name: Personas Busca Avaliacao
+overview: Plano detalhado para implementar e provar que o sistema de Personas, Busca e Avaliação funciona em Rust, com micro-passos, testes, evidências e comparação com TypeScript.
+todos:
+  - id: define-persona-metrics
+    content: Criar struct PersonaExecutionMetrics e modificar trait CognitivePersona para rastrear execuções
+    status: pending
+  - id: impl-persona-registry
+    content: Implementar PersonaRegistry para registro dinâmico de personas com validação
+    status: pending
+  - id: impl-search-trace
+    content: Criar SearchTrace e modificar SearchClient para rastrear fluxo de dados
+    status: pending
+  - id: impl-eval-trace
+    content: Criar EvaluationTrace e modificar EvaluationPipeline para coleta de métricas
+    status: pending
+  - id: port-eval-prompts
+    content: Portar prompts de avaliação do TypeScript (definitive, freshness, completeness, plurality)
+    status: pending
+  - id: impl-evidence-reports
+    content: Criar structs de evidência (PersonaEvidence, SearchEvidence, EvaluationEvidence)
+    status: pending
+  - id: add-unit-tests
+    content: Adicionar testes unitários para todas as funcionalidades novas
+    status: pending
+  - id: add-integration-tests
+    content: Criar testes de integração persona->search->evaluation
+    status: pending
+  - id: create-comparison-tool
+    content: Criar ferramenta para gerar relatório de comparação TS vs Rust
+    status: pending
+---
 
 # Plano: Sistema de Personas, Busca e Avaliacao (Pessoa 2)
 
@@ -66,7 +77,6 @@ Criar um sistema de raciocinio passo a passo que seja:
 **Passos:**
 
 1. Criar `PersonaRegistry` em `src/personas/mod.rs`:
-
    ```rust
    pub struct PersonaRegistry {
        personas: HashMap<String, PersonaBox>,
@@ -105,7 +115,6 @@ Criar um sistema de raciocinio passo a passo que seja:
 **Passos:**
 
 1. Criar `SearchTrace`:
-
    ```rust
    pub struct SearchTrace {
        pub trace_id: Uuid,
@@ -162,7 +171,6 @@ Criar um sistema de raciocinio passo a passo que seja:
 **Passos:**
 
 1. Criar `EvaluationTrace`:
-
    ```rust
    pub struct EvaluationTrace {
        pub trace_id: Uuid,
@@ -400,34 +408,30 @@ pub struct EvaluationEvidence {
 # Relatório de Comparação: Rust vs TypeScript
 
 ## Resumo Executivo
-
 - Rust X% mais rápido em expansão de queries
 - Rust Y% menos memória em pico
 - Rust Z% menos tokens LLM (otimização de prompts)
 
 ## Personas
-
-| Persona        | TS (ms) | Rust (ms) | Diferença |
-| -------------- | ------- | --------- | --------- |
-| Expert Skeptic | 12.3    | 0.8       | -93%      |
-| Detail Analyst | 11.1    | 0.7       | -94%      |
-| ...            | ...     | ...       | ...       |
+| Persona | TS (ms) | Rust (ms) | Diferença |
+|---------|---------|-----------|-----------|
+| Expert Skeptic | 12.3 | 0.8 | -93% |
+| Detail Analyst | 11.1 | 0.7 | -94% |
+| ... | ... | ... | ... |
 
 ## Busca
-
-| Operação            | TS (ms) | Rust (ms) | Diferença |
-| ------------------- | ------- | --------- | --------- |
-| Hostname extraction | 0.5     | 0.001     | -99%      |
-| Score calculation   | 2.1     | 0.003     | -99%      |
-| ...                 | ...     | ...       | ...       |
+| Operação | TS (ms) | Rust (ms) | Diferença |
+|----------|---------|-----------|-----------|
+| Hostname extraction | 0.5 | 0.001 | -99% |
+| Score calculation | 2.1 | 0.003 | -99% |
+| ... | ... | ... | ... |
 
 ## Avaliação
-
-| Tipo       | TS Tokens | Rust Tokens | Diferença |
-| ---------- | --------- | ----------- | --------- |
-| Definitive | 450       | 420         | -7%       |
-| Freshness  | 380       | 350         | -8%       |
-| ...        | ...       | ...         | ...       |
+| Tipo | TS Tokens | Rust Tokens | Diferença |
+|------|-----------|-------------|-----------|
+| Definitive | 450 | 420 | -7% |
+| Freshness | 380 | 350 | -8% |
+| ... | ... | ... | ... |
 ```
 
 ---
@@ -466,23 +470,3 @@ cargo run --release --bin compare_ts_rust -- --ts-results ts_bench.json --rust-r
 - [ ] Benchmarks executam sem erros
 - [ ] Relatório de comparação gerado
 - [ ] Performance Rust >= TypeScript em todas métricas
-
-### 👤 Pessoa 3: Performance, SIMD e End-to-End (Sistema)
-
-**Foco:** Garantir que o sistema seja rápido (otimizações de baixo nível/SIMD), que a CLI funcione e que o fluxo completo (E2E) não quebre sob carga.
-
-- **Arquivos Principais:**
-  - `src/performance/*` (simd.rs)
-  - `src/main.rs` (CLI e entrypoint)
-  - `src/lib.rs` (Integração geral)
-- **Comandos de Teste (Isolados):**
-  - Testes de Performance: `cargo test performance::`
-  - Benchmark SIMD: `cargo bench --bench simd_bench`
-  - Benchmark E2E (Fluxo Completo): `cargo bench --bench e2e_bench`
-  - Verificação de Build Final: `cargo build --release`
-
-## 🚀 Fluxo de Trabalho Sugerido
-
-1. Cada pessoa deve criar uma branch separada (ex: `test/agent-fix`, `test/persona-update`).
-2. Utilizar os comandos de teste isolados listados acima para não esperar a suíte inteira rodar.
-3. Reportar falhas categorizadas por área (Agente vs. Domínio vs. Performance).

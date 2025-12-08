@@ -70,6 +70,10 @@ mime_guess = "2.0"
 # Futures utilities
 futures = "0.3"
 
+# TUI - Full terminal UI
+ratatui = "0.29"
+crossterm = "0.28"
+
 [dev-dependencies]
 tokio-test = "0.4"
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }

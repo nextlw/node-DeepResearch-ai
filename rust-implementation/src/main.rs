@@ -6,6 +6,7 @@
 //
 // Uso:
 //   deep-research-cli "Qual é a população do Brasil?"
+//   deep-research-cli --tui "pergunta"  (modo TUI interativo)
 //   deep-research-cli --budget 500000 "pergunta complexa"
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -13,6 +14,7 @@ use deep_research::llm::OpenAiClient;
 use deep_research::prelude::*;
 use deep_research::reader_comparison::ReaderComparison;
 use deep_research::search::JinaClient;
+use deep_research::tui::{create_event_channel, run_tui, AppEvent, TuiLogger};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -75,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("Uso: {} <pergunta>", args[0]);
         eprintln!();
         eprintln!("Opções:");
+        eprintln!("  --tui              Modo TUI interativo (interface rica)");
         eprintln!("  --budget <tokens>  Budget máximo de tokens (padrão: 1000000)");
         eprintln!(
             "  --compare <urls>   Comparar Jina Reader vs Rust+OpenAI (URLs separadas por vírgula)"
@@ -82,11 +85,17 @@ async fn main() -> anyhow::Result<()> {
         eprintln!();
         eprintln!("Exemplos:");
         eprintln!("  {} \"Qual é a população do Brasil em 2024?\"", args[0]);
+        eprintln!("  {} --tui \"Qual é a capital da França?\"", args[0]);
         eprintln!(
             "  {} --compare \"https://example.com,https://rust-lang.org\"",
             args[0]
         );
         std::process::exit(1);
+    }
+
+    // Modo TUI
+    if args.len() >= 3 && args[1] == "--tui" {
+        return run_tui_mode(&args[2..].join(" ")).await;
     }
 
     // Modo comparação
@@ -317,6 +326,75 @@ async fn run_comparison_mode(urls_arg: &str) -> anyhow::Result<()> {
         println!("🏆 Empate!");
     }
     println!();
+
+    Ok(())
+}
+
+/// Executa o modo TUI interativo
+async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
+    // Criar clientes
+    let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| {
+        eprintln!("✗ Erro: OPENAI_API_KEY não encontrada!");
+        std::process::exit(1);
+    });
+
+    let jina_key = std::env::var("JINA_API_KEY").unwrap_or_else(|_| {
+        eprintln!("✗ Erro: JINA_API_KEY não encontrada!");
+        std::process::exit(1);
+    });
+
+    let llm_client: Arc<dyn deep_research::llm::LlmClient> =
+        Arc::new(OpenAiClient::new(openai_key));
+    let search_client: Arc<dyn deep_research::search::SearchClient> =
+        Arc::new(JinaClient::new(jina_key));
+
+    // Criar canal de eventos para TUI
+    let (tx, rx) = create_event_channel();
+    let logger = TuiLogger::new(tx.clone());
+
+    // Executar agente em thread separada
+    let question_clone = question.to_string();
+    let agent_handle = tokio::spawn(async move {
+        // Criar agente
+        let agent = DeepResearchAgent::new(llm_client, search_client, None);
+
+        logger.info("Iniciando pesquisa...");
+        logger.set_action("Inicializando");
+
+        // Executar pesquisa
+        let result = agent.run(question_clone).await;
+
+        // Enviar resultado para TUI
+        if result.success {
+            if let Some(ref answer) = result.answer {
+                let refs: Vec<String> = result.references
+                    .iter()
+                    .map(|r| format!("{} - {}", r.title, r.url))
+                    .collect();
+                logger.complete(answer.clone(), refs);
+            }
+        } else {
+            let _ = tx.send(AppEvent::Error(
+                result.error.clone().unwrap_or_else(|| "Erro desconhecido".into())
+            ));
+        }
+
+        result
+    });
+
+    // Executar TUI (bloqueia até terminar)
+    let app = run_tui(question.to_string(), rx)?;
+
+    // Aguardar agente terminar
+    let result = agent_handle.await?;
+
+    // Se o usuário saiu antes, mostrar resultado no terminal
+    if app.should_quit && !app.is_complete {
+        println!("\n⚠️  TUI encerrada pelo usuário");
+        if let Some(answer) = result.answer {
+            println!("\nResposta parcial: {}", answer);
+        }
+    }
 
     Ok(())
 }

@@ -156,6 +156,14 @@ pub mod reader_comparison;
 /// - Helpers de conversão
 pub mod utils;
 
+/// Interface de terminal rica (TUI).
+///
+/// Fornece uma experiência visual interativa para:
+/// - Acompanhar o progresso da pesquisa
+/// - Visualizar logs em tempo real
+/// - Ver estatísticas de tokens e tempo
+pub mod tui;
+
 // Re-exports principais
 pub use agent::DeepResearchAgent;
 pub use evaluation::{EvaluationPipeline, EvaluationType};
