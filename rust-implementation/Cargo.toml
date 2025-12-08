@@ -1,0 +1,78 @@
+[package]
+name = "deep-research"
+version = "0.1.0"
+edition = "2021"
+authors = ["DeepResearch Team"]
+description = "High-performance research agent with cognitive personas and multi-dimensional evaluation"
+license = "MIT"
+repository = "https://github.com/your-org/deep-research"
+keywords = ["ai", "research", "agent", "llm"]
+categories = ["science", "web-programming"]
+
+[lib]
+name = "deep_research"
+path = "src/lib.rs"
+
+[[bin]]
+name = "deep-research-cli"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.34", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+
+# Parallel processing
+rayon = "1.8"
+
+# Logging
+log = "0.4"
+env_logger = "0.10"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Async traits
+async-trait = "0.1"
+
+# UUID generation
+uuid = { version = "1.6", features = ["v4"] }
+
+# Configuration
+config = "0.13"
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = "0.5"
+mockall = "0.12"
+
+[features]
+default = []
+simd = []  # Enable SIMD optimizations (requires nightly for some features)
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+
+[profile.dev]
+opt-level = 1
+
+[[bench]]
+name = "cosine_similarity"
+harness = false
+
+[[bench]]
+name = "persona_expansion"
+harness = false
