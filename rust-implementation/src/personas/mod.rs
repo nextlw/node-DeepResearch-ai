@@ -5,11 +5,13 @@
 mod all_personas;
 mod metrics;
 mod orchestrator;
+mod registry;
 mod traits;
 
 pub use all_personas::*;
 pub use metrics::*;
 pub use orchestrator::*;
+pub use registry::*;
 pub use traits::*;
 
 use chrono::Utc;
