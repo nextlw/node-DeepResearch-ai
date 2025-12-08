@@ -65,8 +65,36 @@ futures = "0.3"
 
 [dev-dependencies]
 tokio-test = "0.4"
-criterion = "0.5"
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 mockall = "0.12"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BENCHMARKS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[[bench]]
+name = "simd_bench"
+harness = false
+
+[[bench]]
+name = "personas_bench"
+harness = false
+
+[[bench]]
+name = "evaluation_bench"
+harness = false
+
+[[bench]]
+name = "agent_bench"
+harness = false
+
+[[bench]]
+name = "search_bench"
+harness = false
+
+[[bench]]
+name = "e2e_bench"
+harness = false
 
 [features]
 default = []
