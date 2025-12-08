@@ -7,12 +7,14 @@ mod metrics;
 mod orchestrator;
 mod registry;
 mod traits;
+mod validator;
 
 pub use all_personas::*;
 pub use metrics::*;
 pub use orchestrator::*;
 pub use registry::*;
 pub use traits::*;
+pub use validator::*;
 
 use chrono::Utc;
 use uuid::Uuid;
