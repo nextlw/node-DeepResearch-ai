@@ -5,8 +5,11 @@
 use super::AgentContext;
 
 /// Limites de ações por step
+/// Máximo de reflexões permitidas por step
 pub const MAX_REFLECT_PER_STEP: usize = 2;
+/// Máximo de URLs antes de desabilitar busca
 pub const MAX_URLS_BEFORE_DISABLE_SEARCH: usize = 50;
+/// Máximo de URLs para mostrar nos resultados
 pub const MAX_URLS_TO_SHOW: usize = 20;
 
 /// Estado das permissões - imutável, criado a cada iteração

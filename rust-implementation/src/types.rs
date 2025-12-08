@@ -5,18 +5,40 @@
 /// Tipo de URL (alias para String)
 pub type Url = String;
 
-/// Idiomas suportados
+/// Idiomas suportados pelo sistema de pesquisa.
+///
+/// O idioma afeta como as queries são construídas e como os resultados
+/// são filtrados e apresentados. Por exemplo, uma pesquisa em Português
+/// priorizará fontes em português e formatará datas no padrão brasileiro.
+///
+/// # Exemplo
+/// ```rust
+/// use deep_research::types::Language;
+///
+/// let lang = Language::Portuguese;
+/// assert_ne!(lang, Language::English);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
+    /// Inglês - Idioma padrão, maior cobertura de fontes
     English,
+    /// Português - Inclui variantes BR e PT
     Portuguese,
+    /// Espanhol - Inclui variantes ES e LATAM
     Spanish,
+    /// Alemão - Fontes da Alemanha, Áustria e Suíça
     German,
+    /// Francês - Fontes da França, Bélgica, Canadá e África
     French,
+    /// Italiano - Fontes da Itália e Suíça italiana
     Italian,
+    /// Japonês - Fontes do Japão (requer fontes específicas)
     Japanese,
+    /// Chinês - Simplificado e tradicional
     Chinese,
+    /// Coreano - Fontes da Coreia do Sul
     Korean,
+    /// Outro idioma não listado - Usa heurísticas genéricas
     Other,
 }
 

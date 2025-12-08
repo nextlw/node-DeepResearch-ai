@@ -123,40 +123,72 @@ impl AgentAction {
     }
 }
 
-/// Entrada do diário do agente
+/// Entrada do diário do agente.
 ///
-/// Registra todas as ações tomadas para análise de erros e debugging.
+/// O diário registra todas as ações tomadas pelo agente durante uma pesquisa.
+/// Isso é útil para:
+/// - **Debugging**: Entender o que deu errado
+/// - **Contexto para LLM**: O modelo vê o histórico de ações
+/// - **Auditoria**: Rastrear o processo de pesquisa
+///
+/// Cada variante corresponde a um tipo de ação executada.
 #[derive(Debug, Clone)]
 pub enum DiaryEntry {
-    /// Busca executada
+    /// Registro de uma busca executada.
+    ///
+    /// Armazena as queries enviadas, o raciocínio do agente,
+    /// e quantas URLs foram encontradas como resultado.
     Search {
+        /// Lista de queries que foram executadas na busca.
         queries: Vec<SerpQuery>,
+        /// Raciocínio do agente explicando por que fez esta busca.
         think: String,
+        /// Quantidade de URLs únicas encontradas nos resultados.
         urls_found: usize,
     },
 
-    /// URL lida
+    /// Registro de URLs lidas.
+    ///
+    /// Armazena quais páginas foram lidas e extraído o conteúdo.
     Read {
+        /// Lista de URLs que foram lidas e processadas.
         urls: Vec<Url>,
+        /// Raciocínio do agente para escolher estas URLs.
         think: String,
     },
 
-    /// Reflexão executada
+    /// Registro de uma reflexão executada.
+    ///
+    /// O agente analisou o conhecimento atual e identificou
+    /// novas perguntas para preencher lacunas.
     Reflect {
+        /// Novas perguntas identificadas durante a reflexão.
         questions: Vec<String>,
+        /// Raciocínio sobre quais lacunas foram encontradas.
         think: String,
     },
 
-    /// Resposta falhou na avaliação
+    /// Registro de uma resposta que falhou na avaliação.
+    ///
+    /// Isso é importante para evitar que o agente repita
+    /// erros e para ajustar a estratégia de resposta.
     FailedAnswer {
+        /// Texto da resposta que foi rejeitada.
         answer: String,
+        /// Tipo de avaliação que reprovou a resposta.
         eval_type: crate::evaluation::EvaluationType,
+        /// Motivo pelo qual a resposta foi rejeitada.
         reason: String,
     },
 
-    /// Código executado
+    /// Registro de código executado.
+    ///
+    /// Para ações que envolvem processamento de dados
+    /// através de execução de código.
     Coding {
+        /// Código que foi executado (JavaScript).
         code: String,
+        /// Raciocínio do agente para executar este código.
         think: String,
     },
 }

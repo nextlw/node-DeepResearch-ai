@@ -86,13 +86,14 @@ pub trait CognitivePersona: Send + Sync {
     }
 }
 
-/// Wrapper para permitir Box<dyn CognitivePersona> ser usado com Rayon
+/// Wrapper para permitir `Box<dyn CognitivePersona>` ser usado com Rayon
 ///
 /// Este wrapper é necessário porque `Box<dyn Trait>` não implementa
 /// automaticamente `Send + Sync` mesmo quando o trait os requer.
 pub struct PersonaBox(pub Box<dyn CognitivePersona>);
 
 impl PersonaBox {
+    /// Cria um novo PersonaBox com uma persona específica
     pub fn new<P: CognitivePersona + 'static>(persona: P) -> Self {
         Self(Box::new(persona))
     }

@@ -51,6 +51,18 @@ uuid = { version = "1.6", features = ["v4"] }
 # Configuration
 config = "0.13"
 
+# Random number generation
+rand = "0.8"
+
+# URL parsing
+url = "2.4"
+
+# URL encoding
+urlencoding = "2.1"
+
+# Futures utilities
+futures = "0.3"
+
 [dev-dependencies]
 tokio-test = "0.4"
 criterion = "0.5"
@@ -69,10 +81,3 @@ opt-level = 3
 [profile.dev]
 opt-level = 1
 
-[[bench]]
-name = "cosine_similarity"
-harness = false
-
-[[bench]]
-name = "persona_expansion"
-harness = false

@@ -2,7 +2,7 @@
 // CONTEXTO DO AGENTE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-use crate::types::{KnowledgeItem, KnowledgeType, Reference, Url, BoostedSearchSnippet};
+use crate::types::{KnowledgeItem, KnowledgeType, BoostedSearchSnippet};
 use super::DiaryEntry;
 
 /// Contexto acumulado durante a execução do agente

@@ -36,9 +36,17 @@ pub struct TokenTracker {
 /// Uso de tokens em um step específico
 #[derive(Debug, Clone)]
 pub struct StepUsage {
+    /// Número do step (não utilizado em implementação atual)
+    #[allow(dead_code)]
     pub step: usize,
+    /// Operação realizada (não utilizada em implementação atual)
+    #[allow(dead_code)]
     pub operation: String,
+    /// Tokens usados no prompt (não utilizados em implementação atual)
+    #[allow(dead_code)]
     pub prompt_tokens: u64,
+    /// Tokens usados na completion (não utilizados em implementação atual)
+    #[allow(dead_code)]
     pub completion_tokens: u64,
 }
 

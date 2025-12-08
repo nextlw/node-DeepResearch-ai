@@ -117,40 +117,183 @@ pub enum StepResult {
     Error(String),
 }
 
-/// Resultado de uma resposta aceita
+/// Resultado de uma resposta que foi aceita pela avaliação.
+///
+/// Quando o agente propõe uma resposta (via `AgentAction::Answer`) e ela
+/// passa por todas as avaliações configuradas, um `AnswerResult` é criado
+/// contendo a resposta final e suas referências.
+///
+/// # Campos
+/// - `answer`: O texto completo da resposta gerada
+/// - `references`: Lista de fontes citadas na resposta
+/// - `trivial`: Se `true`, a pergunta foi respondida no primeiro passo
 #[derive(Debug, Clone)]
 pub struct AnswerResult {
+    /// Texto completo da resposta gerada pelo agente.
+    ///
+    /// Esta é a resposta final que será apresentada ao usuário,
+    /// já formatada e revisada pelas avaliações.
     pub answer: String,
+
+    /// Lista de referências (fontes) citadas na resposta.
+    ///
+    /// Cada referência contém URL, título e opcionalmente uma
+    /// citação exata do trecho utilizado.
     pub references: Vec<Reference>,
+
+    /// Indica se a pergunta foi considerada trivial.
+    ///
+    /// Uma pergunta trivial é aquela que o agente conseguiu
+    /// responder no primeiro passo, sem precisar de pesquisa
+    /// adicional. Exemplo: "Quanto é 2+2?"
     pub trivial: bool,
 }
 
-/// Resultado final da pesquisa
+/// Resultado final completo de uma sessão de pesquisa.
+///
+/// Esta struct contém tudo que aconteceu durante a execução do agente:
+/// se teve sucesso, a resposta gerada, referências, uso de tokens, etc.
+///
+/// É o retorno principal do método `DeepResearchAgent::research`.
+///
+/// # Exemplo de Uso
+/// ```rust,ignore
+/// let result = agent.research("Pergunta aqui").await;
+///
+/// if result.success {
+///     println!("Resposta: {}", result.answer.unwrap());
+///     println!("Fontes: {:?}", result.references);
+/// } else {
+///     println!("Erro: {}", result.error.unwrap_or_default());
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct ResearchResult {
+    /// Indica se a pesquisa foi concluída com sucesso.
+    ///
+    /// `true` = resposta encontrada e aprovada nas avaliações.
+    /// `false` = falha por timeout, budget esgotado ou erro.
     pub success: bool,
+
+    /// Resposta final gerada, se houver.
+    ///
+    /// Será `Some(texto)` quando `success = true`.
+    /// Pode ser `None` se a pesquisa falhou.
     pub answer: Option<String>,
+
+    /// Lista de referências citadas na resposta.
+    ///
+    /// Contém URLs, títulos e citações das fontes utilizadas.
+    /// Vazia se não houve resposta ou nenhuma fonte foi citada.
     pub references: Vec<Reference>,
+
+    /// Indica se foi uma pergunta trivial (respondida no step 1).
+    ///
+    /// Perguntas triviais são aquelas que não precisaram de
+    /// pesquisa externa para serem respondidas.
     pub trivial: bool,
+
+    /// Estatísticas de uso de tokens durante a pesquisa.
+    ///
+    /// Útil para monitorar custos e otimizar prompts.
     pub token_usage: TokenUsage,
+
+    /// Lista de todas as URLs visitadas durante a pesquisa.
+    ///
+    /// Inclui URLs que foram lidas com sucesso e também
+    /// aquelas que falharam (para evitar revisitas).
     pub visited_urls: Vec<String>,
+
+    /// Mensagem de erro, se a pesquisa falhou.
+    ///
+    /// Será `Some(mensagem)` quando `success = false`.
+    /// Descreve o motivo da falha (timeout, budget, etc).
     pub error: Option<String>,
 }
 
-/// Uso de tokens
+/// Estatísticas de uso de tokens durante a pesquisa.
+///
+/// Tokens são a unidade de medida usada por LLMs para cobrar pelo uso.
+/// Grosso modo, 1 token ≈ 4 caracteres em inglês (menos em português).
+///
+/// # Por que isso importa?
+/// - **Custo**: APIs cobram por token (ex: GPT-4 = $0.03/1K tokens)
+/// - **Limite**: Cada modelo tem um limite máximo de tokens por chamada
+/// - **Otimização**: Monitorar uso ajuda a otimizar prompts
+///
+/// # Exemplo
+/// ```rust
+/// use deep_research::agent::TokenUsage;
+///
+/// let usage = TokenUsage {
+///     prompt_tokens: 1500,      // Tokens enviados ao modelo
+///     completion_tokens: 500,    // Tokens gerados pelo modelo
+///     total_tokens: 2000,        // Soma total
+/// };
+///
+/// let custo_estimado = (usage.total_tokens as f64) * 0.00003; // GPT-4
+/// println!("Custo: ${:.4}", custo_estimado);
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct TokenUsage {
+    /// Tokens consumidos pelos prompts enviados ao modelo.
+    ///
+    /// Inclui: system prompt + user prompt + histórico.
+    /// Quanto maior o contexto, mais tokens de prompt.
     pub prompt_tokens: u64,
+
+    /// Tokens gerados pelo modelo nas respostas.
+    ///
+    /// Inclui: respostas, ações decididas, avaliações.
+    /// Geralmente menor que prompt_tokens.
     pub completion_tokens: u64,
+
+    /// Total de tokens usados (prompt + completion).
+    ///
+    /// Este é o valor usado para calcular custos e
+    /// verificar se está dentro do budget.
     pub total_tokens: u64,
 }
 
-/// Erros do agente
+/// Erros que podem ocorrer durante a execução do agente.
+///
+/// Estes são os tipos de falha que podem interromper uma pesquisa.
+/// Cada variante representa uma categoria diferente de problema.
+///
+/// # Tratamento de Erros
+/// O agente tenta ser resiliente a erros temporários:
+/// - Rate limits: aguarda e tenta novamente
+/// - Erros de rede: retry com backoff exponencial
+/// - Budget esgotado: entra em BeastMode antes de falhar
 #[derive(Debug, Clone)]
 pub enum AgentError {
+    /// Erro na comunicação com o LLM (OpenAI, Anthropic, etc).
+    ///
+    /// Pode ser causado por: API key inválida, rate limit, resposta
+    /// malformada, modelo indisponível, etc.
+    ///
+    /// A string contém detalhes do erro para debugging.
     LlmError(String),
+
+    /// Erro durante operações de busca ou leitura de URLs.
+    ///
+    /// Pode ser causado por: URL inválida, site bloqueando acesso,
+    /// timeout de conexão, conteúdo não extraível, etc.
+    ///
+    /// A string contém detalhes do erro.
     SearchError(String),
+
+    /// Timeout geral da operação.
+    ///
+    /// A pesquisa excedeu o tempo máximo configurado.
+    /// Diferente de timeouts individuais de requisições.
     TimeoutError,
+
+    /// Budget de tokens foi completamente esgotado.
+    ///
+    /// Isso significa que mesmo após entrar em BeastMode
+    /// (85% do budget), o agente não conseguiu gerar uma
+    /// resposta aceitável antes de esgotar os tokens.
     BudgetExhausted,
 }
 

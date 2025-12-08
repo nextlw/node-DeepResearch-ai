@@ -3,27 +3,14 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 mod traits;
-mod skeptic;
-mod analyst;
-mod historical;
-mod comparative;
-mod temporal;
-mod globalizer;
-mod reality_skeptic;
+mod all_personas;
 mod orchestrator;
 
 pub use traits::*;
-pub use skeptic::*;
-pub use analyst::*;
-pub use historical::*;
-pub use comparative::*;
-pub use temporal::*;
-pub use globalizer::*;
-pub use reality_skeptic::*;
+pub use all_personas::*;
 pub use orchestrator::*;
 
-use rayon::prelude::*;
-use chrono::{Utc, Datelike};
+use chrono::Utc;
 
 use crate::types::{SerpQuery, Language, TopicCategory};
 

@@ -271,19 +271,8 @@ impl CognitivePersona for RealitySkepticalist {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// RE-EXPORTS PARA COMPATIBILIDADE
+// TIPOS EXPORTADOS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-// Arquivos individuais podem importar de cá ou usar este arquivo diretamente
-pub use self::{
-    ExpertSkeptic,
-    DetailAnalyst,
-    HistoricalResearcher,
-    ComparativeThinker,
-    TemporalContext,
-    Globalizer,
-    RealitySkepticalist,
-};
 
 #[cfg(test)]
 mod tests {

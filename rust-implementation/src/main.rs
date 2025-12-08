@@ -11,8 +11,8 @@
 
 use std::sync::Arc;
 use deep_research::prelude::*;
-use deep_research::llm::MockLlmClient;
-use deep_research::search::MockSearchClient;
+use deep_research::llm::OpenAiClient;
+use deep_research::search::JinaClient;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -56,12 +56,16 @@ async fn main() -> anyhow::Result<()> {
     }
     println!();
 
-    // Criar clientes (usar mocks por enquanto)
-    // TODO: Implementar clientes reais com API keys
+    // Criar clientes reais com API keys de variáveis de ambiente
+    let openai_key = std::env::var("OPENAI_API_KEY")
+        .expect("OPENAI_API_KEY environment variable must be set");
+    let jina_key = std::env::var("JINA_API_KEY")
+        .expect("JINA_API_KEY environment variable must be set");
+
     let llm_client: Arc<dyn deep_research::llm::LlmClient> =
-        Arc::new(MockLlmClient::new());
+        Arc::new(OpenAiClient::new(openai_key));
     let search_client: Arc<dyn deep_research::search::SearchClient> =
-        Arc::new(MockSearchClient::new());
+        Arc::new(JinaClient::new(jina_key));
 
     // Criar e executar agente
     let agent = DeepResearchAgent::new(

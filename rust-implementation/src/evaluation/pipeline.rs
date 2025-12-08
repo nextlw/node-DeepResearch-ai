@@ -142,11 +142,11 @@ impl EvaluationPipeline {
     ) -> Result<EvaluationResult, EvalError> {
         let start = std::time::Instant::now();
 
-        let prompt = self.generate_prompt(eval_type, question, answer, context);
+        let _prompt = self.generate_prompt(eval_type, question, answer, context);
 
         // Simula chamada ao LLM (em produção, chamaria a API real)
         let response = self.llm
-            .evaluate(&prompt, eval_type)
+            .evaluate(question, answer, &eval_type.as_str())
             .await
             .map_err(|e| EvalError::LlmError(e.to_string()))?;
 
@@ -155,7 +155,7 @@ impl EvaluationPipeline {
             passed: response.passed,
             confidence: response.confidence,
             reasoning: response.reasoning,
-            suggestions: response.suggestions,
+            suggestions: vec![],  // TODO: adicionar sugestões na EvaluationResponse
             duration: start.elapsed(),
         })
     }
@@ -306,7 +306,7 @@ Respond with:
         question: &str,
         llm: &dyn LlmClient,
     ) -> Vec<EvaluationType> {
-        let prompt = PromptPair {
+        let _prompt = PromptPair {
             system: r#"
 Analyze the question and determine which evaluation types are needed:
 - definitive: Does this question have a clear factual answer?
@@ -325,15 +325,8 @@ Respond with:
         };
 
         // Tenta determinar via LLM, com fallback para default
-        match llm.determine_evaluations(&prompt).await {
-            Ok(response) => {
-                let mut types = Vec::new();
-                if response.needs_definitive { types.push(EvaluationType::Definitive); }
-                if response.needs_freshness { types.push(EvaluationType::Freshness); }
-                if response.needs_plurality { types.push(EvaluationType::Plurality); }
-                if response.needs_completeness { types.push(EvaluationType::Completeness); }
-                types
-            }
+        match llm.determine_eval_types(question).await {
+            Ok(types) => types,
             Err(_) => {
                 // Default: apenas definitive
                 vec![EvaluationType::Definitive]

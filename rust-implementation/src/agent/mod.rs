@@ -18,8 +18,10 @@ use crate::llm::LlmClient;
 use crate::search::SearchClient;
 use crate::utils::TokenTracker;
 
-const MAX_REFLECT_PER_STEP: usize = 2;
+/// Máximo de queries por passo (reservado para expansão futura)
+#[allow(dead_code)]
 const MAX_QUERIES_PER_STEP: usize = 5;
+/// Máximo de URLs por passo
 const MAX_URLS_PER_STEP: usize = 5;
 
 /// Agente principal de pesquisa profunda
@@ -95,7 +97,7 @@ impl DeepResearchAgent {
                     };
                 }
 
-                AgentState::BeastMode { attempts, .. } => {
+                AgentState::BeastMode { attempts: _attempts, .. } => {
                     // Tentar forçar resposta
                     match self.force_answer().await {
                         Ok(answer) => {
@@ -311,7 +313,7 @@ impl DeepResearchAgent {
         &mut self,
         answer: String,
         references: Vec<Reference>,
-        think: String
+        _think: String
     ) -> StepResult {
         use crate::evaluation::{EvaluationPipeline, EvaluationType};
 
@@ -368,6 +370,7 @@ impl DeepResearchAgent {
         }
     }
 
+    /// Executa código em sandbox
     /// Executa código em sandbox
     async fn execute_coding(&mut self, code: String, think: String) -> StepResult {
         // Executar código em sandbox seguro
@@ -433,7 +436,7 @@ impl DeepResearchAgent {
                     error: None,
                 }
             }
-            AgentState::Failed { reason, partial_knowledge } => {
+            AgentState::Failed { reason, partial_knowledge: _partial_knowledge } => {
                 ResearchResult {
                     success: false,
                     answer: None,

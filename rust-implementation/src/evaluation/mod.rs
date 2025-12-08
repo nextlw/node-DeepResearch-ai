@@ -2,19 +2,13 @@
 // SISTEMA DE AVALIAÇÃO MULTIDIMENSIONAL
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-mod types;
-mod evaluators;
 mod pipeline;
 
-pub use types::*;
-pub use evaluators::*;
 pub use pipeline::*;
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::types::{KnowledgeItem, TopicCategory};
-use crate::llm::LlmClient;
 
 /// Contexto para avaliação
 #[derive(Debug, Clone)]
@@ -25,10 +19,22 @@ pub struct EvaluationContext {
     pub knowledge_items: Vec<KnowledgeItem>,
 }
 
-/// Par de prompts (sistema + usuário)
+/// Par de prompts para enviar ao LLM (sistema + usuário).
+///
+/// Em APIs de LLM como OpenAI, as mensagens são divididas em:
+/// - **System**: Define o comportamento e contexto do modelo
+/// - **User**: A pergunta ou tarefa específica
+///
+/// Este struct agrupa ambos para facilitar o gerenciamento.
 #[derive(Debug, Clone)]
 pub struct PromptPair {
+    /// Prompt de sistema que define o comportamento do LLM.
+    ///
+    /// Exemplo: "Você é um avaliador rigoroso de respostas..."
     pub system: String,
+    /// Prompt do usuário com a tarefa específica.
+    ///
+    /// Exemplo: "Avalie se esta resposta está completa: ..."
     pub user: String,
 }
 
@@ -121,23 +127,70 @@ impl std::fmt::Display for EvaluationType {
     }
 }
 
-/// Configuração específica para cada tipo de avaliação
+/// Configuração específica para cada tipo de avaliação.
+///
+/// Permite ajustar o comportamento de cada avaliação:
+/// - Quantas vezes tentar em caso de falha
+/// - Quanto tempo esperar antes de timeout
+/// - Qual o peso relativo desta avaliação
+///
+/// Use [`EvaluationType::default_config`] para valores padrão.
 #[derive(Debug, Clone)]
 pub struct EvaluationConfig {
+    /// Tipo de avaliação que esta configuração controla.
     pub eval_type: EvaluationType,
+    /// Número máximo de tentativas em caso de erro.
+    ///
+    /// Se a avaliação falhar por erro de rede ou parsing,
+    /// será reexecutada até `max_retries` vezes.
     pub max_retries: u8,
+    /// Tempo máximo para aguardar resposta do LLM.
+    ///
+    /// Após este tempo, a avaliação é considerada falha por timeout.
     pub timeout: Duration,
-    pub weight: f32,  // Importância relativa (0.0 - 2.0)
+    /// Peso relativo desta avaliação (0.0 a 2.0).
+    ///
+    /// Avaliações com peso maior têm mais influência na
+    /// decisão final. Ex: Strict tem peso 1.5 (mais importante).
+    pub weight: f32,
 }
 
-/// Resultado de uma avaliação individual
+/// Resultado de uma avaliação individual.
+///
+/// Contém não apenas se passou ou não, mas também:
+/// - Nível de confiança do avaliador
+/// - Explicação do raciocínio
+/// - Sugestões de melhoria (se falhou)
+/// - Tempo que levou para avaliar
 #[derive(Debug, Clone)]
 pub struct EvaluationResult {
+    /// Tipo de avaliação que gerou este resultado.
     pub eval_type: EvaluationType,
+    /// Se a resposta passou nesta avaliação.
+    ///
+    /// `true` = aprovado, `false` = reprovado.
     pub passed: bool,
-    pub confidence: f32,        // 0.0 - 1.0
+    /// Nível de confiança do avaliador (0.0 a 1.0).
+    ///
+    /// - 0.9-1.0: Muito confiante
+    /// - 0.7-0.9: Confiante
+    /// - 0.5-0.7: Incerto
+    /// - <0.5: Pouco confiante
+    pub confidence: f32,
+    /// Explicação do raciocínio usado na avaliação.
+    ///
+    /// Útil para debugging e para mostrar ao usuário
+    /// por que uma resposta foi aceita ou rejeitada.
     pub reasoning: String,
+    /// Sugestões de como melhorar a resposta.
+    ///
+    /// Preenchido apenas quando `passed = false`.
+    /// O agente pode usar estas sugestões para ajustar.
     pub suggestions: Vec<String>,
+    /// Tempo que a avaliação levou para executar.
+    ///
+    /// Útil para monitorar performance e identificar
+    /// avaliações que estão demorando muito.
     pub duration: Duration,
 }
 
@@ -178,11 +231,27 @@ impl EvaluationResult {
     }
 }
 
-/// Erro de avaliação
+/// Erro que pode ocorrer durante uma avaliação.
+///
+/// Diferente de uma avaliação que retorna `passed = false`
+/// (a avaliação funcionou, mas a resposta não passou),
+/// estes são erros técnicos na execução da avaliação.
 #[derive(Debug, Clone)]
 pub enum EvalError {
+    /// Erro na comunicação com o LLM.
+    ///
+    /// Pode ser: API indisponível, rate limit, resposta inválida, etc.
+    /// A string contém detalhes do erro.
     LlmError(String),
+    /// A avaliação excedeu o tempo limite configurado.
+    ///
+    /// O LLM demorou demais para responder.
+    /// Considere aumentar o timeout em [`EvaluationConfig`].
     Timeout,
+    /// Erro ao interpretar a resposta do LLM.
+    ///
+    /// O LLM retornou algo que não conseguimos parsear
+    /// para o formato esperado de avaliação.
     ParseError(String),
 }
 

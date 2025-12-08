@@ -7,40 +7,97 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use crate::agent::{AgentAction, AgentPrompt, ActionPermissions};
-use crate::types::Reference;
+use crate::types::{Reference, SerpQuery};
 
-/// Erros do cliente LLM
+/// Erros que podem ocorrer na comunicação com LLMs.
+///
+/// Estes são os tipos de falha possíveis ao chamar APIs como OpenAI.
+/// Cada variante requer tratamento diferente:
+/// - `RateLimitError`: Aguardar e tentar novamente
+/// - `NetworkError`: Verificar conectividade
+/// - `TokenLimitError`: Reduzir tamanho do prompt
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
+    /// Erro retornado pela API do provedor.
+    ///
+    /// Exemplos: API key inválida, modelo não existe, quota excedida.
     #[error("API error: {0}")]
     ApiError(String),
 
+    /// Limite de requisições por minuto excedido.
+    ///
+    /// A maioria das APIs tem rate limits (ex: OpenAI = 3500 RPM).
+    /// Aguarde alguns segundos antes de tentar novamente.
     #[error("Rate limit exceeded")]
     RateLimitError,
 
+    /// Resposta do LLM não está no formato esperado.
+    ///
+    /// O modelo retornou algo que não conseguimos interpretar.
+    /// Pode indicar prompt mal formulado ou modelo instável.
     #[error("Invalid response format: {0}")]
     ParseError(String),
 
+    /// Erro de rede na comunicação com a API.
+    ///
+    /// Problemas de DNS, timeout, conexão recusada, etc.
     #[error("Network error: {0}")]
     NetworkError(String),
 
+    /// Prompt excedeu o limite de tokens do modelo.
+    ///
+    /// Cada modelo tem um limite (ex: GPT-4 = 128K tokens).
+    /// Reduza o contexto ou use um modelo com limite maior.
     #[error("Token limit exceeded: {used} > {limit}")]
-    TokenLimitError { used: u64, limit: u64 },
+    TokenLimitError {
+        /// Quantidade de tokens que tentamos usar.
+        used: u64,
+        /// Limite máximo do modelo.
+        limit: u64,
+    },
 }
 
-/// Resposta gerada pelo LLM
+/// Resposta gerada pelo LLM para uma pergunta.
+///
+/// Contém o texto da resposta, referências extraídas,
+/// e estatísticas detalhadas de uso de tokens para monitoramento.
 #[derive(Debug, Clone)]
 pub struct LlmResponse {
+    /// Texto completo da resposta gerada.
     pub answer: String,
+    /// Referências citadas na resposta (se houver).
+    ///
+    /// Extraídas automaticamente do contexto ou
+    /// geradas pelo modelo se solicitado.
     pub references: Vec<Reference>,
-    pub tokens_used: u64,
+    /// Tokens consumidos pelo prompt (entrada).
+    pub prompt_tokens: u64,
+    /// Tokens gerados na completion (saída).
+    pub completion_tokens: u64,
+    /// Total de tokens consumidos (prompt + completion).
+    pub total_tokens: u64,
 }
 
-/// Resultado de embedding
+/// Resultado de uma operação de embedding.
+///
+/// Embeddings são representações numéricas de texto que capturam
+/// seu significado semântico. Textos similares têm embeddings próximos.
+///
+/// ## O que é um Embedding?
+/// Imagine transformar uma frase em uma lista de 1536 números.
+/// Frases com significado similar terão números parecidos.
+/// Isso permite comparar textos matematicamente.
 #[derive(Debug, Clone)]
 pub struct EmbeddingResult {
+    /// Vetor de embedding (geralmente 1536 dimensões para OpenAI).
+    ///
+    /// Use `cosine_similarity` para comparar dois vetores.
     pub vector: Vec<f32>,
+    /// Tokens consumidos para gerar este embedding.
+    ///
+    /// Embeddings são mais baratos que completions.
     pub tokens_used: u64,
 }
 
@@ -85,11 +142,21 @@ pub trait LlmClient: Send + Sync {
     ) -> Result<Vec<crate::evaluation::EvaluationType>, LlmError>;
 }
 
-/// Resposta de avaliação
+/// Resposta de uma avaliação feita pelo LLM.
+///
+/// Quando pedimos ao LLM para avaliar se uma resposta
+/// atende a certos critérios, ele retorna esta estrutura.
 #[derive(Debug, Clone)]
 pub struct EvaluationResponse {
+    /// Se a resposta passou na avaliação.
     pub passed: bool,
+    /// Explicação do raciocínio usado pelo avaliador.
+    ///
+    /// Importante para entender por que passou ou não.
     pub reasoning: String,
+    /// Nível de confiança na avaliação (0.0 a 1.0).
+    ///
+    /// Valores baixos indicam que o avaliador não tem certeza.
     pub confidence: f32,
 }
 
@@ -97,24 +164,46 @@ pub struct EvaluationResponse {
 // IMPLEMENTAÇÃO MOCK PARA TESTES
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Cliente mock para testes unitários
+/// Cliente mock para testes unitários.
+///
+/// Simula respostas do LLM sem fazer chamadas reais à API.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct MockLlmClient {
+    /// Ação padrão a retornar quando `decide_action` é chamado.
     pub default_action: Option<AgentAction>,
 }
 
+#[cfg(test)]
 impl MockLlmClient {
-    pub fn new() -> Self {
-        Self::default()
+    /// Cria um novo cliente MockLlmClient com valores padrão.
+    ///
+    /// # Exemplo
+    /// ```rust,ignore
+    /// let client = MockLlmClient::new();
+    /// ```
+        pub fn new() -> Self {
+        Self { default_action: None }
     }
 
+    /// Cria um novo cliente MockLlmClient com uma ação padrão.
+    ///
+    /// # Argumentos
+    /// * `action` - A ação padrão a retornar quando `decide_action` é chamado.
+    ///
+    /// # Exemplo
+    /// ```rust,ignore
+    /// let client = MockLlmClient::with_action(AgentAction::Search {
+    ///     queries: vec![],
+    ///     think: "Mock search".into(),
+    /// });
+    /// ```
     pub fn with_action(action: AgentAction) -> Self {
-        Self {
-            default_action: Some(action),
-        }
+        Self { default_action: Some(action.clone()) }
     }
 }
 
+#[cfg(test)]
 #[async_trait]
 impl LlmClient for MockLlmClient {
     async fn decide_action(
@@ -151,7 +240,9 @@ impl LlmClient for MockLlmClient {
         Ok(LlmResponse {
             answer: "Mock generated answer".into(),
             references: vec![],
-            tokens_used: 100,
+            prompt_tokens: 80,
+            completion_tokens: 20,
+            total_tokens: 100,
         })
     }
 
@@ -199,13 +290,30 @@ impl LlmClient for MockLlmClient {
 
 /// Cliente para OpenAI API
 pub struct OpenAiClient {
+    /// Chave da API OpenAI
     api_key: String,
+    /// Modelo principal para geração de texto
     model: String,
+    /// Modelo para geração de embeddings
     embedding_model: String,
+    /// Cliente HTTP
     client: reqwest::Client,
 }
 
 impl OpenAiClient {
+    /// Cria um novo cliente OpenAI com configurações padrão.
+    ///
+    /// # Argumentos
+    /// * `api_key` - Sua chave de API OpenAI (começa com "sk-")
+    ///
+    /// # Modelos Padrão
+    /// - Texto: `gpt-4-turbo-preview`
+    /// - Embedding: `text-embedding-3-small`
+    ///
+    /// # Exemplo
+    /// ```rust,ignore
+    /// let client = OpenAiClient::new("sk-your-api-key".into());
+    /// ```
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
@@ -215,58 +323,551 @@ impl OpenAiClient {
         }
     }
 
+    /// Altera o modelo de texto usado pelo cliente.
+    ///
+    /// # Argumentos
+    /// * `model` - Nome do modelo (ex: "gpt-4", "gpt-3.5-turbo")
+    ///
+    /// # Exemplo
+    /// ```rust,ignore
+    /// let client = OpenAiClient::new(api_key)
+    ///     .with_model("gpt-4");
+    /// ```
     pub fn with_model(mut self, model: &str) -> Self {
         self.model = model.into();
         self
     }
 }
 
+// Estruturas para serialização/deserialização da API OpenAI
+#[derive(Serialize)]
+struct ChatMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct ChatRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct ChatResponse {
+    choices: Vec<ChatChoice>,
+    usage: Usage,
+}
+
+#[derive(Deserialize)]
+struct ChatChoice {
+    message: ChatResponseMessage,
+}
+
+#[derive(Deserialize)]
+struct ChatResponseMessage {
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct Usage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+}
+
+#[derive(Serialize)]
+struct EmbeddingRequest {
+    model: String,
+    input: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct EmbeddingResponse {
+    data: Vec<EmbeddingData>,
+    usage: Usage,
+}
+
+#[derive(Deserialize)]
+struct EmbeddingData {
+    embedding: Vec<f32>,
+}
+
+#[derive(Deserialize)]
+struct ActionJson {
+    action: String,
+    queries: Option<Vec<ActionQuery>>,
+    urls: Option<Vec<String>>,
+    gap_questions: Option<Vec<String>>,
+    answer: Option<String>,
+    references: Option<Vec<ActionReference>>,
+    code: Option<String>,
+    think: String,
+}
+
+#[derive(Deserialize)]
+struct ActionQuery {
+    q: String,
+    tbs: Option<String>,
+    location: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ActionReference {
+    url: String,
+    title: String,
+    #[serde(rename = "exactQuote")]
+    exact_quote: Option<String>,
+    #[serde(rename = "relevanceScore")]
+    relevance_score: Option<f32>,
+}
+
 #[async_trait]
 impl LlmClient for OpenAiClient {
     async fn decide_action(
         &self,
-        _prompt: &AgentPrompt,
-        _permissions: &ActionPermissions,
+        prompt: &AgentPrompt,
+        permissions: &ActionPermissions,
     ) -> Result<AgentAction, LlmError> {
-        // TODO: Implementar chamada real à API
-        todo!("Implement OpenAI decide_action")
+        let mut system_prompt = prompt.system.clone();
+        system_prompt.push_str("\n\nYou must respond with a valid JSON object containing the action. Available actions:\n");
+
+        if permissions.search {
+            system_prompt.push_str("- search: {\"action\": \"search\", \"queries\": [{\"q\": \"query text\", \"tbs\": \"optional\", \"location\": \"optional\"}], \"think\": \"reasoning\"}\n");
+        }
+        if permissions.read {
+            system_prompt.push_str("- read: {\"action\": \"read\", \"urls\": [\"url1\", \"url2\"], \"think\": \"reasoning\"}\n");
+        }
+        if permissions.reflect {
+            system_prompt.push_str("- reflect: {\"action\": \"reflect\", \"gap_questions\": [\"question1\"], \"think\": \"reasoning\"}\n");
+        }
+        if permissions.answer {
+            system_prompt.push_str("- answer: {\"action\": \"answer\", \"answer\": \"response text\", \"references\": [{\"url\": \"...\", \"title\": \"...\"}], \"think\": \"reasoning\"}\n");
+        }
+        if permissions.coding {
+            system_prompt.push_str("- coding: {\"action\": \"coding\", \"code\": \"code to execute\", \"think\": \"reasoning\"}\n");
+        }
+
+        system_prompt.push_str("\nRespond ONLY with valid JSON, no other text.");
+
+        let messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: system_prompt,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: format!("{}\n\nDiary:\n{}",
+                    prompt.user,
+                    prompt.diary.iter().map(|e| e.format()).collect::<Vec<_>>().join("\n")
+                ),
+            },
+        ];
+
+        let request = ChatRequest {
+            model: self.model.clone(),
+            messages,
+            temperature: Some(0.7),
+            response_format: Some(serde_json::json!({"type": "json_object"})),
+        };
+
+        let response = self.client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+        if response.status() == 429 {
+            return Err(LlmError::RateLimitError);
+        }
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+        }
+
+        let chat_response: ChatResponse = response
+            .json()
+            .await
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        let content = chat_response.choices
+            .first()
+            .ok_or_else(|| LlmError::ParseError("No choices in response".into()))?
+            .message.content.clone();
+
+        let action_json: ActionJson = serde_json::from_str(&content)
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse action JSON: {}", e)))?;
+
+        match action_json.action.as_str() {
+            "search" => {
+                let queries = action_json.queries
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|q| SerpQuery {
+                        q: q.q,
+                        tbs: q.tbs,
+                        location: q.location,
+                    })
+                    .collect();
+                Ok(AgentAction::Search {
+                    queries,
+                    think: action_json.think,
+                })
+            }
+            "read" => {
+                Ok(AgentAction::Read {
+                    urls: action_json.urls.unwrap_or_default(),
+                    think: action_json.think,
+                })
+            }
+            "reflect" => {
+                Ok(AgentAction::Reflect {
+                    gap_questions: action_json.gap_questions.unwrap_or_default(),
+                    think: action_json.think,
+                })
+            }
+            "answer" => {
+                let references = action_json.references
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|r| Reference {
+                        url: r.url,
+                        title: r.title,
+                        exact_quote: r.exact_quote,
+                        relevance_score: r.relevance_score,
+                    })
+                    .collect();
+                Ok(AgentAction::Answer {
+                    answer: action_json.answer.unwrap_or_default(),
+                    references,
+                    think: action_json.think,
+                })
+            }
+            "coding" => {
+                Ok(AgentAction::Coding {
+                    code: action_json.code.unwrap_or_default(),
+                    think: action_json.think,
+                })
+            }
+            _ => Err(LlmError::ParseError(format!("Unknown action: {}", action_json.action))),
+        }
     }
 
     async fn generate_answer(
         &self,
-        _prompt: &AgentPrompt,
-        _temperature: f32,
+        prompt: &AgentPrompt,
+        temperature: f32,
     ) -> Result<LlmResponse, LlmError> {
-        // TODO: Implementar chamada real à API
-        todo!("Implement OpenAI generate_answer")
+        let messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: prompt.system.clone(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: format!("{}\n\nDiary:\n{}",
+                    prompt.user,
+                    prompt.diary.iter().map(|e| e.format()).collect::<Vec<_>>().join("\n")
+                ),
+            },
+        ];
+
+        let request = ChatRequest {
+            model: self.model.clone(),
+            messages,
+            temperature: Some(temperature),
+            response_format: None,
+        };
+
+        let response = self.client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+        if response.status() == 429 {
+            return Err(LlmError::RateLimitError);
+        }
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+        }
+
+        let chat_response: ChatResponse = response
+            .json()
+            .await
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        let answer = chat_response.choices
+            .first()
+            .ok_or_else(|| LlmError::ParseError("No choices in response".into()))?
+            .message.content.clone();
+
+        Ok(LlmResponse {
+            answer,
+            references: vec![], // References devem ser extraídas do contexto
+            prompt_tokens: chat_response.usage.prompt_tokens,
+            completion_tokens: chat_response.usage.completion_tokens,
+            total_tokens: chat_response.usage.total_tokens,
+        })
     }
 
-    async fn embed(&self, _text: &str) -> Result<EmbeddingResult, LlmError> {
-        // TODO: Implementar chamada real à API
-        todo!("Implement OpenAI embed")
+    async fn embed(&self, text: &str) -> Result<EmbeddingResult, LlmError> {
+        let request = EmbeddingRequest {
+            model: self.embedding_model.clone(),
+            input: serde_json::Value::String(text.to_string()),
+        };
+
+        let response = self.client
+            .post("https://api.openai.com/v1/embeddings")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+        if response.status() == 429 {
+            return Err(LlmError::RateLimitError);
+        }
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+        }
+
+        let embedding_response: EmbeddingResponse = response
+            .json()
+            .await
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        let embedding_data = embedding_response.data
+            .first()
+            .ok_or_else(|| LlmError::ParseError("No embedding data in response".into()))?;
+
+        Ok(EmbeddingResult {
+            vector: embedding_data.embedding.clone(),
+            tokens_used: embedding_response.usage.total_tokens,
+        })
     }
 
-    async fn embed_batch(&self, _texts: &[String]) -> Result<Vec<EmbeddingResult>, LlmError> {
-        // TODO: Implementar chamada real à API
-        todo!("Implement OpenAI embed_batch")
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<EmbeddingResult>, LlmError> {
+        let input: Vec<serde_json::Value> = texts.iter()
+            .map(|t| serde_json::Value::String(t.clone()))
+            .collect();
+
+        let request = EmbeddingRequest {
+            model: self.embedding_model.clone(),
+            input: serde_json::Value::Array(input),
+        };
+
+        let response = self.client
+            .post("https://api.openai.com/v1/embeddings")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+        if response.status() == 429 {
+            return Err(LlmError::RateLimitError);
+        }
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+        }
+
+        let embedding_response: EmbeddingResponse = response
+            .json()
+            .await
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        let data_len = embedding_response.data.len() as u64;
+        let results: Vec<EmbeddingResult> = embedding_response.data
+            .into_iter()
+            .map(|data| EmbeddingResult {
+                vector: data.embedding,
+                tokens_used: embedding_response.usage.total_tokens / data_len,
+            })
+            .collect();
+
+        Ok(results)
     }
 
     async fn evaluate(
         &self,
-        _question: &str,
-        _answer: &str,
-        _criteria: &str,
+        question: &str,
+        answer: &str,
+        criteria: &str,
     ) -> Result<EvaluationResponse, LlmError> {
-        // TODO: Implementar chamada real à API
-        todo!("Implement OpenAI evaluate")
+        let system_prompt = format!(
+            "You are an evaluator. Evaluate if the answer meets the criteria: {}\n\nRespond with JSON: {{\"passed\": true/false, \"reasoning\": \"explanation\", \"confidence\": 0.0-1.0}}",
+            criteria
+        );
+
+        let messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: system_prompt,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: format!("Question: {}\n\nAnswer: {}", question, answer),
+            },
+        ];
+
+        let request = ChatRequest {
+            model: self.model.clone(),
+            messages,
+            temperature: Some(0.3),
+            response_format: Some(serde_json::json!({"type": "json_object"})),
+        };
+
+        let response = self.client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+        if response.status() == 429 {
+            return Err(LlmError::RateLimitError);
+        }
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+        }
+
+        let chat_response: ChatResponse = response
+            .json()
+            .await
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        let content = chat_response.choices
+            .first()
+            .ok_or_else(|| LlmError::ParseError("No choices in response".into()))?
+            .message.content.clone();
+
+        #[derive(Deserialize)]
+        struct EvalJson {
+            passed: bool,
+            reasoning: String,
+            confidence: f32,
+        }
+
+        let eval_json: EvalJson = serde_json::from_str(&content)
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse evaluation JSON: {}", e)))?;
+
+        Ok(EvaluationResponse {
+            passed: eval_json.passed,
+            reasoning: eval_json.reasoning,
+            confidence: eval_json.confidence,
+        })
     }
 
     async fn determine_eval_types(
         &self,
-        _question: &str,
+        question: &str,
     ) -> Result<Vec<crate::evaluation::EvaluationType>, LlmError> {
-        // TODO: Implementar chamada real à API
-        todo!("Implement OpenAI determine_eval_types")
+        let system_prompt = r#"You are an evaluator selector. Determine which evaluation types are needed for this question.
+Respond with JSON: {"needs_definitive": true/false, "needs_freshness": true/false, "needs_plurality": true/false, "needs_completeness": true/false}
+- definitive: Does the question need a clear, confident answer?
+- freshness: Does the question require recent/current information?
+- plurality: Does the question ask for multiple items/examples?
+- completeness: Does the question have multiple aspects that need coverage?"#;
+
+        let messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: system_prompt.into(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: format!("Question: {}", question),
+            },
+        ];
+
+        let request = ChatRequest {
+            model: self.model.clone(),
+            messages,
+            temperature: Some(0.3),
+            response_format: Some(serde_json::json!({"type": "json_object"})),
+        };
+
+        let response = self.client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+        if response.status() == 429 {
+            return Err(LlmError::RateLimitError);
+        }
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError(format!("OpenAI API error: {}", error_text)));
+        }
+
+        let chat_response: ChatResponse = response
+            .json()
+            .await
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        let content = chat_response.choices
+            .first()
+            .ok_or_else(|| LlmError::ParseError("No choices in response".into()))?
+            .message.content.clone();
+
+        #[derive(Deserialize)]
+        struct EvalTypesJson {
+            needs_definitive: bool,
+            needs_freshness: bool,
+            needs_plurality: bool,
+            needs_completeness: bool,
+        }
+
+        let eval_types_json: EvalTypesJson = serde_json::from_str(&content)
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse eval types JSON: {}", e)))?;
+
+        let mut types = Vec::new();
+        if eval_types_json.needs_definitive {
+            types.push(crate::evaluation::EvaluationType::Definitive);
+        }
+        if eval_types_json.needs_freshness {
+            types.push(crate::evaluation::EvaluationType::Freshness);
+        }
+        if eval_types_json.needs_plurality {
+            types.push(crate::evaluation::EvaluationType::Plurality);
+        }
+        if eval_types_json.needs_completeness {
+            types.push(crate::evaluation::EvaluationType::Completeness);
+        }
+
+        // Sempre adiciona Strict se houver outros tipos
+        if !types.is_empty() {
+            types.push(crate::evaluation::EvaluationType::Strict);
+        }
+
+        Ok(types)
     }
 }
 
@@ -282,7 +883,7 @@ mod tests {
             user: "test".into(),
             diary: vec![],
         };
-        let permissions = ActionPermissions::all();
+        let permissions = ActionPermissions::all_enabled();
 
         let action = client.decide_action(&prompt, &permissions).await.unwrap();
         assert!(action.is_search());

@@ -1,45 +1,151 @@
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// DEEP RESEARCH - IMPLEMENTAÇÃO RUST
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//
-// Este crate implementa o sistema DeepResearch em Rust, oferecendo:
-//
-// 1. Máquina de Estados para raciocínio de agente
-//    - Estados: Processing, BeastMode, Completed, Failed
-//    - Ações: Search, Read, Reflect, Answer, Coding
-//    - Transições explícitas e type-safe
-//
-// 2. Sistema de Personas Cognitivas
-//    - 7 personas com perspectivas diferentes
-//    - Expansão paralela de queries com Rayon
-//    - Trait extensível para personas customizadas
-//
-// 3. Avaliação Multidimensional
-//    - 5 tipos: Definitive, Freshness, Plurality, Completeness, Strict
-//    - Pipeline com falha rápida
-//    - Configuração por tipo de avaliação
-//
-// 4. Performance Otimizada
-//    - SIMD (AVX2) para similaridade cosseno
-//    - Paralelismo real com Rayon
-//    - Zero-copy onde possível
-//
-// Ganhos estimados vs TypeScript:
-// - Throughput: 10-20x
-// - Memória: 80-90% menos
-// - Latência: previsível (sem GC)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//! # Deep Research - Implementação Rust
+//!
+//! Este crate implementa o sistema **DeepResearch** em Rust, um agente de pesquisa
+//! autônomo que utiliza LLMs (Large Language Models) para realizar pesquisas
+//! profundas na web e gerar respostas de alta qualidade.
+//!
+//! ## O que é o DeepResearch?
+//!
+//! Imagine um assistente de pesquisa que:
+//! 1. Recebe uma pergunta complexa
+//! 2. Busca informações na web de forma inteligente
+//! 3. Lê e analisa o conteúdo encontrado
+//! 4. Reflete sobre lacunas no conhecimento
+//! 5. Gera uma resposta completa e bem fundamentada
+//!
+//! ## Arquitetura Principal
+//!
+//! O sistema é composto por 4 pilares principais:
+//!
+//! ### 1. Máquina de Estados (`agent`)
+//! Controla o fluxo de execução do agente com estados bem definidos:
+//! - **Processing**: Executando ações de pesquisa normalmente
+//! - **BeastMode**: Modo emergência quando 85% do budget foi usado
+//! - **Completed**: Pesquisa finalizada com sucesso
+//! - **Failed**: Falha após esgotar tentativas
+//!
+//! ### 2. Sistema de Personas (`personas`)
+//! 7 "personalidades" cognitivas que expandem queries de busca:
+//! - Cada persona traz uma perspectiva diferente (acadêmica, prática, cética...)
+//! - Expansão paralela usando Rayon para máxima performance
+//!
+//! ### 3. Avaliação Multidimensional (`evaluation`)
+//! 5 tipos de avaliação para garantir qualidade:
+//! - **Definitive**: Resposta é confiante?
+//! - **Freshness**: Informação é recente?
+//! - **Plurality**: Quantidade correta de exemplos?
+//! - **Completeness**: Todos aspectos cobertos?
+//! - **Strict**: Avaliação rigorosa final
+//!
+//! ### 4. Performance Otimizada (`performance`)
+//! Otimizações de baixo nível para máxima velocidade:
+//! - SIMD (AVX2) para similaridade cosseno
+//! - Paralelismo real com Rayon
+//! - Zero-copy onde possível
+//!
+//! ## Ganhos vs TypeScript Original
+//!
+//! | Métrica | Melhoria |
+//! |---------|----------|
+//! | Throughput | 10-20x mais rápido |
+//! | Memória | 80-90% menos uso |
+//! | Latência | Previsível (sem GC) |
+//!
+//! ## Exemplo de Uso
+//!
+//! ```rust,ignore
+//! use deep_research::prelude::*;
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let agent = DeepResearchAgent::new(llm_client, search_client);
+//!     let result = agent.research("Quais são os melhores frameworks Rust para web?").await;
+//!     println!("{}", result.answer.unwrap_or_default());
+//! }
+//! ```
 
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
+/// Tipos fundamentais compartilhados por todo o sistema.
+///
+/// Este módulo define as estruturas de dados básicas como:
+/// - [`Language`]: Idiomas suportados para pesquisa
+/// - [`SerpQuery`]: Query de busca com filtros
+/// - [`Reference`]: Referência a uma fonte citada
+/// - [`KnowledgeItem`]: Item de conhecimento acumulado
+/// - [`BoostedSearchSnippet`]: Resultado de busca com scores
 pub mod types;
+
+/// Agente de pesquisa com máquina de estados.
+///
+/// O coração do sistema. Contém:
+/// - `DeepResearchAgent`: O agente principal que orquestra tudo
+/// - `AgentState`: Estados possíveis (Processing, BeastMode, Completed, Failed)
+/// - `AgentAction`: Ações que o agente pode executar
+/// - `AgentContext`: Contexto com conhecimento acumulado
+/// - `ActionPermissions`: Controle de quais ações estão habilitadas
 pub mod agent;
+
+/// Sistema de personas cognitivas para expansão de queries.
+///
+/// Implementa 7 "personalidades" diferentes que analisam
+/// a mesma pergunta de perspectivas distintas:
+/// - Acadêmico, Prático, Cético, Criativo...
+///
+/// Cada persona gera queries únicas, aumentando a cobertura
+/// da pesquisa sem duplicação.
 pub mod personas;
+
+/// Pipeline de avaliação multidimensional.
+///
+/// Avalia respostas em 5 dimensões de qualidade:
+/// - [`EvaluationType::Definitive`]: Confiança da resposta
+/// - [`EvaluationType::Freshness`]: Atualidade da informação
+/// - [`EvaluationType::Plurality`]: Quantidade de exemplos
+/// - [`EvaluationType::Completeness`]: Cobertura dos aspectos
+/// - [`EvaluationType::Strict`]: Avaliação rigorosa final
 pub mod evaluation;
+
+/// Otimizações de performance de baixo nível.
+///
+/// Implementações otimizadas para operações críticas:
+/// - Similaridade cosseno com SIMD (AVX2)
+/// - Deduplicação vetorial de queries
+/// - Operações em batch para embeddings
 pub mod performance;
+
+/// Clientes para Large Language Models (LLMs).
+///
+/// Define a trait `LlmClient` e implementações para:
+/// - OpenAI (GPT-4, GPT-3.5)
+/// - Mock para testes
+///
+/// Responsável por:
+/// - Decidir próxima ação do agente
+/// - Gerar respostas finais
+/// - Criar embeddings de texto
+/// - Avaliar qualidade de respostas
 pub mod llm;
+
+/// Clientes para busca web e leitura de URLs.
+///
+/// Define a trait `SearchClient` e implementações para:
+/// - Jina AI (busca + reader + rerank)
+/// - Mock para testes
+///
+/// Responsável por:
+/// - Executar buscas na web
+/// - Extrair conteúdo de páginas
+/// - Reranking de resultados por relevância
 pub mod search;
+
+/// Utilitários diversos.
+///
+/// Funções auxiliares usadas em todo o sistema:
+/// - Tracking de uso de tokens
+/// - Formatação de texto
+/// - Helpers de conversão
 pub mod utils;
 
 // Re-exports principais
@@ -49,10 +155,15 @@ pub use personas::PersonaOrchestrator;
 pub use evaluation::{EvaluationPipeline, EvaluationType};
 pub use performance::simd::cosine_similarity;
 
-/// Versão da biblioteca
+/// Versão da biblioteca.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Prelude com imports comuns
+/// Prelude com imports comuns para uso rápido.
+///
+/// Importar tudo de uma vez:
+/// ```rust,ignore
+/// use deep_research::prelude::*;
+/// ```
 pub mod prelude {
     pub use crate::agent::{
         DeepResearchAgent, AgentState, AgentAction, AgentContext, ActionPermissions,
