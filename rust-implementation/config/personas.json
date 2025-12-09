@@ -1,0 +1,55 @@
+{
+  "version": "1.0",
+  "personas": [
+    {
+      "name": "Expert Skeptic",
+      "focus": "problems, limitations, counter-evidence",
+      "weight": 1.0,
+      "enabled": true,
+      "query_suffix": "problems issues failures real experiences"
+    },
+    {
+      "name": "Detail Analyst",
+      "focus": "specifications, technical details, exact parameters",
+      "weight": 1.0,
+      "enabled": true,
+      "query_suffix": "specifications technical details comparison"
+    },
+    {
+      "name": "Historical Researcher",
+      "focus": "evolution over time, historical context",
+      "weight": 1.0,
+      "enabled": true,
+      "query_suffix": "history evolution changes",
+      "default_tbs": "qdr:y"
+    },
+    {
+      "name": "Comparative Thinker",
+      "focus": "alternatives, competitors, trade-offs",
+      "weight": 1.0,
+      "enabled": true,
+      "query_suffix": "vs alternatives comparison pros cons"
+    },
+    {
+      "name": "Temporal Context",
+      "focus": "time-sensitive queries, recency, current state",
+      "weight": 1.2,
+      "enabled": true,
+      "default_tbs": "qdr:m"
+    },
+    {
+      "name": "Globalizer",
+      "focus": "authoritative language/region for subject matter",
+      "weight": 1.0,
+      "enabled": true
+    },
+    {
+      "name": "Reality Skepticalist",
+      "focus": "contradicting evidence, disprove assumptions",
+      "weight": 1.0,
+      "enabled": true,
+      "query_suffix": "wrong myth debunked evidence against"
+    }
+  ]
+}
+

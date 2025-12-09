@@ -354,7 +354,7 @@ mod tests {
         let new = vec![
             vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             vec![0.99, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], // Muito similar ao primeiro
-            vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], // Diferente
+            vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],   // Diferente
         ];
         let existing: Vec<Vec<f32>> = vec![];
 

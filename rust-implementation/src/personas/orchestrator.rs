@@ -5,9 +5,8 @@
 use rayon::prelude::*;
 
 use super::{
-    CognitivePersona, QueryContext, WeightedQuery,
-    ExpertSkeptic, DetailAnalyst, HistoricalResearcher,
-    ComparativeThinker, TemporalContext, Globalizer, RealitySkepticalist,
+    CognitivePersona, ComparativeThinker, DetailAnalyst, ExpertSkeptic, Globalizer,
+    HistoricalResearcher, QueryContext, RealitySkepticalist, TemporalContext, WeightedQuery,
 };
 
 /// Orquestrador que gerencia todas as personas cognitivas
@@ -101,10 +100,14 @@ impl PersonaOrchestrator {
     /// Esta função usa `par_iter()` do Rayon, que distribui o trabalho
     /// entre múltiplas threads. Para 7 personas em uma CPU de 8 cores,
     /// todas as expansões rodam verdadeiramente em paralelo.
-    pub fn expand_query_parallel(&self, original: &str, context: &QueryContext) -> Vec<WeightedQuery> {
+    pub fn expand_query_parallel(
+        &self,
+        original: &str,
+        context: &QueryContext,
+    ) -> Vec<WeightedQuery> {
         // Rayon: paralelismo real em múltiplos cores
         self.personas
-            .par_iter()  // Iterator paralelo!
+            .par_iter() // Iterator paralelo!
             .filter(|persona| persona.is_applicable(context))
             .map(|persona| {
                 let query = persona.expand_query(original, context);
@@ -129,13 +132,17 @@ impl PersonaOrchestrator {
     /// Um vetor flat com todas as queries expandidas.
     pub fn expand_batch(&self, queries: &[String], context: &QueryContext) -> Vec<WeightedQuery> {
         queries
-            .par_iter()  // Paralelo no nível das queries
+            .par_iter() // Paralelo no nível das queries
             .flat_map(|q| self.expand_query_parallel(q, context))
             .collect()
     }
 
     /// Expande query de forma sequencial (para debugging ou testes)
-    pub fn expand_query_sequential(&self, original: &str, context: &QueryContext) -> Vec<WeightedQuery> {
+    pub fn expand_query_sequential(
+        &self,
+        original: &str,
+        context: &QueryContext,
+    ) -> Vec<WeightedQuery> {
         self.personas
             .iter()
             .filter(|persona| persona.is_applicable(context))
@@ -172,7 +179,10 @@ impl PersonaOrchestrator {
 
     /// Retorna descrições de todas as personas (para prompts)
     pub fn persona_descriptions(&self) -> Vec<String> {
-        self.personas.iter().map(|p| p.prompt_description()).collect()
+        self.personas
+            .iter()
+            .map(|p| p.prompt_description())
+            .collect()
     }
 }
 
@@ -277,9 +287,19 @@ mod tests {
         // Mesmo número de resultados
         assert_eq!(sequential.len(), parallel.len());
 
-        // Mesmas queries (ordem pode variar devido ao paralelismo)
-        let seq_queries: std::collections::HashSet<_> = sequential.iter().map(|wq| &wq.query.q).collect();
-        let par_queries: std::collections::HashSet<_> = parallel.iter().map(|wq| &wq.query.q).collect();
-        assert_eq!(seq_queries, par_queries);
+        // Mesmas fontes de persona (a query pode variar devido à aleatoriedade do ExpertSkeptic)
+        let seq_sources: std::collections::HashSet<_> =
+            sequential.iter().map(|wq| wq.source_persona).collect();
+        let par_sources: std::collections::HashSet<_> =
+            parallel.iter().map(|wq| wq.source_persona).collect();
+        assert_eq!(seq_sources, par_sources);
+
+        // Verifica que todas as queries não estão vazias
+        for wq in &sequential {
+            assert!(!wq.query.q.is_empty(), "Query não deve estar vazia");
+        }
+        for wq in &parallel {
+            assert!(!wq.query.q.is_empty(), "Query não deve estar vazia");
+        }
     }
 }
