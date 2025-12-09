@@ -22,6 +22,7 @@ use deep_research::types::{
     TopicCategory,
 };
 use std::time::Duration;
+use uuid::Uuid;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // HELPERS - Simulação de Componentes
@@ -67,6 +68,7 @@ fn create_test_context(question: &str) -> QueryContext {
         current_date: Utc::now().date_naive(),
         detected_language: Language::English,
         detected_topic: TopicCategory::Technology,
+        execution_id: Uuid::new_v4(),
     }
 }
 

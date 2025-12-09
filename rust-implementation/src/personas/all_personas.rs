@@ -284,6 +284,7 @@ mod tests {
 
     fn default_context() -> QueryContext {
         QueryContext {
+            execution_id: uuid::Uuid::new_v4(),
             original_query: "test query".into(),
             user_intent: String::new(),
             soundbites: vec![],

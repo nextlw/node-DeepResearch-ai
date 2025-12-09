@@ -134,7 +134,7 @@ impl Default for TopicCategory {
 }
 
 /// Query de busca SERP
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SerpQuery {
     /// Texto da query
     pub q: String,
@@ -202,6 +202,10 @@ pub enum KnowledgeType {
     Coding,
     /// Erro/falha
     Error,
+    /// Histórico de sessões anteriores
+    History,
+    /// Informação fornecida diretamente pelo usuário
+    UserProvided,
 }
 
 impl KnowledgeType {
@@ -214,6 +218,8 @@ impl KnowledgeType {
             Self::Url => "url",
             Self::Coding => "coding",
             Self::Error => "error",
+            Self::History => "history",
+            Self::UserProvided => "user-provided",
         }
     }
 }

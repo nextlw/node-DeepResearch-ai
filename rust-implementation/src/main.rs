@@ -152,34 +152,550 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(async_main(args, is_tui_mode))
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MENU DE INICIALIZAÇÃO (LAUNCHER)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Opções do menu de launcher
+#[derive(Clone, Copy, PartialEq)]
+enum LauncherOption {
+    TuiMode,
+    DirectSearch,
+    CompareReaders,
+    CompareLive,
+    Help,
+    Quit,
+}
+
+impl LauncherOption {
+    fn all() -> Vec<Self> {
+        vec![
+            Self::TuiMode,
+            Self::DirectSearch,
+            Self::CompareReaders,
+            Self::CompareLive,
+            Self::Help,
+            Self::Quit,
+        ]
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::TuiMode => "🖥️  Interface TUI Interativa",
+            Self::DirectSearch => "🔍 Pesquisa Direta (terminal)",
+            Self::CompareReaders => "📊 Comparar Web Readers",
+            Self::CompareLive => "⚡ Pesquisa com Comparação Live",
+            Self::Help => "❓ Ajuda (mostrar comandos)",
+            Self::Quit => "❌ Sair",
+        }
+    }
+
+    fn description(&self) -> &'static str {
+        match self {
+            Self::TuiMode => "Abre a interface visual completa com histórico e follow-ups",
+            Self::DirectSearch => "Executa pesquisa no terminal (modo clássico)",
+            Self::CompareReaders => "Compara Jina Reader vs Rust+OpenAI em URLs específicas",
+            Self::CompareLive => "Pesquisa com comparação de readers em tempo real",
+            Self::Help => "Mostra todos os comandos disponíveis",
+            Self::Quit => "Encerra o programa",
+        }
+    }
+}
+
+/// Estado do menu launcher
+struct LauncherState {
+    selected: usize,
+    options: Vec<LauncherOption>,
+    input_mode: bool,
+    input_text: String,
+    input_label: String,
+}
+
+impl LauncherState {
+    fn new() -> Self {
+        Self {
+            selected: 0,
+            options: LauncherOption::all(),
+            input_mode: false,
+            input_text: String::new(),
+            input_label: String::new(),
+        }
+    }
+
+    fn selected_option(&self) -> LauncherOption {
+        self.options[self.selected]
+    }
+
+    fn next(&mut self) {
+        self.selected = (self.selected + 1) % self.options.len();
+    }
+
+    fn prev(&mut self) {
+        self.selected = if self.selected == 0 {
+            self.options.len() - 1
+        } else {
+            self.selected - 1
+        };
+    }
+}
+
+/// Renderiza o menu launcher
+fn render_launcher(frame: &mut ratatui::Frame, state: &LauncherState) {
+    use ratatui::layout::{Constraint, Direction, Layout, Rect};
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+
+    let area = frame.area();
+
+    // Background
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(Color::Rgb(20, 20, 30))),
+        area,
+    );
+
+    // Layout principal
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(32), // Header/Logo (ASCII art + texto)
+            Constraint::Length(1),  // Espaço
+            Constraint::Min(10),    // Menu
+            Constraint::Length(2),  // Footer
+        ])
+        .split(area);
+
+    // Header com logo ASCII art - Do arquivo config/ascii-art.txt
+    let blue = Color::Rgb(100, 150, 255);
+    let accent = Color::Rgb(255, 200, 100);
+
+    let logo = vec![
+        Line::from(vec![Span::styled("", Style::default())]),
+        Line::from(vec![Span::styled(" .................................................................................................. ", Style::default().fg(Color::DarkGray))]),
+        Line::from(vec![Span::styled(" .................................................................................................. ", Style::default().fg(Color::DarkGray))]),
+        Line::from(vec![Span::styled(" .................................................................................................. ", Style::default().fg(Color::DarkGray))]),
+        Line::from(vec![Span::styled(" .......-.......................................................................................... ", Style::default().fg(Color::DarkGray))]),
+        Line::from(vec![Span::styled(" .....................................                  ........................................... ", Style::default().fg(Color::DarkGray))]),
+        Line::from(vec![
+            Span::styled(" ...................................     ", Style::default().fg(Color::DarkGray)),
+            Span::styled("############", Style::default().fg(blue)),
+            Span::styled(".     ........................................ ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" .................................    ", Style::default().fg(Color::DarkGray)),
+            Span::styled("###            ####", Style::default().fg(blue)),
+            Span::styled("   ....................................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" ...............................    ", Style::default().fg(Color::DarkGray)),
+            Span::styled("##                  ###", Style::default().fg(blue)),
+            Span::styled("     ................................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" ..............................   ", Style::default().fg(Color::DarkGray)),
+            Span::styled("##       #########       ###", Style::default().fg(blue)),
+            Span::styled("             ........................ ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" ..............................  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("+#     ###        ###       .####+", Style::default().fg(accent)),
+            Span::styled("           ..................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" .............................   ", Style::default().fg(Color::DarkGray)),
+            Span::styled("#     ##    ..      ##+ ...       +#########", Style::default().fg(accent)),
+            Span::styled(" ..................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" ............-...............   ", Style::default().fg(Color::DarkGray)),
+            Span::styled("##    ##         ######+ .        #####+", Style::default().fg(accent)),
+            Span::styled("      ..................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" .......................-...   ", Style::default().fg(Color::DarkGray)),
+            Span::styled("##  .  #   -######          #######", Style::default().fg(accent)),
+            Span::styled("           ...................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" ..........................   ", Style::default().fg(Color::DarkGray)),
+            Span::styled("##  ..  ####          .######", Style::default().fg(accent)),
+            Span::styled("           ............................. ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" .......................    ", Style::default().fg(Color::DarkGray)),
+            Span::styled("-##  ...         ########", Style::default().fg(accent)),
+            Span::styled("         ..................................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" .....................    ", Style::default().fg(Color::DarkGray)),
+            Span::styled("###         ########        ######", Style::default().fg(accent)),
+            Span::styled(" ..................................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" ..................     ", Style::default().fg(Color::DarkGray)),
+            Span::styled("##      ######. ##          ##     ##", Style::default().fg(accent)),
+            Span::styled(" ..................................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" ................     ", Style::default().fg(Color::DarkGray)),
+            Span::styled("##########  ##      ##########       #-", Style::default().fg(accent)),
+            Span::styled(" ..................................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" ................. ", Style::default().fg(Color::DarkGray)),
+            Span::styled("#####.          ###                   ##", Style::default().fg(accent)),
+            Span::styled("   ..................................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" .................          ......   ", Style::default().fg(Color::DarkGray)),
+            Span::styled("###.             ###", Style::default().fg(accent)),
+            Span::styled("    ...................................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" .................    .............     ", Style::default().fg(Color::DarkGray)),
+            Span::styled("#######+######", Style::default().fg(accent)),
+            Span::styled("     ........................................ ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" ..........  .........................        ", Style::default().fg(Color::DarkGray)),
+            Span::styled("++-", Style::default().fg(accent)),
+            Span::styled("        .......................................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![Span::styled(" ..........................................       ................................................. ", Style::default().fg(Color::DarkGray))]),
+        Line::from(vec![Span::styled(" ............. .................................................................................... ", Style::default().fg(Color::DarkGray))]),
+        Line::from(vec![Span::styled(" ......................................................................................--.......... ", Style::default().fg(Color::DarkGray))]),
+        Line::from(vec![
+            Span::styled(" ................................... -.......-", Style::default().fg(Color::DarkGray)),
+            Span::styled("+", Style::default().fg(accent)),
+            Span::styled(".................................................... ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![Span::styled("", Style::default())]),
+        Line::from(vec![
+            Span::styled("              ", Style::default()),
+            Span::styled("  DEEP RESEARCH", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("              ", Style::default()),
+            Span::styled("  Pesquisa Profunda", Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::styled("              ", Style::default()),
+            Span::styled(format!("  v{}", deep_research::VERSION), Style::default().fg(Color::Yellow)),
+        ]),
+    ];
+
+    let header = Paragraph::new(logo);
+    frame.render_widget(header, chunks[0]);
+
+    // Menu central
+    let menu_area = centered_rect(60, 70, chunks[2]);
+
+    if state.input_mode {
+        // Modo de input
+        let input_block = Block::default()
+            .title(format!(" {} ", state.input_label))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow));
+
+        let input = Paragraph::new(state.input_text.as_str())
+            .style(Style::default().fg(Color::White))
+            .block(input_block);
+
+        frame.render_widget(input, menu_area);
+
+        // Mostrar cursor
+        frame.set_cursor_position((
+            menu_area.x + state.input_text.len() as u16 + 1,
+            menu_area.y + 1,
+        ));
+    } else {
+        // Lista de opções
+        let items: Vec<ListItem> = state
+            .options
+            .iter()
+            .enumerate()
+            .map(|(i, opt)| {
+                let style = if i == state.selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                let prefix = if i == state.selected { "▶ " } else { "  " };
+                ListItem::new(Line::from(vec![
+                    Span::styled(prefix, style),
+                    Span::styled(opt.label(), style),
+                ]))
+            })
+            .collect();
+
+        let menu = List::new(items)
+            .block(
+                Block::default()
+                    .title(" Selecione uma opção ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+
+        frame.render_widget(menu, menu_area);
+
+        // Descrição da opção selecionada
+        let desc_area = Rect {
+            x: menu_area.x,
+            y: menu_area.y + menu_area.height + 1,
+            width: menu_area.width,
+            height: 2,
+        };
+
+        let description = Paragraph::new(state.selected_option().description())
+            .style(Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC));
+
+        frame.render_widget(description, desc_area);
+    }
+
+    // Footer
+    let footer_text = if state.input_mode {
+        "Enter: Confirmar │ Esc: Cancelar"
+    } else {
+        "↑↓: Navegar │ Enter: Selecionar │ q: Sair"
+    };
+
+    let footer = Paragraph::new(footer_text)
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(ratatui::layout::Alignment::Center);
+
+    frame.render_widget(footer, chunks[3]);
+}
+
+/// Helper para centralizar um retângulo
+fn centered_rect(percent_x: u16, percent_y: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    use ratatui::layout::{Constraint, Direction, Layout};
+
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+/// Resultado do menu launcher
+enum LauncherResult {
+    RunTui(String),
+    RunDirect(String, Option<u64>),
+    RunCompare(String),
+    RunCompareLive(String),
+    ShowHelp,
+    Quit,
+}
+
+/// Executa o menu launcher
+fn run_launcher_menu() -> std::io::Result<LauncherResult> {
+    use crossterm::{
+        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+        execute,
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    };
+    use ratatui::{backend::CrosstermBackend, Terminal};
+    use std::io;
+
+    // Setup terminal
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut state = LauncherState::new();
+    let result;
+
+    loop {
+        terminal.draw(|f| render_launcher(f, &state))?;
+
+        if let Event::Key(key) = event::read()? {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+
+            if state.input_mode {
+                match key.code {
+                    KeyCode::Enter => {
+                        let text = state.input_text.clone();
+                        result = match state.selected_option() {
+                            LauncherOption::TuiMode => LauncherResult::RunTui(text),
+                            LauncherOption::DirectSearch => LauncherResult::RunDirect(text, None),
+                            LauncherOption::CompareReaders => LauncherResult::RunCompare(text),
+                            LauncherOption::CompareLive => LauncherResult::RunCompareLive(text),
+                            _ => LauncherResult::Quit,
+                        };
+                        break;
+                    }
+                    KeyCode::Esc => {
+                        state.input_mode = false;
+                        state.input_text.clear();
+                    }
+                    KeyCode::Char(c) => {
+                        state.input_text.push(c);
+                    }
+                    KeyCode::Backspace => {
+                        state.input_text.pop();
+                    }
+                    _ => {}
+                }
+            } else {
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => state.prev(),
+                    KeyCode::Down | KeyCode::Char('j') => state.next(),
+                    KeyCode::Enter => {
+                        match state.selected_option() {
+                            LauncherOption::TuiMode => {
+                                // TUI pode ser aberto direto ou com pergunta
+                                state.input_mode = true;
+                                state.input_label = "Pergunta (ou Enter vazio para interface)".to_string();
+                            }
+                            LauncherOption::DirectSearch => {
+                                state.input_mode = true;
+                                state.input_label = "Digite sua pergunta".to_string();
+                            }
+                            LauncherOption::CompareReaders => {
+                                state.input_mode = true;
+                                state.input_label = "URLs para comparar (separadas por vírgula)".to_string();
+                            }
+                            LauncherOption::CompareLive => {
+                                state.input_mode = true;
+                                state.input_label = "Digite sua pergunta".to_string();
+                            }
+                            LauncherOption::Help => {
+                                result = LauncherResult::ShowHelp;
+                                break;
+                            }
+                            LauncherOption::Quit => {
+                                result = LauncherResult::Quit;
+                                break;
+                            }
+                        }
+                    }
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        result = LauncherResult::Quit;
+                        break;
+                    }
+                    KeyCode::Char('1') => {
+                        state.selected = 0;
+                    }
+                    KeyCode::Char('2') => {
+                        state.selected = 1;
+                    }
+                    KeyCode::Char('3') => {
+                        state.selected = 2;
+                    }
+                    KeyCode::Char('4') => {
+                        state.selected = 3;
+                    }
+                    KeyCode::Char('5') => {
+                        state.selected = 4;
+                    }
+                    KeyCode::Char('6') => {
+                        state.selected = 5;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Restaurar terminal
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    Ok(result)
+}
+
+/// Mostra help no terminal
+fn show_help(program_name: &str) {
+    println!("Deep Research CLI v{}", deep_research::VERSION);
+    println!();
+    println!("Uso: {} <pergunta>", program_name);
+    println!();
+    println!("Opções:");
+    println!("  --tui [pergunta]      Modo TUI interativo (com campo de texto)");
+    println!("  --budget <tokens>     Budget máximo de tokens (padrão: 1000000)");
+    println!("  --compare <urls>      Comparar Jina Reader vs Rust+OpenAI (URLs separadas por vírgula)");
+    println!("  --compare-live        Habilita comparação Jina vs Rust durante pesquisa");
+    println!();
+    println!("Exemplos:");
+    println!("  {} \"Qual é a população do Brasil?\"", program_name);
+    println!("  {} --tui                              # Abre interface para digitar", program_name);
+    println!("  {} --tui \"Qual é a capital da França?\"", program_name);
+    println!("  {} --compare \"https://example.com,https://rust-lang.org\"", program_name);
+    println!("  {} --compare-live \"pergunta\"         # Pesquisa com comparação", program_name);
+    println!();
+    println!("Features de compilação:");
+    println!("  cargo build --release                           # Produção (sem clipboard)");
+    println!("  cargo build --release --features clipboard      # Com suporte a clipboard");
+    println!("  cargo build --release --features postgres       # Com PostgreSQL");
+    println!("  cargo build --release --features qdrant         # Com Qdrant");
+}
+
 async fn async_main(args: Vec<String>, is_tui_mode: bool) -> anyhow::Result<()> {
 
+    // Se não tem argumentos, mostra o menu launcher
     if args.len() < 2 {
-        eprintln!("Deep Research CLI v{}", deep_research::VERSION);
-        eprintln!();
-        eprintln!("Uso: {} <pergunta>", args[0]);
-        eprintln!();
-        eprintln!("Opções:");
-        eprintln!("  --tui [pergunta]      Modo TUI interativo (com campo de texto)");
-        eprintln!("  --budget <tokens>     Budget máximo de tokens (padrão: 1000000)");
-        eprintln!(
-            "  --compare <urls>      Comparar Jina Reader vs Rust+OpenAI (URLs separadas por vírgula)"
-        );
-        eprintln!("  --compare-live        Habilita comparação Jina vs Rust durante pesquisa");
-        eprintln!();
-        eprintln!("Exemplos:");
-        eprintln!("  {} \"Qual é a população do Brasil?\"", args[0]);
-        eprintln!("  {} --tui                              # Abre interface para digitar", args[0]);
-        eprintln!("  {} --tui \"Qual é a capital da França?\"", args[0]);
-        eprintln!(
-            "  {} --compare \"https://example.com,https://rust-lang.org\"",
-            args[0]
-        );
-        eprintln!(
-            "  {} --compare-live \"pergunta\"             # Pesquisa com comparação Jina/Rust",
-            args[0]
-        );
+        match run_launcher_menu()? {
+            LauncherResult::RunTui(question) => {
+                return run_tui_mode(&question).await;
+            }
+            LauncherResult::RunDirect(question, budget) => {
+                if question.is_empty() {
+                    eprintln!("✗ Erro: Pergunta não pode ser vazia!");
         std::process::exit(1);
+                }
+                // Continua abaixo com a pergunta
+                return run_direct_mode(&question, budget, false).await;
+            }
+            LauncherResult::RunCompare(urls) => {
+                if urls.is_empty() {
+                    eprintln!("✗ Erro: URLs não podem ser vazias!");
+                    std::process::exit(1);
+                }
+                return run_comparison_mode(&urls).await;
+            }
+            LauncherResult::RunCompareLive(question) => {
+                if question.is_empty() {
+                    eprintln!("✗ Erro: Pergunta não pode ser vazia!");
+                    std::process::exit(1);
+                }
+                return run_direct_mode(&question, None, true).await;
+            }
+            LauncherResult::ShowHelp => {
+                show_help(&args[0]);
+                return Ok(());
+            }
+            LauncherResult::Quit => {
+                return Ok(());
+            }
+        }
     }
 
     // Modo TUI
@@ -219,6 +735,11 @@ async fn async_main(args: Vec<String>, is_tui_mode: bool) -> anyhow::Result<()> 
         }
     };
 
+    run_direct_mode(&question, budget, enable_compare_live).await
+}
+
+/// Executa o modo de pesquisa direta no terminal
+async fn run_direct_mode(question: &str, budget: Option<u64>, enable_compare_live: bool) -> anyhow::Result<()> {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!(" DEEP RESEARCH v{}", deep_research::VERSION);
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -273,7 +794,7 @@ async fn async_main(args: Vec<String>, is_tui_mode: bool) -> anyhow::Result<()> 
     println!("Iniciando pesquisa...");
     println!();
 
-    let result = agent.run(question).await;
+    let result = agent.run(question.to_string()).await;
 
     // Exibir resultado
     println!();
@@ -445,6 +966,42 @@ async fn run_comparison_mode(urls_arg: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Cria LoadedConfig a partir das configurações globais
+fn create_loaded_config() -> deep_research::tui::LoadedConfig {
+    use deep_research::tui::LoadedConfig;
+
+    let runtime = get_runtime_config();
+    let llm = get_llm_config();
+    let agent = get_agent_config();
+
+    LoadedConfig {
+        // Runtime
+        worker_threads: runtime.worker_threads
+            .map(|w| format!("{}", w))
+            .unwrap_or_else(|| format!("auto ({})", runtime.effective_worker_threads())),
+        max_threads: runtime.max_threads,
+        max_blocking_threads: runtime.max_blocking_threads,
+        webreader: format!("{:?}", runtime.webreader),
+        // LLM
+        llm_provider: format!("{:?}", llm.provider),
+        llm_model: llm.model.clone(),
+        embedding_provider: format!("{:?}", llm.embedding_provider),
+        embedding_model: llm.active_embedding_model().to_string().clone(),
+        temperature: llm.default_temperature,
+        api_base_url: llm.api_base_url.clone(),
+        // Agent
+        min_steps_before_answer: agent.min_steps_before_answer,
+        allow_direct_answer: agent.allow_direct_answer,
+        default_token_budget: agent.default_token_budget,
+        max_urls_per_step: agent.max_urls_per_step,
+        max_queries_per_step: agent.max_queries_per_step,
+        max_consecutive_failures: agent.max_consecutive_failures,
+        // API Keys (verificar presença)
+        openai_key_present: std::env::var("OPENAI_API_KEY").is_ok(),
+        jina_key_present: std::env::var("JINA_API_KEY").is_ok(),
+    }
+}
+
 /// Executa o modo TUI interativo
 async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
     use crossterm::{
@@ -452,7 +1009,8 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     };
-    use deep_research::tui::{App, AppScreen};
+    use deep_research::tui::{App, AppScreen, ActiveTab, execute_benchmark};
+    use deep_research::agent::UserResponse;
     use ratatui::{backend::CrosstermBackend, Terminal};
     use std::io;
     use std::time::Duration;
@@ -482,19 +1040,29 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
         App::with_question(question.to_string())
     };
 
-    // Canal para eventos
+    // Carregar configurações para exibição
+    app.set_loaded_config(create_loaded_config());
+
+    // Canal para eventos da TUI
     let (tx, rx) = create_event_channel();
+
+    // Canal para enviar respostas do usuário de volta para o agente
+    // Usamos Option para poder substituir quando uma nova pesquisa inicia
+    let mut user_response_tx: Option<tokio::sync::mpsc::Sender<UserResponse>> = None;
 
     // Handle de tarefa do agente (opcional)
     let mut agent_task: Option<tokio::task::JoinHandle<_>> = None;
 
     // Se já tem pergunta, iniciar pesquisa
     if !question.is_empty() {
+        let (new_tx, new_rx) = tokio::sync::mpsc::channel::<UserResponse>(16);
+        user_response_tx = Some(new_tx);
         agent_task = Some(spawn_research_task(
             question.to_string(),
             openai_key.clone(),
             jina_key.clone(),
             tx.clone(),
+            new_rx,
         ));
     }
 
@@ -522,14 +1090,30 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                                     if !app.input_text.is_empty() {
                                         let q = app.input_text.clone();
                                         app.start_research();
+
+                                        // Criar novo canal para resposta do usuário para esta pesquisa
+                                        let (new_tx, new_rx) = tokio::sync::mpsc::channel::<UserResponse>(16);
+                                        user_response_tx = Some(new_tx);
+
                                         agent_task = Some(spawn_research_task(
                                             q,
                                             openai_key.clone(),
                                             jina_key.clone(),
                                             tx.clone(),
+                                            new_rx,
                                         ));
                                     }
                                 }
+                                KeyCode::Esc => {
+                                    app.should_quit = true;
+                                    break;
+                                }
+                                // Navegação por tabs (antes do Char genérico)
+                                KeyCode::Tab => app.next_tab(),
+                                KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                KeyCode::Char('3') => app.go_to_tab(ActiveTab::Benchmarks),
+                                // Caso genérico para caracteres (input de texto)
                                 KeyCode::Char(c) => app.input_char(c),
                                 KeyCode::Backspace => app.input_backspace(),
                                 KeyCode::Delete => app.input_delete(),
@@ -539,50 +1123,288 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                                 KeyCode::End => app.cursor_end(),
                                 KeyCode::Up => app.history_up(),
                                 KeyCode::Down => app.history_down(),
-                                KeyCode::Esc => {
-                                    app.should_quit = true;
-                                    break;
-                                }
                                 _ => {}
                             }
                         }
                         AppScreen::Research => {
+                            // Se o input está focado, processar digitação
+                            if app.input_focused {
+                                match key.code {
+                                    KeyCode::Tab | KeyCode::Esc => {
+                                        // Desfocar input
+                                        app.unfocus_input();
+                                    }
+                                    KeyCode::Enter => {
+                                        // Enviar mensagem para a fila do agente
+                                        if !app.input_text.is_empty() {
+                                            let message = app.input_text.clone();
+                                            app.queue_user_message(message.clone());
+
+                                            // Enviar via canal para o agente (async, não bloqueia)
+                                            if let Some(ref tx) = user_response_tx {
+                                                let user_resp = UserResponse::spontaneous(message);
+                                                let _ = tx.try_send(user_resp);
+                                            }
+
+                                            app.input_text.clear();
+                                            app.cursor_pos = 0;
+                                        }
+                                    }
+                                    KeyCode::Char(c) => app.input_char(c),
+                                    KeyCode::Backspace => app.input_backspace(),
+                                    KeyCode::Delete => app.input_delete(),
+                                    KeyCode::Left => app.cursor_left(),
+                                    KeyCode::Right => app.cursor_right(),
+                                    KeyCode::Home => app.cursor_home(),
+                                    KeyCode::End => app.cursor_end(),
+                                    _ => {}
+                                }
+                            } else {
+                                // Input não focado - navegação normal
+                                match key.code {
+                                    KeyCode::Char('q') => {
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Esc => {
+                                        // Esc sem input focado = sair
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Tab => {
+                                        // Focar no input
+                                        app.focus_input();
+                                    }
+                                    // Navegação por tabs (números)
+                                    KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                    KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                    // Alternar entre Research e Result quando concluído
+                                    KeyCode::Char('r') if app.is_complete => {
+                                        app.toggle_result_research();
+                                    }
+                                    KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
+                                    KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
+                                    KeyCode::PageUp => {
+                                        for _ in 0..5 {
+                                            app.scroll_up();
+                                        }
+                                    }
+                                    KeyCode::PageDown => {
+                                        for _ in 0..5 {
+                                            app.scroll_down();
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        AppScreen::Result => {
+                            // Se o input está focado, processar digitação
+                            if app.input_focused {
+                                match key.code {
+                                    KeyCode::Tab | KeyCode::Esc => {
+                                        // Desfocar input
+                                        app.unfocus_input();
+                                    }
+                                    KeyCode::Enter => {
+                                        // Iniciar nova pesquisa com o texto digitado
+                                        if !app.input_text.is_empty() {
+                                            let q = app.input_text.clone();
+                                            app.reset();
+                                            app.input_text = q.clone();
+                                            app.start_research();
+
+                                            // Criar novo canal para resposta do usuário
+                                            let (new_tx, new_rx) = tokio::sync::mpsc::channel::<UserResponse>(16);
+                                            user_response_tx = Some(new_tx);
+
+                                            agent_task = Some(spawn_research_task(
+                                                q,
+                                                openai_key.clone(),
+                                                jina_key.clone(),
+                                                tx.clone(),
+                                                new_rx,
+                                            ));
+                                        }
+                                    }
+                                    KeyCode::Char(c) => app.input_char(c),
+                                    KeyCode::Backspace => app.input_backspace(),
+                                    KeyCode::Delete => app.input_delete(),
+                                    KeyCode::Left => app.cursor_left(),
+                                    KeyCode::Right => app.cursor_right(),
+                                    KeyCode::Home => app.cursor_home(),
+                                    KeyCode::End => app.cursor_end(),
+                                    _ => {}
+                                }
+                            } else {
+                                // Input não focado - navegação normal
+                                match key.code {
+                                    KeyCode::Char('q') => {
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Esc => {
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Tab => {
+                                        // Focar no input para follow-up
+                                        app.focus_input();
+                                    }
+                                    // Navegação por tabs
+                                    KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                    KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                    KeyCode::Char('3') => app.go_to_tab(ActiveTab::Benchmarks),
+                                    // Alternar para ver logs da pesquisa
+                                    KeyCode::Char('r') => app.toggle_result_research(),
+                                    // Copiar resposta
+                                    KeyCode::Char('c') => {
+                                            #[cfg(feature = "clipboard")]
+                                            {
+                                            if let Some(answer) = &app.answer {
+                                                // Tentar copiar para clipboard
+                                                if let Ok(mut ctx) = arboard::Clipboard::new() {
+                                                    if ctx.set_text(answer.clone()).is_ok() {
+                                                        app.clipboard_message = Some("✅ Copiado!".to_string());
+                                                    }
+                                                    }
+                                                }
+                                            }
+                                            #[cfg(not(feature = "clipboard"))]
+                                            {
+                                            if app.answer.is_some() {
+                                                app.clipboard_message = Some("📋 Clipboard não disponível".to_string());
+                                            }
+                                        }
+                                    }
+                                    // Scroll na resposta
+                                    KeyCode::Up | KeyCode::Char('k') => app.result_scroll_up(),
+                                    KeyCode::Down | KeyCode::Char('j') => app.result_scroll_down(),
+                                    KeyCode::PageUp => app.result_page_up(),
+                                    KeyCode::PageDown => app.result_page_down(),
+                                    KeyCode::Home => app.result_scroll = 0,
+                                    KeyCode::End => app.result_scroll = usize::MAX,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        // Tela de configurações
+                        AppScreen::Config => {
                             match key.code {
                                 KeyCode::Char('q') | KeyCode::Esc => {
                                     app.should_quit = true;
                                     break;
                                 }
-                                KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
-                                KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
+                                // Navegação por tabs
+                                KeyCode::Tab => app.next_tab(),
+                                KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                KeyCode::Char('3') => app.go_to_tab(ActiveTab::Benchmarks),
+                                // Backspace volta para tela anterior
+                                KeyCode::Backspace => app.go_to_tab(ActiveTab::Search),
+                                _ => {}
+                            }
+                        }
+                        // Tela de benchmarks
+                        AppScreen::Benchmarks => {
+                            match key.code {
+                                KeyCode::Char('q') | KeyCode::Esc => {
+                                    app.should_quit = true;
+                                    break;
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.benchmarks.select_prev();
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    app.benchmarks.select_next();
+                                }
+                                KeyCode::Enter => {
+                                    // Executar benchmark selecionado
+                                    if let Some(bench) = app.benchmarks.get_selected() {
+                                        if app.benchmarks.running.is_none() {
+                                            // Spawn task assíncrona para executar benchmark
+                                            let bench_file = bench.bench_file.clone();
+                                            let bench_name = bench.name.clone();
+                                            let tx_clone = tx.clone();
+
+                                            // Enviar evento de início
+                                            let _ = tx.send(deep_research::tui::AppEvent::BenchmarkStarted {
+                                                bench_file: bench_file.clone(),
+                                                bench_name: bench_name.clone(),
+                                            });
+
+                                            tokio::spawn(async move {
+                                                execute_benchmark(bench_file, bench_name, tx_clone).await;
+                                            });
+                                        }
+                                    }
+                                }
                                 KeyCode::PageUp => {
                                     for _ in 0..5 {
-                                        app.scroll_up();
+                                        app.benchmarks.scroll_up();
                                     }
                                 }
                                 KeyCode::PageDown => {
                                     for _ in 0..5 {
-                                        app.scroll_down();
+                                        app.benchmarks.scroll_down();
                                     }
+                                }
+                                // Navegação por tabs
+                                KeyCode::Tab => app.next_tab(),
+                                KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                KeyCode::Char('3') => {
+                                    // Já está em Benchmarks
+                                }
+                                KeyCode::Backspace => {
+                                    // Voltar para pesquisa
+                                    app.go_to_tab(ActiveTab::Search);
                                 }
                                 _ => {}
                             }
                         }
-                        AppScreen::Result => {
+                        // Tela de input requerido pelo agente
+                        AppScreen::InputRequired { ref question_id, .. } => {
                             match key.code {
                                 KeyCode::Enter => {
-                                    app.reset();
+                                    // Enviar resposta do usuário
+                                    if !app.input_text.is_empty() {
+                                        let response_text = app.input_text.clone();
+                                        let qid = question_id.clone();
+
+                                        // Enviar para a TUI (atualiza UI)
+                                        app.handle_event(deep_research::tui::AppEvent::UserResponse {
+                                            question_id: Some(qid.clone()),
+                                            response: response_text.clone(),
+                                        });
+
+                                        // Enviar para o agente via canal
+                                        if let Some(ref tx) = user_response_tx {
+                                            let user_resp = UserResponse::to_question(qid, response_text);
+                                            let _ = tx.try_send(user_resp);
+                                        }
+
+                                        app.input_text.clear();
+                                        app.cursor_pos = 0;
+                                    }
                                 }
-                                KeyCode::Char('q') | KeyCode::Esc => {
-                                    app.should_quit = true;
-                                    break;
+                                KeyCode::Char(c) => app.input_char(c),
+                                KeyCode::Backspace => app.input_backspace(),
+                                KeyCode::Delete => app.input_delete(),
+                                KeyCode::Left => app.cursor_left(),
+                                KeyCode::Right => app.cursor_right(),
+                                KeyCode::Home => app.cursor_home(),
+                                KeyCode::End => app.cursor_end(),
+                                KeyCode::Esc => {
+                                    // Cancelar - voltar para pesquisa sem resposta
+                                    // Enviar resposta vazia para desbloquear o agente
+                                    if let Some(ref tx) = user_response_tx {
+                                        let qid = question_id.clone();
+                                        let user_resp = UserResponse::to_question(qid, "[cancelado]");
+                                        let _ = tx.try_send(user_resp);
+                                    }
+                                    app.screen = AppScreen::Research;
                                 }
-                                // Scroll na resposta
-                                KeyCode::Up | KeyCode::Char('k') => app.result_scroll_up(),
-                                KeyCode::Down | KeyCode::Char('j') => app.result_scroll_down(),
-                                KeyCode::PageUp => app.result_page_up(),
-                                KeyCode::PageDown => app.result_page_down(),
-                                KeyCode::Home => app.result_scroll = 0,
-                                KeyCode::End => app.result_scroll = usize::MAX,
                                 _ => {}
                             }
                         }
@@ -650,6 +1472,7 @@ fn spawn_research_task(
     openai_key: String,
     jina_key: String,
     tx: std::sync::mpsc::Sender<deep_research::tui::AppEvent>,
+    mut user_response_rx: tokio::sync::mpsc::Receiver<deep_research::agent::UserResponse>,
 ) -> tokio::task::JoinHandle<deep_research::agent::ResearchResult> {
     use deep_research::agent::AgentProgress;
     use deep_research::tui::{AppEvent, LogEntry, LogLevel};
@@ -823,13 +1646,124 @@ fn spawn_research_task(
                             duration_ms)
                     ))
                 }
+                // Eventos de interação com usuário
+                AgentProgress::AgentQuestion { question_id, question_type, question, options, is_blocking } => {
+                    // Enviar evento para a TUI mostrar a pergunta
+                    let _ = tx_clone.send(AppEvent::AgentQuestion {
+                        question_id: question_id.clone(),
+                        question_type: question_type.clone(),
+                        question: question.clone(),
+                        options: options.clone(),
+                        is_blocking,
+                    });
+                    let icon = if is_blocking { "⏸️" } else { "💬" };
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("{} [{}] Pergunta ao usuário: {:.50}...",
+                            icon, question_type, question)
+                    ))
+                }
+                AgentProgress::UserResponseReceived { question_id, response, was_spontaneous } => {
+                    let icon = if was_spontaneous { "💬" } else { "✅" };
+                    let msg = if let Some(qid) = question_id {
+                        format!("{} Resposta recebida ({}): {:.50}...", icon, qid, response)
+                    } else {
+                        format!("{} Mensagem do usuário: {:.50}...", icon, response)
+                    };
+                    AppEvent::Log(LogEntry::new(LogLevel::Success, msg))
+                }
+                AgentProgress::ResumedAfterInput { question_id } => {
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("▶️ Retomando execução após resposta ({})", question_id)
+                    ))
+                }
+                // Eventos de Sandbox (execução de código)
+                AgentProgress::SandboxStart { problem, max_attempts, timeout_ms, language } => {
+                    let _ = tx_clone.send(AppEvent::SandboxStart {
+                        problem: problem.clone(),
+                        max_attempts,
+                        timeout_ms,
+                        language: language.clone(),
+                    });
+                    let lang_emoji = if language == "Python" { "🐍" } else { "📜" };
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("{} Sandbox {} iniciado: {} (max {} tentativas, {}ms timeout)",
+                            lang_emoji, language,
+                            if problem.len() > 50 { format!("{}...", &problem[..50]) } else { problem },
+                            max_attempts, timeout_ms)
+                    ))
+                }
+                AgentProgress::SandboxAttempt { attempt, max_attempts, code_preview, status, error } => {
+                    let _ = tx_clone.send(AppEvent::SandboxAttempt {
+                        attempt,
+                        max_attempts,
+                        code_preview: code_preview.clone(),
+                        status: status.clone(),
+                        error: error.clone(),
+                    });
+                    let msg = if let Some(e) = error {
+                        format!("🔄 Sandbox tentativa {}/{}: {} - {}", attempt, max_attempts, status, e)
+                    } else {
+                        format!("🔄 Sandbox tentativa {}/{}: {}", attempt, max_attempts, status)
+                    };
+                    AppEvent::Log(LogEntry::new(LogLevel::Info, msg))
+                }
+                AgentProgress::SandboxComplete { success, output, error, attempts, execution_time_ms, code_preview, language } => {
+                    let _ = tx_clone.send(AppEvent::SandboxComplete {
+                        success,
+                        output: output.clone(),
+                        error: error.clone(),
+                        attempts,
+                        execution_time_ms,
+                        code_preview: code_preview.clone(),
+                        language: language.clone(),
+                    });
+                    let lang_emoji = if language == "Python" { "🐍" } else { "📜" };
+                    if success {
+                        let out_preview = output.as_ref()
+                            .map(|o| if o.len() > 80 { format!("{}...", &o[..80]) } else { o.clone() })
+                            .unwrap_or_default();
+                        AppEvent::Log(LogEntry::new(
+                            LogLevel::Success,
+                            format!("{} {} concluído: {} tentativas, {}ms → {}",
+                                lang_emoji, language, attempts, execution_time_ms, out_preview)
+                        ))
+                    } else {
+                        let err = error.unwrap_or_else(|| "Unknown error".into());
+                        AppEvent::Log(LogEntry::new(
+                            LogLevel::Error,
+                            format!("{} {} falhou após {} tentativas, {}ms: {}",
+                                lang_emoji, language, attempts, execution_time_ms, err)
+                        ))
+                    }
+                }
             };
             let _ = tx_clone.send(app_event);
         });
 
-        // Criar agente com callback de progresso
-        let agent = DeepResearchAgent::new(llm_client, search_client, None)
-            .with_progress_callback(progress_callback);
+        // Criar agente com callback de progresso e canais de interação
+        let (agent, response_tx, _question_rx) = DeepResearchAgent::new(llm_client, search_client, None)
+            .with_progress_callback(progress_callback)
+            .with_interaction_channels(16);
+
+        // Spawn task para receber respostas do usuário da TUI e enviar para o agente
+        let tx_for_bridge = tx.clone();
+        tokio::spawn(async move {
+            while let Some(user_resp) = user_response_rx.recv().await {
+                // Enviar resposta para o InteractionHub do agente
+                if response_tx.send(user_resp.clone()).await.is_err() {
+                    // Canal fechado, agente terminou
+                    break;
+                }
+                // Log de debug
+                let _ = tx_for_bridge.send(AppEvent::Log(LogEntry::new(
+                    LogLevel::Info,
+                    format!("📨 Resposta enviada ao agente: {:.30}...", user_resp.content)
+                )));
+            }
+        });
 
         let result = agent.run(question).await;
 

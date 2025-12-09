@@ -12,6 +12,7 @@ use chrono::Utc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use deep_research::personas::{PersonaOrchestrator, QueryContext};
 use deep_research::types::{Language, TopicCategory};
+use uuid::Uuid;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // HELPERS
@@ -19,6 +20,7 @@ use deep_research::types::{Language, TopicCategory};
 
 fn create_test_context(question: &str) -> QueryContext {
     QueryContext {
+        execution_id: Uuid::new_v4(),
         original_query: question.to_string(),
         user_intent: format!("Find information about: {}", question),
         soundbites: vec![],
@@ -30,6 +32,7 @@ fn create_test_context(question: &str) -> QueryContext {
 
 fn create_context_with_soundbites(question: &str, soundbites: Vec<String>) -> QueryContext {
     QueryContext {
+        execution_id: Uuid::new_v4(),
         original_query: question.to_string(),
         user_intent: format!("Find information about: {}", question),
         soundbites,
@@ -158,6 +161,7 @@ fn bench_topic_variations(c: &mut Criterion) {
 
     for (name, topic) in topics.iter() {
         let context = QueryContext {
+            execution_id: Uuid::new_v4(),
             original_query: base_question.to_string(),
             user_intent: format!("Find {} developments", name),
             soundbites: vec![],
@@ -202,6 +206,7 @@ fn bench_language_variations(c: &mut Criterion) {
 
     for (name, lang, question) in languages.iter() {
         let context = QueryContext {
+            execution_id: Uuid::new_v4(),
             original_query: question.to_string(),
             user_intent: format!("Learn about machine learning in {}", name),
             soundbites: vec![],

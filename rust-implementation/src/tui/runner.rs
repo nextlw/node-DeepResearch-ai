@@ -2,7 +2,9 @@
 
 use std::io;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::path::PathBuf;
+use tokio::process::Command as TokioCommand;
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind},
@@ -15,6 +17,7 @@ use super::app::{App, AppEvent, LogEntry};
 use super::ui;
 
 /// Copia texto para o clipboard do sistema
+#[cfg(feature = "clipboard")]
 fn copy_to_clipboard(text: &str) -> Result<(), String> {
     use arboard::Clipboard;
     let mut clipboard = Clipboard::new().map_err(|e| format!("Falha ao acessar clipboard: {}", e))?;
@@ -22,8 +25,13 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(feature = "clipboard"))]
+fn copy_to_clipboard(_text: &str) -> Result<(), String> {
+    Err("Clipboard não disponível (compile com --features clipboard)".to_string())
+}
+
 /// Executa a TUI com um receptor de eventos
-pub fn run_tui(question: String, event_rx: Receiver<AppEvent>) -> io::Result<App> {
+pub fn run_tui(question: String, event_rx: Receiver<AppEvent>, event_tx: Sender<AppEvent>) -> io::Result<App> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -35,7 +43,7 @@ pub fn run_tui(question: String, event_rx: Receiver<AppEvent>) -> io::Result<App
     let mut app = App::with_question(question);
 
     // Loop principal
-    let result = run_app(&mut terminal, &mut app, event_rx);
+    let result = run_app(&mut terminal, &mut app, event_rx, event_tx);
 
     // Restaurar terminal
     disable_raw_mode()?;
@@ -55,6 +63,7 @@ fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     event_rx: Receiver<AppEvent>,
+    event_tx: Sender<AppEvent>,
 ) -> io::Result<()> {
     use super::app::AppScreen;
 
@@ -157,6 +166,132 @@ fn run_app(
                                     app.should_quit = true;
                                     return Ok(());
                                 }
+                            }
+                            _ => {}
+                        },
+
+                        // Tela de input requerido pelo agente
+                        AppScreen::InputRequired { .. } => match key.code {
+                            KeyCode::Enter => {
+                                // Enviar resposta
+                                if !app.input_text.is_empty() {
+                                    // Extrair question_id se disponível
+                                    let question_id = if let AppScreen::InputRequired { question_id, .. } = &app.screen {
+                                        Some(question_id.clone())
+                                    } else {
+                                        None
+                                    };
+
+                                    let response = app.input_text.clone();
+                                    app.handle_event(AppEvent::UserResponse {
+                                        question_id,
+                                        response,
+                                    });
+                                    app.input_text.clear();
+                                    app.cursor_pos = 0;
+                                }
+                            }
+                            KeyCode::Char(c) => {
+                                app.input_char(c);
+                            }
+                            KeyCode::Backspace => {
+                                app.input_backspace();
+                            }
+                            KeyCode::Left => {
+                                app.cursor_left();
+                            }
+                            KeyCode::Right => {
+                                app.cursor_right();
+                            }
+                            KeyCode::Home => {
+                                app.cursor_home();
+                            }
+                            KeyCode::End => {
+                                app.cursor_end();
+                            }
+                            KeyCode::Esc => {
+                                // Cancelar - voltar para pesquisa
+                                app.screen = AppScreen::Research;
+                            }
+                            _ => {}
+                        },
+
+                        // Tela de configurações
+                        AppScreen::Config => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => {
+                                app.should_quit = true;
+                                return Ok(());
+                            }
+                            KeyCode::Backspace | KeyCode::Tab => {
+                                // Voltar para pesquisa
+                                app.go_to_tab(super::app::ActiveTab::Search);
+                            }
+                            KeyCode::Char('1') => {
+                                app.go_to_tab(super::app::ActiveTab::Search);
+                            }
+                            KeyCode::Char('2') => {
+                                // Já está em Config
+                            }
+                            KeyCode::Char('3') => {
+                                app.go_to_tab(super::app::ActiveTab::Benchmarks);
+                            }
+                            _ => {}
+                        },
+                        // Tela de benchmarks
+                        AppScreen::Benchmarks => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => {
+                                app.should_quit = true;
+                                return Ok(());
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                app.benchmarks.select_prev();
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                app.benchmarks.select_next();
+                            }
+                            KeyCode::Enter => {
+                                // Executar benchmark selecionado
+                                if let Some(bench) = app.benchmarks.get_selected() {
+                                    if app.benchmarks.running.is_none() {
+                                        // Spawn task assíncrona para executar benchmark
+                                        let bench_file = bench.bench_file.clone();
+                                        let bench_name = bench.name.clone();
+                                        let tx = event_tx.clone();
+
+                                        // Enviar evento de início
+                                        let _ = tx.send(AppEvent::BenchmarkStarted {
+                                            bench_file: bench_file.clone(),
+                                            bench_name: bench_name.clone(),
+                                        });
+
+                                        tokio::spawn(async move {
+                                            execute_benchmark(bench_file, bench_name, tx).await;
+                                        });
+                                    }
+                                }
+                            }
+                            KeyCode::PageUp => {
+                                for _ in 0..5 {
+                                    app.benchmarks.scroll_up();
+                                }
+                            }
+                            KeyCode::PageDown => {
+                                for _ in 0..5 {
+                                    app.benchmarks.scroll_down();
+                                }
+                            }
+                            KeyCode::Backspace | KeyCode::Tab => {
+                                // Voltar para pesquisa
+                                app.go_to_tab(super::app::ActiveTab::Search);
+                            }
+                            KeyCode::Char('1') => {
+                                app.go_to_tab(super::app::ActiveTab::Search);
+                            }
+                            KeyCode::Char('2') => {
+                                app.go_to_tab(super::app::ActiveTab::Config);
+                            }
+                            KeyCode::Char('3') => {
+                                // Já está em Benchmarks
                             }
                             _ => {}
                         },
@@ -269,5 +404,188 @@ impl TuiLogger {
         let _ = self.tx.send(AppEvent::SetAnswer(answer));
         let _ = self.tx.send(AppEvent::SetReferences(references));
         let _ = self.tx.send(AppEvent::Complete);
+    }
+}
+
+/// Executa um benchmark em background e envia eventos para a TUI
+pub async fn execute_benchmark(bench_file: String, bench_name: String, tx: Sender<AppEvent>) {
+    let start_time = Instant::now();
+
+    // Encontrar diretório do projeto (benchmarks estão em rust-implementation/benches/)
+    // O comando cargo bench precisa ser executado a partir do diretório rust-implementation
+    let current_dir = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+
+    // Detectar o diretório correto onde está o Cargo.toml e a pasta benches
+    // Estratégia: procurar por Cargo.toml e benches/ no diretório atual ou em rust-implementation/
+    let bench_dir = if current_dir.join("Cargo.toml").exists() && current_dir.join("benches").exists() {
+        // Já estamos no diretório rust-implementation
+        current_dir.clone()
+    } else if current_dir.join("rust-implementation").join("Cargo.toml").exists()
+        && current_dir.join("rust-implementation").join("benches").exists() {
+        // Estamos no diretório raiz, ir para rust-implementation
+        current_dir.join("rust-implementation")
+    } else {
+        // Fallback: tentar diretório atual mesmo
+        current_dir.clone()
+    };
+
+    // Verificar se o diretório existe
+    if !bench_dir.exists() {
+        let _ = tx.send(AppEvent::BenchmarkLog {
+            message: format!("❌ Diretório não encontrado: {}", bench_dir.display()),
+            level: super::app::LogLevel::Error,
+        });
+        let _ = tx.send(AppEvent::BenchmarkComplete {
+            bench_file: bench_file.clone(),
+            bench_name: bench_name.clone(),
+            success: false,
+            output: String::new(),
+            error: Some(format!("Diretório não encontrado: {}", bench_dir.display())),
+            duration_secs: start_time.elapsed().as_secs_f64(),
+        });
+        return;
+    }
+
+    // Verificar se o arquivo de benchmark existe
+    let bench_path = bench_dir.join("benches").join(format!("{}.rs", bench_file));
+    if !bench_path.exists() {
+        let _ = tx.send(AppEvent::BenchmarkLog {
+            message: format!("❌ Arquivo de benchmark não encontrado: {}", bench_path.display()),
+            level: super::app::LogLevel::Error,
+        });
+        let _ = tx.send(AppEvent::BenchmarkComplete {
+            bench_file: bench_file.clone(),
+            bench_name: bench_name.clone(),
+            success: false,
+            output: String::new(),
+            error: Some(format!("Arquivo não encontrado: {}", bench_path.display())),
+            duration_secs: start_time.elapsed().as_secs_f64(),
+        });
+        return;
+    }
+
+    let _ = tx.send(AppEvent::BenchmarkLog {
+        message: format!("📦 Executando: cargo bench --bench {} (em {})", bench_file, bench_dir.display()),
+        level: super::app::LogLevel::Info,
+    });
+
+    // Executar cargo bench de forma assíncrona
+    let mut cmd = TokioCommand::new("cargo");
+    cmd.arg("bench")
+        .arg("--bench")
+        .arg(&bench_file)
+        .current_dir(&bench_dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    match cmd.spawn() {
+        Ok(mut child) => {
+            let _ = tx.send(AppEvent::BenchmarkLog {
+                message: "⏳ Aguardando conclusão do benchmark...".to_string(),
+                level: super::app::LogLevel::Info,
+            });
+
+            // Aguardar conclusão
+            match child.wait().await {
+                Ok(status) => {
+                    let duration = start_time.elapsed();
+                    let duration_secs = duration.as_secs_f64();
+
+                    // Capturar output
+                    let mut stdout = String::new();
+                    let mut stderr = String::new();
+
+                    if let Some(mut stdout_handle) = child.stdout.take() {
+                        use tokio::io::AsyncReadExt;
+                        let mut buf = Vec::new();
+                        if stdout_handle.read_to_end(&mut buf).await.is_ok() {
+                            stdout = String::from_utf8_lossy(&buf).to_string();
+                        }
+                    }
+
+                    if let Some(mut stderr_handle) = child.stderr.take() {
+                        use tokio::io::AsyncReadExt;
+                        let mut buf = Vec::new();
+                        if stderr_handle.read_to_end(&mut buf).await.is_ok() {
+                            stderr = String::from_utf8_lossy(&buf).to_string();
+                        }
+                    }
+
+                    let success = status.success();
+                    let output = if !stdout.is_empty() {
+                        stdout
+                    } else {
+                        stderr.clone()
+                    };
+
+                    // Enviar logs da saída
+                    for line in output.lines().take(50) {
+                        if !line.trim().is_empty() {
+                            let level = if line.contains("error") || line.contains("Error") {
+                                super::app::LogLevel::Error
+                            } else if line.contains("warning") || line.contains("Warning") {
+                                super::app::LogLevel::Warning
+                            } else if line.contains("test result: ok") || line.contains("Benchmarking") {
+                                super::app::LogLevel::Success
+                            } else {
+                                super::app::LogLevel::Info
+                            };
+
+                            let _ = tx.send(AppEvent::BenchmarkLog {
+                                message: line.to_string(),
+                                level,
+                            });
+                        }
+                    }
+
+                    // Enviar resultado final
+                    let error = if !success && !stderr.is_empty() {
+                        Some(stderr)
+                    } else if !success {
+                        Some("Benchmark falhou sem mensagem de erro".to_string())
+                    } else {
+                        None
+                    };
+
+                    let _ = tx.send(AppEvent::BenchmarkComplete {
+                        bench_file: bench_file.clone(),
+                        bench_name: bench_name.clone(),
+                        success,
+                        output,
+                        error,
+                        duration_secs,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::BenchmarkLog {
+                        message: format!("❌ Erro ao aguardar processo: {}", e),
+                        level: super::app::LogLevel::Error,
+                    });
+                    let _ = tx.send(AppEvent::BenchmarkComplete {
+                        bench_file: bench_file.clone(),
+                        bench_name: bench_name.clone(),
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("Erro ao executar: {}", e)),
+                        duration_secs: start_time.elapsed().as_secs_f64(),
+                    });
+                }
+            }
+        }
+        Err(e) => {
+            let _ = tx.send(AppEvent::BenchmarkLog {
+                message: format!("❌ Erro ao iniciar processo: {}", e),
+                level: super::app::LogLevel::Error,
+            });
+            let _ = tx.send(AppEvent::BenchmarkComplete {
+                bench_file: bench_file.clone(),
+                bench_name: bench_name.clone(),
+                success: false,
+                output: String::new(),
+                error: Some(format!("Erro ao iniciar cargo bench: {}", e)),
+                duration_secs: start_time.elapsed().as_secs_f64(),
+            });
+        }
     }
 }

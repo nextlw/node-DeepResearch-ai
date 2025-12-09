@@ -140,6 +140,42 @@ pub mod llm;
 /// - Reranking de resultados por relevância
 pub mod search;
 
+/// Sistema de rastreamento de busca (SearchTrace).
+///
+/// Permite rastrear o fluxo de dados de cada operação de busca:
+/// - Origem da query (User, Persona, Reflection, etc.)
+/// - API chamada e timestamps
+/// - Resultados e URLs extraídas
+/// - Métricas agregadas por execução
+pub mod search_trace;
+
+/// Sistema de métricas de busca (SearchMetrics).
+///
+/// Coleta estatísticas de performance para comparação com TypeScript:
+/// - Latências (p50, p95, p99)
+/// - Taxa de sucesso
+/// - Média de resultados por query
+/// - Taxa de cache hit
+/// - Bytes por segundo
+pub mod search_metrics;
+
+/// Sistema de cache de busca (SearchCache).
+///
+/// Cache thread-safe com TTL configurável para resultados de busca:
+/// - TTL configurável por entrada
+/// - Eviction automática de entradas antigas
+/// - Estatísticas de hit/miss
+/// - Integração com SearchMetrics
+pub mod search_cache;
+
+/// Sistema de evidências para auditoria e debugging.
+///
+/// Coleta evidências estruturadas do funcionamento do sistema:
+/// - [`evidence::SearchEvidenceReport`]: Evidências de operações de busca
+/// - [`evidence::EvaluationEvidenceReport`]: Evidências de avaliações
+/// - [`evidence::LatencyStats`]: Estatísticas de latência
+pub mod evidence;
+
 /// Comparação de readers: Jina vs Rust + OpenAI.
 ///
 /// Módulo para benchmark e comparação de diferentes métodos

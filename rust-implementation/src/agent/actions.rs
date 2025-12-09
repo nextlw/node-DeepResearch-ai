@@ -2,6 +2,7 @@
 // AÇÕES DO AGENTE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+use crate::agent::interaction::QuestionType;
 use crate::types::{Reference, SerpQuery, Url};
 
 /// Cada ação carrega seus próprios dados - impossível ter ação "Search" sem queries
@@ -74,12 +75,76 @@ pub enum AgentAction {
 
     /// Executar código para processamento de dados
     ///
-    /// Esta ação executa código JavaScript em sandbox
-    /// para processar e transformar dados.
+    /// Esta ação gera e executa código JavaScript em sandbox (Boa Engine)
+    /// para processar e transformar dados coletados durante a pesquisa.
+    ///
+    /// O agente pode usar isso para:
+    /// - Processar dados de APIs
+    /// - Transformar/filtrar informações do knowledge
+    /// - Calcular métricas ou estatísticas
+    /// - Extrair dados estruturados de texto
     Coding {
-        /// Código a ser executado
-        code: String,
+        /// Descrição do problema a resolver com código
+        ///
+        /// O LLM vai gerar código baseado nesta descrição
+        /// e nas variáveis disponíveis no contexto.
+        problem: String,
+        /// Variáveis específicas do knowledge a disponibilizar (opcional)
+        ///
+        /// Se None, todas as variáveis do knowledge serão disponibilizadas.
+        /// Se Some, apenas as variáveis listadas serão incluídas no contexto.
+        context_vars: Option<Vec<String>>,
+        /// Linguagem de programação preferida (opcional)
+        ///
+        /// - "javascript" - Usa Boa Engine (in-process)
+        /// - "python" - Usa subprocess Python
+        /// - "auto" ou None - LLM escolhe a melhor linguagem
+        language: Option<String>,
         /// Raciocínio do agente para esta ação
+        think: String,
+    },
+
+    /// Acessar histórico de pesquisas anteriores
+    ///
+    /// Esta ação carrega sessões anteriores para dar contexto
+    /// ao agente sobre o que o usuário já pesquisou.
+    History {
+        /// Quantidade de sessões anteriores a carregar (default: 5)
+        count: usize,
+        /// Filtro opcional por termo (busca em questions)
+        filter: Option<String>,
+        /// Raciocínio do agente para esta ação
+        think: String,
+    },
+
+    /// Perguntar algo ao usuário
+    ///
+    /// Esta ação permite ao agente solicitar informação do usuário
+    /// quando falta dados essenciais para completar a tarefa.
+    ///
+    /// Compatível com OpenAI Responses API (input_required state).
+    ///
+    /// Tipos de pergunta:
+    /// - `Clarification`: Falta info vital (sempre blocking)
+    /// - `Confirmation`: Confirmação antes de ação importante
+    /// - `Preference`: Escolha entre opções válidas
+    /// - `Suggestion`: Sugestão não crítica (async)
+    AskUser {
+        /// Tipo da pergunta (afeta se é blocking ou não)
+        question_type: QuestionType,
+        /// Texto da pergunta para o usuário
+        question: String,
+        /// Opções de resposta (para Preference)
+        ///
+        /// Se Some, apresentar como seleção.
+        /// Se None, campo de texto livre.
+        options: Option<Vec<String>>,
+        /// Se deve bloquear até receber resposta
+        ///
+        /// Quando true, agente entra em estado InputRequired.
+        /// Quando false, pergunta é enviada mas agente continua.
+        is_blocking: bool,
+        /// Raciocínio do agente para esta pergunta
         think: String,
     },
 }
@@ -93,6 +158,8 @@ impl AgentAction {
             AgentAction::Reflect { .. } => "reflect",
             AgentAction::Answer { .. } => "answer",
             AgentAction::Coding { .. } => "coding",
+            AgentAction::History { .. } => "history",
+            AgentAction::AskUser { .. } => "ask_user",
         }
     }
 
@@ -104,6 +171,8 @@ impl AgentAction {
             AgentAction::Reflect { think, .. } => think,
             AgentAction::Answer { think, .. } => think,
             AgentAction::Coding { think, .. } => think,
+            AgentAction::History { think, .. } => think,
+            AgentAction::AskUser { think, .. } => think,
         }
     }
 
@@ -120,6 +189,22 @@ impl AgentAction {
     /// Verifica se é uma ação de reflexão
     pub fn is_reflect(&self) -> bool {
         matches!(self, AgentAction::Reflect { .. })
+    }
+
+    /// Verifica se é uma ação de perguntar ao usuário
+    pub fn is_ask_user(&self) -> bool {
+        matches!(self, AgentAction::AskUser { .. })
+    }
+
+    /// Verifica se a ação requer input do usuário (blocking)
+    pub fn requires_user_input(&self) -> bool {
+        matches!(
+            self,
+            AgentAction::AskUser {
+                is_blocking: true,
+                ..
+            }
+        )
     }
 }
 
@@ -186,10 +271,53 @@ pub enum DiaryEntry {
     /// Para ações que envolvem processamento de dados
     /// através de execução de código.
     Coding {
-        /// Código que foi executado (JavaScript).
+        /// Código que foi executado
         code: String,
+        /// Linguagem usada (JavaScript ou Python)
+        language: String,
         /// Raciocínio do agente para executar este código.
         think: String,
+    },
+
+    /// Registro de acesso ao histórico de sessões.
+    ///
+    /// O agente consultou pesquisas anteriores do usuário
+    /// para obter contexto.
+    History {
+        /// Quantidade de sessões carregadas.
+        sessions_loaded: usize,
+        /// Raciocínio do agente para acessar o histórico.
+        think: String,
+    },
+
+    /// Registro de pergunta feita ao usuário.
+    ///
+    /// O agente solicitou informação do usuário porque
+    /// faltava dado essencial para completar a tarefa.
+    UserQuestion {
+        /// ID único da pergunta
+        question_id: String,
+        /// Tipo da pergunta
+        question_type: QuestionType,
+        /// Texto da pergunta
+        question: String,
+        /// Se era blocking
+        was_blocking: bool,
+        /// Raciocínio do agente
+        think: String,
+    },
+
+    /// Registro de resposta recebida do usuário.
+    ///
+    /// O usuário respondeu a uma pergunta do agente
+    /// ou enviou uma mensagem espontânea.
+    UserResponse {
+        /// ID da pergunta respondida (None se espontânea)
+        question_id: Option<String>,
+        /// Conteúdo da resposta
+        response: String,
+        /// Se foi resposta espontânea (não solicitada)
+        was_spontaneous: bool,
     },
 }
 
@@ -223,8 +351,41 @@ impl DiaryEntry {
                     eval_type, reason
                 )
             }
-            DiaryEntry::Coding { think, .. } => {
-                format!("[CODING]\nThink: {}", think)
+            DiaryEntry::Coding { language, think, .. } => {
+                format!("[CODING:{}]\nThink: {}", language, think)
+            }
+            DiaryEntry::History {
+                sessions_loaded,
+                think,
+            } => {
+                format!(
+                    "[HISTORY] {} sessions loaded\nThink: {}",
+                    sessions_loaded, think
+                )
+            }
+            DiaryEntry::UserQuestion {
+                question_type,
+                question,
+                was_blocking,
+                think,
+                ..
+            } => {
+                format!(
+                    "[ASK_USER] {:?} (blocking: {})\nQuestion: {}\nThink: {}",
+                    question_type, was_blocking, question, think
+                )
+            }
+            DiaryEntry::UserResponse {
+                response,
+                was_spontaneous,
+                ..
+            } => {
+                let prefix = if *was_spontaneous {
+                    "[USER_MSG]"
+                } else {
+                    "[USER_REPLY]"
+                };
+                format!("{} {}", prefix, response)
             }
         }
     }

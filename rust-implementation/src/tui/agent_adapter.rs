@@ -50,6 +50,8 @@ impl AgentTuiAdapter {
             AgentAction::Answer { .. } => "✍️ Gerando resposta",
             AgentAction::Reflect { .. } => "🤔 Refletindo",
             AgentAction::Coding { .. } => "💻 Codificando",
+            AgentAction::History { .. } => "📜 Consultando histórico",
+            AgentAction::AskUser { .. } => "❓ Perguntando ao usuário",
         };
         let _ = self.tx.send(AppEvent::SetAction(action_name.to_string()));
     }

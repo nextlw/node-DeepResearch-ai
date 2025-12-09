@@ -6,14 +6,39 @@ mod actions;
 /// Módulo para análise e diagnóstico do agente durante a execução.
 /// Útil para debugging e geração de relatórios sobre decisões e erros do agente.
 pub mod agent_analyzer;
+/// Módulo para integração com plataformas de chatbot externas.
+/// Define a trait ChatbotAdapter para DigiSac, Suri, Parrachos, etc.
+pub mod chatbot;
 mod context;
+/// Módulo para acesso ao histórico de sessões anteriores.
+/// Suporta múltiplos backends: local (JSON), PostgreSQL, Qdrant.
+pub mod history;
+/// Módulo para interação bidirecional usuário-agente.
+/// Compatível com OpenAI Responses API (input_required state).
+pub mod interaction;
 mod permissions;
+/// Módulo para execução segura de código JavaScript via Boa Engine.
+/// Permite ao agente gerar e executar código em sandbox isolado.
+pub mod sandbox;
 mod state;
 
 pub use actions::*;
 pub use agent_analyzer::AgentAnalysis;
+pub use chatbot::{
+    ButtonType, ChatbotAdapter, ChatbotError, ConnectionStatus, MessageButton, MockChatbotAdapter,
+    RichMessage, UserMetadata,
+};
 pub use context::*;
+pub use history::{HistoryQuery, HistorySearchResult, HistoryService, SessionSummary};
+pub use interaction::{
+    create_interaction_channels, InteractionError, InteractionHub, PendingQuestion, QuestionType,
+    UserResponse,
+};
 pub use permissions::*;
+pub use sandbox::{
+    CodeSandbox, PythonSandbox, SandboxContext, SandboxError, SandboxLanguage, SandboxResult,
+    UnifiedSandbox,
+};
 pub use state::*;
 
 use crate::llm::LlmClient;
@@ -179,6 +204,76 @@ pub enum AgentProgress {
         /// Tempo de execução em ms
         duration_ms: u128,
     },
+    /// Agente fez uma pergunta ao usuário
+    ///
+    /// Compatível com OpenAI Responses API (input_required).
+    AgentQuestion {
+        /// ID único da pergunta
+        question_id: String,
+        /// Tipo da pergunta
+        question_type: String,
+        /// Texto da pergunta
+        question: String,
+        /// Opções de resposta (se aplicável)
+        options: Option<Vec<String>>,
+        /// Se é blocking (agente pausado)
+        is_blocking: bool,
+    },
+    /// Resposta do usuário recebida
+    UserResponseReceived {
+        /// ID da pergunta respondida (None se espontânea)
+        question_id: Option<String>,
+        /// Conteúdo da resposta
+        response: String,
+        /// Se foi espontânea
+        was_spontaneous: bool,
+    },
+    /// Agente retomando após receber input do usuário
+    ResumedAfterInput {
+        /// ID da pergunta que foi respondida
+        question_id: String,
+    },
+    /// Sandbox iniciou execução
+    SandboxStart {
+        /// Problema/tarefa sendo resolvido
+        problem: String,
+        /// Máximo de tentativas configurado
+        max_attempts: usize,
+        /// Timeout em ms
+        timeout_ms: u64,
+        /// Linguagem de programação (JavaScript, Python, Auto)
+        language: String,
+    },
+    /// Sandbox - tentativa de execução
+    SandboxAttempt {
+        /// Número da tentativa atual (1-based)
+        attempt: usize,
+        /// Máximo de tentativas
+        max_attempts: usize,
+        /// Código gerado (truncado para exibição)
+        code_preview: String,
+        /// Status: "generating", "executing", "success", "error"
+        status: String,
+        /// Mensagem de erro (se aplicável)
+        error: Option<String>,
+    },
+    /// Sandbox concluiu execução
+    SandboxComplete {
+        /// Se foi bem-sucedido
+        success: bool,
+        /// Output da execução (se sucesso)
+        output: Option<String>,
+        /// Erro (se falha)
+        error: Option<String>,
+        /// Número total de tentativas
+        attempts: usize,
+        /// Tempo total de execução em ms
+        execution_time_ms: u64,
+        /// Código final executado (truncado)
+        code_preview: String,
+        /// Linguagem de programação usada
+        language: String,
+    },
 }
 
 /// Tipo do callback de progresso
@@ -227,6 +322,12 @@ pub struct DeepResearchAgent {
     analysis_count: usize,
     /// Canal para receber análises do AgentAnalyzer (non-blocking)
     analysis_rx: Option<mpsc::Receiver<AgentAnalysis>>,
+    /// Hub de interação para comunicação bidirecional com usuário
+    ///
+    /// Compatível com OpenAI Responses API (input_required state).
+    interaction_hub: InteractionHub,
+    /// Canal para enviar respostas do usuário para o hub
+    user_response_tx: Option<mpsc::Sender<UserResponse>>,
 }
 
 impl DeepResearchAgent {
@@ -268,6 +369,8 @@ impl DeepResearchAgent {
             consecutive_failures: 0,
             analysis_count: 0,
             analysis_rx: None,
+            interaction_hub: InteractionHub::new(),
+            user_response_tx: None,
         }
     }
 
@@ -291,6 +394,42 @@ impl DeepResearchAgent {
             log::info!("🔬 Modo de comparação ATIVADO: Jina vs Rust local");
         }
         self
+    }
+
+    /// Configura canais de interação para comunicação com usuário
+    ///
+    /// Retorna um sender para enviar respostas do usuário e um receiver
+    /// para receber perguntas do agente.
+    ///
+    /// # Returns
+    /// - `mpsc::Sender<UserResponse>`: Para enviar respostas do usuário
+    /// - `mpsc::Receiver<PendingQuestion>`: Para receber perguntas do agente
+    pub fn with_interaction_channels(
+        mut self,
+        buffer_size: usize,
+    ) -> (Self, mpsc::Sender<UserResponse>, mpsc::Receiver<PendingQuestion>) {
+        let (response_tx, question_rx, hub) = create_interaction_channels(buffer_size);
+        self.interaction_hub = hub;
+        self.user_response_tx = Some(response_tx.clone());
+        (self, response_tx, question_rx)
+    }
+
+    /// Envia uma resposta do usuário para o agente
+    ///
+    /// Usado por interfaces externas (TUI, Chatbot) para enviar
+    /// respostas ou mensagens espontâneas.
+    pub async fn send_user_response(&mut self, response: UserResponse) {
+        self.interaction_hub.receive_response(response);
+    }
+
+    /// Verifica se o agente está aguardando input do usuário
+    pub fn is_waiting_for_user(&self) -> bool {
+        self.state.is_input_required()
+    }
+
+    /// Retorna a pergunta pendente atual (se houver)
+    pub fn get_pending_question(&self) -> Option<&PendingQuestion> {
+        self.interaction_hub.get_blocking_question()
     }
 
     /// Envia evento de progresso se callback configurado
@@ -355,6 +494,24 @@ impl DeepResearchAgent {
                             log::error!("Step error: {}", e);
                             continue; // Tentar novamente
                         }
+                        StepResult::InputRequired {
+                            question_id,
+                            question,
+                            question_type,
+                            options,
+                        } => {
+                            // Agente precisa de input do usuário - entrar em estado de espera
+                            log::info!("⏸️ Agente entrando em estado de espera por input do usuário");
+                            self.state = AgentState::InputRequired {
+                                question_id,
+                                question,
+                                question_type,
+                                options,
+                            };
+                            // CONTINUAR o loop - o próximo match de AgentState::InputRequired
+                            // vai aguardar a resposta via canal
+                            continue;
+                        }
                     }
                 }
 
@@ -387,6 +544,49 @@ impl DeepResearchAgent {
                     }
                 }
 
+                // Estado de espera por input do usuário
+                AgentState::InputRequired { ref question_id, .. } => {
+                    // Aguardar resposta do usuário via canal
+                    log::debug!("Agente em estado InputRequired - aguardando resposta via canal");
+
+                    // Primeiro fazer polling para ver se já chegou algo
+                    self.interaction_hub.poll_responses();
+
+                    // Verificar se já temos resposta para esta pergunta
+                    if let Some(response) = self.interaction_hub.find_response_for(question_id) {
+                        log::info!("📥 Resposta encontrada: {}", response.content);
+                        self.process_user_response(response).await;
+                        continue;
+                    }
+
+                    // Esperar resposta com timeout de 60 segundos
+                    match self.interaction_hub.wait_for_response(question_id, Some(60)).await {
+                        Ok(response) => {
+                            log::info!("📥 Resposta recebida: {}", response.content);
+                            self.process_user_response(response).await;
+                            // Continuar o loop após processar resposta
+                            continue;
+                        }
+                        Err(InteractionError::Timeout) => {
+                            // Timeout - fazer polling novamente e continuar esperando
+                            log::debug!("Timeout aguardando resposta, continuando...");
+                            continue;
+                        }
+                        Err(InteractionError::ChannelClosed) => {
+                            // Canal fechado - interface provavelmente foi fechada
+                            log::warn!("Canal de resposta fechado - abortando");
+                            self.state = AgentState::Failed {
+                                reason: "Canal de comunicação com interface fechado".into(),
+                                partial_knowledge: self.context.knowledge.clone(),
+                            };
+                        }
+                        Err(e) => {
+                            log::error!("Erro aguardando resposta: {:?}", e);
+                            continue;
+                        }
+                    }
+                }
+
                 // Estados terminais - sair do loop
                 AgentState::Completed { .. } | AgentState::Failed { .. } => break,
             }
@@ -398,7 +598,10 @@ impl DeepResearchAgent {
 
     /// Executa um único passo do agente
     async fn execute_step(&mut self) -> StepResult {
-        // 0. Verificar se há análise do AgentAnalyzer pronta (non-blocking)
+        // 0a. Processar mensagens assíncronas do usuário (non-blocking)
+        self.poll_user_messages();
+
+        // 0b. Verificar se há análise do AgentAnalyzer pronta (non-blocking)
         if let Some(rx) = &mut self.analysis_rx {
             match rx.try_recv() {
                 Ok(analysis) => {
@@ -627,7 +830,26 @@ impl DeepResearchAgent {
                 }
                 self.execute_answer(final_answer, final_references, think).await
             }
-            AgentAction::Coding { code, think } => self.execute_coding(code, think).await,
+            AgentAction::Coding { problem, context_vars: _, language, think } => {
+                self.execute_coding(problem, language, think).await
+            }
+            AgentAction::History {
+                count,
+                filter,
+                think,
+            } => self.execute_history(count, filter, think).await,
+            AgentAction::AskUser {
+                question_type,
+                question,
+                options,
+                is_blocking,
+                think,
+            } => {
+                self.emit(AgentProgress::Info(format!("❓ Perguntando ao usuário: {}", question)));
+                log::info!("❓ Perguntando ao usuário: {}", question);
+                log::debug!("💭 Raciocínio: {}", think);
+                self.execute_ask_user(question_type, question, options, is_blocking, think).await
+            }
         }
     }
 
@@ -712,6 +934,11 @@ Available actions:
         }
         if permissions.coding {
             prompt.push_str("- CODING: Execute code for data processing\n");
+        }
+        if permissions.history {
+            prompt.push_str("- HISTORY: Access previous research sessions for context\n");
+            prompt.push_str("  → Use when user asks about 'what was researched before' or 'summarize previous'\n");
+            prompt.push_str("  → Loads summaries of past questions/answers to provide context\n");
         }
 
         // Adicionar info sobre URLs visitadas
@@ -1667,28 +1894,441 @@ Available actions:
         }
     }
 
-    /// Executa código em sandbox
-    /// Executa código em sandbox
-    async fn execute_coding(&mut self, code: String, think: String) -> StepResult {
-        // Executar código em sandbox seguro
-        match self.execute_sandbox(&code).await {
-            Ok(output) => {
-                self.context.knowledge.push(KnowledgeItem {
-                    question: self.context.current_question().to_string(),
-                    answer: output,
-                    item_type: KnowledgeType::Coding,
-                    references: vec![],
+    /// Executa código em sandbox seguro usando Boa Engine
+    ///
+    /// O sandbox permite ao agente:
+    /// 1. Gerar código JavaScript via LLM para processar dados
+    /// 2. Executar em ambiente isolado (sem acesso a filesystem/rede)
+    /// 3. Retry inteligente se o código falhar (até 3 tentativas)
+    async fn execute_coding(
+        &mut self,
+        problem: String,
+        language: Option<String>,
+        think: String,
+    ) -> StepResult {
+        log::info!("🖥️ Executando código em sandbox...");
+        log::debug!("📝 Problema: {}", problem);
+        log::debug!("🌐 Linguagem preferida: {:?}", language);
+        log::debug!("💭 Raciocínio: {}", think);
+
+        self.emit(AgentProgress::Action("coding".into()));
+        self.emit(AgentProgress::Think(think.clone()));
+
+        // Truncar problema para preview
+        let problem_preview = if problem.len() > 100 {
+            format!("{}...", &problem[..100])
+        } else {
+            problem.clone()
+        };
+
+        // Determinar linguagem preferida
+        let preferred_language = match language.as_deref() {
+            Some("javascript") | Some("js") => SandboxLanguage::JavaScript,
+            Some("python") | Some("py") => SandboxLanguage::Python,
+            _ => SandboxLanguage::Auto, // LLM escolhe
+        };
+
+        self.emit(AgentProgress::Info(format!(
+            "🖥️ Gerando e executando código ({}) para: {}",
+            preferred_language.display_name(),
+            problem_preview
+        )));
+
+        // Emitir evento de início do sandbox
+        let max_attempts = 3usize;
+        let timeout_ms = 10000u64; // Maior timeout para Python
+        self.emit(AgentProgress::SandboxStart {
+            problem: problem_preview.clone(),
+            max_attempts,
+            timeout_ms,
+            language: preferred_language.display_name().to_string(),
+        });
+
+        // Emitir evento de tentativa inicial
+        self.emit(AgentProgress::SandboxAttempt {
+            attempt: 1,
+            max_attempts,
+            code_preview: "Gerando código via LLM...".to_string(),
+            status: "generating".to_string(),
+            error: None,
+        });
+
+        // Criar sandbox unificado (suporta JS e Python)
+        let sandbox = UnifiedSandbox::new(&self.context.knowledge, timeout_ms)
+            .await
+            .with_language(preferred_language);
+
+        // Resolver o problema gerando e executando código
+        match sandbox.solve(&*self.llm_client, &problem).await {
+            Ok(result) => {
+                // Truncar código para preview
+                let code_preview = if result.code.len() > 200 {
+                    format!("{}...", &result.code[..200])
+                } else {
+                    result.code.clone()
+                };
+
+                if result.success {
+                    let output = result.output.clone().unwrap_or_default();
+                    log::info!(
+                        "✅ Código executado com sucesso em {} tentativa(s), {}ms",
+                        result.attempts,
+                        result.execution_time_ms
+                    );
+                    log::debug!("📤 Output: {}", output);
+
+                    // Emitir evento de conclusão bem-sucedida
+                    self.emit(AgentProgress::SandboxComplete {
+                        success: true,
+                        output: Some(if output.len() > 500 {
+                            format!("{}...", &output[..500])
+                        } else {
+                            output.clone()
+                        }),
+                        error: None,
+                        attempts: result.attempts,
+                        execution_time_ms: result.execution_time_ms,
+                        code_preview: code_preview.clone(),
+                        language: result.language.display_name().to_string(),
+                    });
+
+                    self.emit(AgentProgress::Success(format!(
+                        "✅ Código executado com sucesso ({} tentativas, {}ms)",
+                        result.attempts, result.execution_time_ms
+                    )));
+
+                    // Adicionar resultado ao knowledge
+                    self.context.knowledge.push(KnowledgeItem {
+                        question: format!("[Código] {}", problem),
+                        answer: output,
+                        item_type: KnowledgeType::Coding,
+                        references: vec![],
+                    });
+                } else {
+                    let error = result.error.clone().unwrap_or_else(|| "Unknown error".into());
+                    log::warn!(
+                        "❌ Código falhou após {} tentativa(s): {}",
+                        result.attempts,
+                        error
+                    );
+
+                    // Emitir evento de conclusão com falha
+                    self.emit(AgentProgress::SandboxComplete {
+                        success: false,
+                        output: None,
+                        error: Some(error.clone()),
+                        attempts: result.attempts,
+                        execution_time_ms: result.execution_time_ms,
+                        code_preview: code_preview.clone(),
+                        language: result.language.display_name().to_string(),
+                    });
+
+                    self.emit(AgentProgress::Warning(format!(
+                        "❌ Código {} falhou após {} tentativas: {}",
+                        result.language.display_name(),
+                        result.attempts, error
+                    )));
+
+                    // Adicionar erro ao knowledge para contexto futuro
+                    let lang_ext = result.language.extension();
+                    self.context.knowledge.push(KnowledgeItem {
+                        question: format!("[Código {} Falhou] {}", result.language.display_name(), problem),
+                        answer: format!("Erro: {}. Código tentado:\n```{}\n{}\n```", error, lang_ext, result.code),
+                        item_type: KnowledgeType::Error,
+                        references: vec![],
+                    });
+                }
+
+                // Registrar no diário
+                self.context.diary.push(DiaryEntry::Coding {
+                    code: result.code,
+                    language: result.language.display_name().to_string(),
+                    think,
                 });
             }
             Err(e) => {
-                log::warn!("Sandbox execution failed: {}", e);
+                log::error!("💥 Sandbox error: {}", e);
+
+                // Emitir evento de conclusão com erro fatal
+                self.emit(AgentProgress::SandboxComplete {
+                    success: false,
+                    output: None,
+                    error: Some(e.to_string()),
+                    attempts: 0,
+                    execution_time_ms: 0,
+                    code_preview: "// Erro fatal antes da execução".to_string(),
+                    language: preferred_language.display_name().to_string(),
+                });
+
+                self.emit(AgentProgress::Error(format!("💥 Sandbox error: {}", e)));
+
+                // Registrar erro no diário
+                self.context.diary.push(DiaryEntry::Coding {
+                    code: format!("// Error: {}", e),
+                    language: preferred_language.display_name().to_string(),
+                    think,
+                });
             }
         }
 
-        self.context.diary.push(DiaryEntry::Coding { code, think });
+        self.context.total_step += 1;
+        StepResult::Continue
+    }
+
+    /// Executa consulta ao histórico de sessões anteriores
+    async fn execute_history(
+        &mut self,
+        count: usize,
+        filter: Option<String>,
+        think: String,
+    ) -> StepResult {
+        self.emit(AgentProgress::Info(format!(
+            "📜 Consultando histórico ({} sessões)...",
+            count
+        )));
+        log::info!("📜 Consultando histórico de sessões anteriores");
+
+        // Criar serviço de histórico (usa local por padrão)
+        let history_service = HistoryService::default();
+
+        // Construir query
+        let query = if let Some(ref text) = filter {
+            HistoryQuery::new(count).with_text_filter(text)
+        } else {
+            HistoryQuery::new(count)
+        };
+
+        // Buscar sessões
+        match history_service.search(&query).await {
+            Ok(result) => {
+                let sessions_loaded = result.sessions.len();
+
+                if sessions_loaded > 0 {
+                    // Formatar contexto para adicionar ao knowledge
+                    let context = result.format_for_llm();
+
+                    self.context.knowledge.push(KnowledgeItem {
+                        question: "Histórico de pesquisas anteriores".to_string(),
+                        answer: context,
+                        item_type: KnowledgeType::History,
+                        references: vec![],
+                    });
+
+                    self.emit(AgentProgress::Success(format!(
+                        "✅ {} sessões anteriores carregadas (backend: {})",
+                        sessions_loaded, result.backend
+                    )));
+                    log::info!(
+                        "📜 {} sessões carregadas em {}ms",
+                        sessions_loaded,
+                        result.search_time_ms
+                    );
+                } else {
+                    self.emit(AgentProgress::Warning(
+                        "⚠️ Nenhuma sessão anterior encontrada".to_string(),
+                    ));
+                    log::info!("📜 Nenhuma sessão anterior encontrada");
+                }
+
+                self.context.diary.push(DiaryEntry::History {
+                    sessions_loaded,
+                    think,
+                });
+            }
+            Err(e) => {
+                self.emit(AgentProgress::Warning(format!(
+                    "⚠️ Erro ao consultar histórico: {}",
+                    e
+                )));
+                log::warn!("📜 Erro ao consultar histórico: {}", e);
+
+                self.context.diary.push(DiaryEntry::History {
+                    sessions_loaded: 0,
+                    think,
+                });
+            }
+        }
 
         self.context.total_step += 1;
         StepResult::Continue
+    }
+
+    /// Executa pergunta ao usuário
+    ///
+    /// Compatível com OpenAI Responses API (input_required state).
+    /// Se `is_blocking` for true, retorna StepResult::InputRequired
+    /// e o agente pausa até receber resposta.
+    async fn execute_ask_user(
+        &mut self,
+        question_type: QuestionType,
+        question: String,
+        options: Option<Vec<String>>,
+        is_blocking: bool,
+        think: String,
+    ) -> StepResult {
+        log::info!("❓ Executando pergunta ao usuário");
+        log::debug!("   Tipo: {:?}", question_type);
+        log::debug!("   Blocking: {}", is_blocking);
+        log::debug!("   Opções: {:?}", options);
+
+        // Criar pergunta pendente
+        let pending_question = PendingQuestion {
+            id: uuid::Uuid::new_v4().to_string(),
+            question_type,
+            question: question.clone(),
+            options: options.clone(),
+            is_blocking,
+            context: None,
+            created_at: chrono::Utc::now(),
+            think: think.clone(),
+        };
+
+        let question_id = pending_question.id.clone();
+
+        // Emitir evento para interface (TUI/Chatbot)
+        self.emit(AgentProgress::AgentQuestion {
+            question_id: question_id.clone(),
+            question_type: question_type.as_str().to_string(),
+            question: question.clone(),
+            options: options.clone(),
+            is_blocking,
+        });
+
+        // Registrar no diário
+        self.context.diary.push(DiaryEntry::UserQuestion {
+            question_id: question_id.clone(),
+            question_type,
+            question: question.clone(),
+            was_blocking: is_blocking,
+            think,
+        });
+
+        // Adicionar ao hub de interação
+        if let Err(e) = self.interaction_hub.ask(pending_question).await {
+            log::warn!("❌ Erro ao enviar pergunta: {}", e);
+            self.emit(AgentProgress::Warning(format!(
+                "❌ Erro ao enviar pergunta: {}",
+                e
+            )));
+        }
+
+        if is_blocking {
+            // Retornar InputRequired para pausar o agente
+            log::info!("⏸️ Agente pausado aguardando resposta do usuário");
+
+            // Mudar estado para InputRequired
+            self.state = AgentState::InputRequired {
+                question_id: question_id.clone(),
+                question: question.clone(),
+                question_type,
+                options,
+            };
+
+            StepResult::InputRequired {
+                question_id,
+                question,
+                question_type,
+                options: self.interaction_hub.get_blocking_question()
+                    .and_then(|q| q.options.clone()),
+            }
+        } else {
+            // Pergunta não blocking - continuar execução
+            log::info!("▶️ Pergunta enviada, continuando execução");
+            self.context.total_step += 1;
+            StepResult::Continue
+        }
+    }
+
+    /// Processa resposta do usuário recebida
+    ///
+    /// Chamado quando o usuário responde a uma pergunta ou envia
+    /// mensagem espontânea. Adiciona ao knowledge e retoma execução.
+    pub async fn process_user_response(&mut self, response: UserResponse) -> StepResult {
+        log::info!("📥 Processando resposta do usuário");
+        log::debug!("   Question ID: {:?}", response.question_id);
+        log::debug!("   Conteúdo: {}", response.content);
+
+        let was_spontaneous = response.question_id.is_none();
+
+        // Emitir evento
+        self.emit(AgentProgress::UserResponseReceived {
+            question_id: response.question_id.clone(),
+            response: response.content.clone(),
+            was_spontaneous,
+        });
+
+        // Registrar no diário
+        self.context.diary.push(DiaryEntry::UserResponse {
+            question_id: response.question_id.clone(),
+            response: response.content.clone(),
+            was_spontaneous,
+        });
+
+        // Adicionar ao knowledge
+        let knowledge_question = if let Some(ref qid) = response.question_id {
+            format!("[Resposta do usuário para {}]", qid)
+        } else {
+            "[Mensagem do usuário]".to_string()
+        };
+
+        self.context.knowledge.push(KnowledgeItem {
+            question: knowledge_question,
+            answer: response.content.clone(),
+            item_type: KnowledgeType::UserProvided,
+            references: vec![],
+        });
+
+        // Marcar pergunta como respondida
+        if let Some(ref qid) = response.question_id {
+            self.interaction_hub.mark_answered(qid);
+
+            // Emitir evento de retomada
+            self.emit(AgentProgress::ResumedAfterInput {
+                question_id: qid.clone(),
+            });
+        }
+
+        // Se estava em InputRequired, voltar para Processing
+        if self.state.is_input_required() {
+            log::info!("▶️ Retomando execução após resposta do usuário");
+            self.state = AgentState::Processing {
+                step: 0,
+                total_step: self.context.total_step as u32,
+                current_question: self.context.current_question().to_string(),
+                budget_used: self.token_tracker.budget_used_percentage(),
+            };
+        }
+
+        self.context.total_step += 1;
+        StepResult::Continue
+    }
+
+    /// Verifica e processa mensagens pendentes do usuário
+    ///
+    /// Deve ser chamado no início de cada step para processar
+    /// mensagens que chegaram de forma assíncrona.
+    pub fn poll_user_messages(&mut self) {
+        self.interaction_hub.poll_responses();
+
+        // Processar respostas espontâneas (adicionar ao knowledge)
+        while let Some(response) = self.interaction_hub.next_response() {
+            log::debug!("📥 Mensagem assíncrona recebida: {}", response.content);
+
+            // Registrar no diário
+            self.context.diary.push(DiaryEntry::UserResponse {
+                question_id: response.question_id.clone(),
+                response: response.content.clone(),
+                was_spontaneous: response.question_id.is_none(),
+            });
+
+            // Adicionar ao knowledge
+            self.context.knowledge.push(KnowledgeItem {
+                question: "[Mensagem do usuário]".to_string(),
+                answer: response.content,
+                item_type: KnowledgeType::UserProvided,
+                references: vec![],
+            });
+        }
     }
 
     /// Força uma resposta em Beast Mode
@@ -1940,6 +2580,7 @@ Available actions:
 
     fn build_query_context(&self) -> crate::personas::QueryContext {
         crate::personas::QueryContext {
+            execution_id: uuid::Uuid::new_v4(),
             original_query: self.context.original_question.clone(),
             user_intent: String::new(),
             soundbites: self.context.snippets.clone(),
@@ -1954,11 +2595,6 @@ Available actions:
             topic: TopicCategory::General,
             knowledge_items: self.context.knowledge.clone(),
         }
-    }
-
-    async fn execute_sandbox(&self, _code: &str) -> Result<String, AgentError> {
-        // Implementação de sandbox
-        Ok("Sandbox output".into())
     }
 
     /// Constrói referências semânticas usando embeddings e cosine similarity

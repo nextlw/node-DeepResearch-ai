@@ -127,14 +127,58 @@ fn format_diary_for_analysis(diary: &[DiaryEntry], original_question: &str) -> S
                     reason
                 ));
             }
-            DiaryEntry::Coding { code, think } => {
+            DiaryEntry::Coding { code, language, think } => {
                 output.push_str(&format!(
-                    "At step {}, you took the **coding** action and executed code:\n\
+                    "At step {}, you took the **coding** action using {} and executed code:\n\
                     Code (truncated): {}...\n\
                     Think: {}\n\n",
                     step_num,
+                    language,
                     code.chars().take(100).collect::<String>(),
                     think
+                ));
+            }
+            DiaryEntry::History {
+                sessions_loaded,
+                think,
+            } => {
+                output.push_str(&format!(
+                    "At step {}, you took the **history** action to access previous research sessions:\n\
+                    Sessions loaded: {}\n\
+                    Think: {}\n\n",
+                    step_num, sessions_loaded, think
+                ));
+            }
+            DiaryEntry::UserQuestion {
+                question_type,
+                question,
+                was_blocking,
+                think,
+                ..
+            } => {
+                output.push_str(&format!(
+                    "At step {}, you took the **ask_user** action to request information from the user:\n\
+                    Question type: {:?}\n\
+                    Question: {}\n\
+                    Blocking: {}\n\
+                    Think: {}\n\n",
+                    step_num, question_type, question, was_blocking, think
+                ));
+            }
+            DiaryEntry::UserResponse {
+                response,
+                was_spontaneous,
+                ..
+            } => {
+                let action_type = if *was_spontaneous {
+                    "spontaneous user message"
+                } else {
+                    "user response"
+                };
+                output.push_str(&format!(
+                    "At step {}, you received a **{}**:\n\
+                    Response: {}\n\n",
+                    step_num, action_type, response
                 ));
             }
         }

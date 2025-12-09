@@ -8,13 +8,16 @@
 ## 📋 Índice
 
 - [Instalação](#-instalação)
+- [Referência Rápida](#-referência-rápida)
 - [Comandos CLI](#-comandos-cli)
 - [Atalhos TUI](#-atalhos-tui)
+- [Navegação por Tabs](#-navegação-por-tabs)
 - [Interface TUI](#-interface-tui)
   - [Guia de Análise](#tui-guide--guia-de-análise-da-interface)
   - [Tela de Input](#-tela-1-input-entrada-de-pergunta)
   - [Tela de Research](#-tela-2-research-pesquisa-em-andamento)
   - [Tela de Result](#-tela-3-result-resultado-final)
+  - [Tela de Config](#-tela-4-config-configurações)
   - [Tela de Erro](#-tela-de-erro)
   - [Mapa de Cores](#-mapa-de-cores-da-interface)
   - [Diagnóstico](#-diagnóstico-e-troubleshooting)
@@ -36,6 +39,34 @@ cargo build --release
 ./target/release/deep-research-cli "sua pergunta"
 ```
 
+### Features Opcionais
+
+O projeto possui features opcionais que podem ser habilitadas conforme necessário:
+
+| Feature     | Descrição                                                   | Uso                   |
+| ----------- | ----------------------------------------------------------- | --------------------- |
+| `clipboard` | Suporte a copiar respostas para área de transferência (TUI) | Desenvolvimento local |
+| `postgres`  | Backend PostgreSQL para histórico persistente               | Produção (Railway)    |
+| `qdrant`    | Busca vetorial semântica com Qdrant                         | Produção              |
+| `simd`      | Otimizações SIMD (requer nightly)                           | Performance           |
+
+```bash
+# Produção (backend apenas, sem TUI)
+cargo build --release
+
+# Desenvolvimento com TUI (inclui clipboard)
+cargo build --release --features clipboard
+
+# Rodar TUI local com clipboard
+cargo run --features clipboard -- --tui
+
+# Produção completa (PostgreSQL + Qdrant)
+cargo build --release --features "postgres,qdrant"
+
+# Todas as features
+cargo build --release --features "clipboard,postgres,qdrant,simd"
+```
+
 ### Variáveis de Ambiente Necessárias
 
 ```bash
@@ -43,6 +74,89 @@ cargo build --release
 OPENAI_API_KEY=sua-chave-openai
 JINA_API_KEY=sua-chave-jina
 ```
+
+---
+
+## 📖 Referência Rápida
+
+### Menu de Inicialização
+
+Ao executar sem argumentos, um **menu interativo** é exibido:
+
+```bash
+cargo run
+# ou
+./target/release/deep-research-cli
+```
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║     🔬 DEEP RESEARCH CLI                                      ║
+║     Agente de Pesquisa Profunda com IA                        ║
+╚═══════════════════════════════════════════════════════════════╝
+
+▶ 🖥️  Interface TUI Interativa
+  🔍 Pesquisa Direta (terminal)
+  📊 Comparar Web Readers
+  ⚡ Pesquisa com Comparação Live
+  ❓ Ajuda (mostrar comandos)
+  ❌ Sair
+
+↑↓: Navegar │ Enter: Selecionar │ q: Sair
+```
+
+| Tecla   | Ação             |
+| ------- | ---------------- |
+| `↑` `↓` | Navegar opções   |
+| `1-6`   | Seleção direta   |
+| `Enter` | Selecionar opção |
+| `q`     | Sair             |
+
+### Todos os Comandos
+
+| Comando                                          | Descrição                                   |
+| ------------------------------------------------ | ------------------------------------------- |
+| `deep-research-cli "pergunta"`                   | Executa pesquisa direta no terminal         |
+| `deep-research-cli --tui`                        | Abre interface TUI vazia para digitar       |
+| `deep-research-cli --tui "pergunta"`             | Abre TUI com pergunta pré-definida          |
+| `deep-research-cli --budget <tokens> "pergunta"` | Define limite de tokens (padrão: 1.000.000) |
+| `deep-research-cli --compare "url1,url2"`        | Compara Jina Reader vs Rust+OpenAI          |
+| `deep-research-cli --compare-live "pergunta"`    | Pesquisa com comparação em tempo real       |
+
+### Flags Disponíveis
+
+| Flag             | Tipo     | Padrão    | Descrição                                             |
+| ---------------- | -------- | --------- | ----------------------------------------------------- |
+| `--tui`          | `bool`   | `false`   | Ativa modo interface interativa (TUI)                 |
+| `--budget`       | `u64`    | `1000000` | Budget máximo de tokens para a pesquisa               |
+| `--compare`      | `string` | -         | URLs separadas por vírgula para comparação standalone |
+| `--compare-live` | `bool`   | `false`   | Habilita comparação Jina vs Rust durante pesquisa     |
+
+### Features de Compilação
+
+| Feature    | Comando                                                        | Descrição                                  |
+| ---------- | -------------------------------------------------------------- | ------------------------------------------ |
+| Padrão     | `cargo build --release`                                        | Backend sem TUI (produção)                 |
+| Clipboard  | `cargo build --release --features clipboard`                   | Habilita copiar para área de transferência |
+| PostgreSQL | `cargo build --release --features postgres`                    | Backend de histórico persistente           |
+| Qdrant     | `cargo build --release --features qdrant`                      | Busca vetorial semântica                   |
+| SIMD       | `cargo build --release --features simd`                        | Otimizações SIMD (nightly)                 |
+| Completo   | `cargo build --release --features "clipboard,postgres,qdrant"` | Todas as features de produção              |
+
+### Atalhos TUI (Principais)
+
+| Tecla         | Ação                              |
+| ------------- | --------------------------------- |
+| `Tab`         | Alternar entre tabs / focar input |
+| `Enter`       | Enviar pergunta / follow-up       |
+| `q` / `Esc`   | Sair / voltar                     |
+| `c`           | Copiar resposta ¹                 |
+| `r`           | Ver logs da pesquisa              |
+| `↑↓` / `jk`   | Scroll na resposta                |
+| `PageUp/Down` | Scroll rápido                     |
+| `Home/End`    | Início/fim da resposta            |
+
+> ¹ Requer `--features clipboard`
 
 ---
 
@@ -107,6 +221,8 @@ deep-research-cli --compare-live "Qual é a linguagem de programação mais usad
 | ----------- | ----------------------------- |
 | `Enter`     | Iniciar pesquisa              |
 | `Esc`       | Sair da aplicação             |
+| `Tab`       | Alternar entre tabs           |
+| `1` / `2`   | Ir para tab específica        |
 | `Char`      | Digitar caractere             |
 | `Backspace` | Apagar caractere anterior     |
 | `Delete`    | Apagar caractere atual        |
@@ -118,29 +234,88 @@ deep-research-cli --compare-live "Qual é a linguagem de programação mais usad
 
 ### `[research]` Tela de Pesquisa
 
-| Tecla       | Ação                     |
-| ----------- | ------------------------ |
-| `q` / `Esc` | Sair da aplicação        |
-| `↑` / `k`   | Scroll para cima (logs)  |
-| `↓` / `j`   | Scroll para baixo (logs) |
-| `PageUp`    | Scroll 5 linhas acima    |
-| `PageDown`  | Scroll 5 linhas abaixo   |
-| `🖱️ Scroll` | Scroll com roda do mouse |
+| Tecla       | Ação                        |
+| ----------- | --------------------------- |
+| `q` / `Esc` | Sair da aplicação           |
+| `1` / `2`   | Ir para tab específica      |
+| `r`         | Ver resultado (se completo) |
+| `↑` / `k`   | Scroll para cima (logs)     |
+| `↓` / `j`   | Scroll para baixo (logs)    |
+| `PageUp`    | Scroll 5 linhas acima       |
+| `PageDown`  | Scroll 5 linhas abaixo      |
+| `🖱️ Scroll` | Scroll com roda do mouse    |
 
 ### `[result]` Tela de Resultado
 
-| Tecla       | Ação                             |
-| ----------- | -------------------------------- |
-| `Enter`     | Nova pesquisa (reset)            |
-| `q` / `Esc` | Sair da aplicação                |
-| `↑` / `k`   | Scroll resposta para cima        |
-| `↓` / `j`   | Scroll resposta para baixo       |
-| `PageUp`    | Page up na resposta              |
-| `PageDown`  | Page down na resposta            |
-| `Home`      | Início da resposta               |
-| `End`       | Fim da resposta                  |
-| `c`         | **Copiar resposta p/ clipboard** |
-| `🖱️ Scroll` | Scroll com roda do mouse         |
+| Tecla       | Ação                               |
+| ----------- | ---------------------------------- |
+| `Tab`       | Focar/desfocar input de follow-up  |
+| `Enter`     | Enviar follow-up (se focado)       |
+| `q` / `Esc` | Sair (ou desfocar input)           |
+| `1` / `2`   | Ir para tab específica             |
+| `r`         | Alternar para ver logs             |
+| `c`         | **Copiar resposta p/ clipboard** ¹ |
+| `↑` / `k`   | Scroll resposta para cima          |
+| `↓` / `j`   | Scroll resposta para baixo         |
+| `PageUp`    | Page up na resposta                |
+| `PageDown`  | Page down na resposta              |
+| `Home`      | Início da resposta                 |
+| `End`       | Fim da resposta                    |
+| `🖱️ Scroll` | Scroll com roda do mouse           |
+
+> ¹ Requer compilação com `--features clipboard`
+
+### `[config]` Tela de Configurações
+
+| Tecla       | Ação                     |
+| ----------- | ------------------------ |
+| `q` / `Esc` | Sair da aplicação        |
+| `Tab`       | Alternar entre tabs      |
+| `1`         | Voltar para tab Pesquisa |
+| `2`         | Tab Configurações        |
+| `Backspace` | Voltar para tab Pesquisa |
+
+---
+
+## 🗂️ Navegação por Tabs
+
+A TUI possui um sistema de navegação por abas (tabs) que permite alternar entre diferentes visões:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  🔍 Pesquisa  │  ⚙️ Configurações                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Tabs Disponíveis
+
+| Tab                  | Tecla | Descrição                                   |
+| -------------------- | ----- | ------------------------------------------- |
+| 🔍 **Pesquisa**      | `1`   | Navegação entre Input → Research → Result   |
+| ⚙️ **Configurações** | `2`   | Visualiza todas as configurações carregadas |
+
+### Comportamento das Tabs
+
+- **Tab Pesquisa** navega entre as 3 telas de fluxo:
+
+  - `Input` → `Research` → `Result`
+  - Tecla `r` alterna entre Result ↔ Research (ver logs)
+
+- **Tab Configurações** exibe:
+  - Configurações de Runtime (threads, webreader)
+  - Configurações do LLM (provider, modelo, temperatura)
+  - Configurações do Agente (budget, limites, steps)
+  - Status das API Keys (presença/ausência)
+
+### Follow-up na Tela de Resultado
+
+Após uma pesquisa ser concluída, você pode **continuar a conversa**:
+
+1. Pressione `Tab` para focar o campo de input
+2. Digite sua pergunta de follow-up
+3. Pressione `Enter` para iniciar nova pesquisa
+
+> 💡 A nova pesquisa inicia imediatamente, sem passar pela fila de processamento.
 
 ---
 
@@ -423,6 +598,57 @@ Esta seção explica como interpretar cada elemento visual da TUI.
 
 ---
 
+### ⚙️ TELA 4: CONFIG (Configurações)
+
+A tela de configurações exibe todas as configurações carregadas do ambiente.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  🔍 Pesquisa  │  ⚙️ Configurações ◄                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│ ┌─ ⚙️ Runtime ───────────────────────────────────────────────────────────┐  │
+│ │  🧵 Worker Threads:    8                                          ←[A] │  │
+│ │  📖 Web Reader:        native                                          │  │
+│ │  🔑 OpenAI Key:        ✅ Presente                                ←[B] │  │
+│ │  🔑 Jina Key:          ✅ Presente                                     │  │
+│ └─────────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│ ┌─ 🤖 LLM ────────────────────────────────────────────────────────────────┐  │
+│ │  🏢 Provider:          openai                                     ←[C] │  │
+│ │  🧠 Model:             gpt-4.1-mini                                    │  │
+│ │  📐 Embedding:         text-embedding-3-small                     ←[D] │  │
+│ │  🌡️ Temperature:       0.7                                             │  │
+│ │  📊 Max Tokens:        16000                                           │  │
+│ └─────────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│ ┌─ 🕵️ Agent ───────────────────────────────────────────────────────────────┐  │
+│ │  📊 Min Steps:         3                                          ←[E] │  │
+│ │  🔢 Max Steps:         20                                              │  │
+│ │  💰 Max Budget:        1000000 tokens                                  │  │
+│ │  🔗 Max URLs/Step:     10                                              │  │
+│ │  📝 Max Queries/Step:  5                                               │  │
+│ │  ⏱️ Timeout/URL:       30s                                              │  │
+│ └─────────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│            Tab/1 Pesquisa   2 Config   Backspace Voltar   q Sair       ←[F] │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Legenda da Tela de Config:
+
+| Ref   | Elemento        | O Que Mostra                  | Como Analisar                    |
+| ----- | --------------- | ----------------------------- | -------------------------------- |
+| `[A]` | Worker Threads  | Número de threads paralelas   | Mais = mais rápido (até limite)  |
+| `[B]` | API Keys        | Status das chaves (✅/❌)     | ❌ = funcionalidade indisponível |
+| `[C]` | Provider/Model  | LLM configurado para uso      | Afeta qualidade e custo          |
+| `[D]` | Embedding Model | Modelo para embeddings        | Usado em busca semântica         |
+| `[E]` | Agent Limits    | Limites de operação do agente | Ajuste para controle de custo    |
+| `[F]` | Ajuda           | Atalhos de navegação          | Use números para trocar tabs     |
+
+---
+
 ### 🚨 TELA DE ERRO
 
 ```
@@ -672,7 +898,7 @@ less logs/$(ls -t logs/ | head -1)
 **Novidades v0.1.x:**
 
 - 🖱️ **Mouse scroll** - Roda do mouse funciona em todas as telas
-- 📋 **Copiar resposta** - Tecla `c` copia para clipboard do sistema
+- 📋 **Copiar resposta** - Tecla `c` copia para clipboard do sistema (requer `--features clipboard`)
 - 📜 **Scrollbar visual** - Indicador de posição na resposta
 
 ### `[tui-state]` Estado da Aplicação (App)
@@ -1015,11 +1241,32 @@ ANSWER: Provide the final answer
 
 ### `[coding]` Executar Código
 
-Executa código em sandbox seguro (reservado).
+Executa código em sandbox seguro com escolha automática de linguagem.
 
+#### Linguagens Suportadas
+
+| Linguagem  | Engine           | Melhor para                                                          |
+| ---------- | ---------------- | -------------------------------------------------------------------- |
+| JavaScript | Boa (in-process) | JSON, strings, cálculos simples, transformações rápidas              |
+| Python     | Subprocess       | Análise de dados, estatísticas, regex complexo, cálculos científicos |
+| Auto       | LLM escolhe      | O modelo decide a melhor linguagem baseado no problema               |
+
+#### Formato da Ação
+
+```json
+{
+  "action": "coding",
+  "code": "Descrição do problema a resolver",
+  "language": "javascript|python|auto",
+  "think": "raciocínio do agente"
+}
 ```
-CODING: Execute code for data processing
-```
+
+#### Segurança
+
+- **JavaScript**: Executado via Boa Engine (isolado, sem acesso a filesystem/rede)
+- **Python**: Executado via subprocess com timeout rigoroso
+- Retry inteligente com feedback de erros para o LLM (até 3 tentativas)
 
 **Parâmetros:**
 
@@ -1089,12 +1336,288 @@ Eventos internos para atualização da UI.
 
 ### Estados do Agente
 
-| Estado       | Descrição                       |
-| ------------ | ------------------------------- |
-| `Processing` | Processando (step, budget_used) |
-| `BeastMode`  | Modo forçado (>85% budget)      |
-| `Completed`  | Concluído com sucesso           |
-| `Failed`     | Falha definitiva                |
+| Estado          | Descrição                              |
+| --------------- | -------------------------------------- |
+| `Processing`    | Processando (step, budget_used)        |
+| `InputRequired` | Aguardando input do usuário (blocking) |
+| `BeastMode`     | Modo forçado (>85% budget)             |
+| `Completed`     | Concluído com sucesso                  |
+| `Failed`        | Falha definitiva                       |
+
+---
+
+## 💬 Sistema de Interação Usuário-Agente
+
+O Deep Research implementa um sistema híbrido de interação entre o usuário e o agente, compatível com a OpenAI Responses API (`input_required` state).
+
+### Visão Geral
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DeepResearchAgent                            │
+│  ┌──────────────────┐    ┌──────────────────┐                  │
+│  │   AgentState     │    │  InteractionHub  │◄── user_input_rx │
+│  │  - Running       │    │  - pending_qs    │                  │
+│  │  - InputRequired │    │  - user_inputs   │                  │
+│  │  - Completed     │    │  - callbacks     │                  │
+│  └──────────────────┘    └──────────────────┘                  │
+│           │                      │                              │
+│           ▼                      ▼                              │
+│  ┌──────────────────────────────────────────┐                  │
+│  │          AgentAction::AskUser            │                  │
+│  │  - question_type: QuestionType           │                  │
+│  │  - question: String                      │                  │
+│  │  - options: Option<Vec<String>>          │                  │
+│  │  - is_blocking: bool                     │                  │
+│  └──────────────────────────────────────────┘                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+            ┌───────────────┐   ┌───────────────┐
+            │     TUI       │   │   Chatbot     │
+            │  (dev/test)   │   │  (produção)   │
+            │               │   │ digisac/suri  │
+            └───────────────┘   └───────────────┘
+```
+
+### Modos de Interação
+
+| Modo         | Comportamento                                         | Uso                               |
+| ------------ | ----------------------------------------------------- | --------------------------------- |
+| **Blocking** | Agente PAUSA e aguarda resposta                       | Clarificação, confirmação crítica |
+| **Async**    | Mensagens entram na fila, processadas no próximo step | Feedback, informações adicionais  |
+
+### Tipos de Pergunta (QuestionType)
+
+| Tipo            | Blocking | Descrição                               |
+| --------------- | -------- | --------------------------------------- |
+| `Clarification` | ✅ Sim   | Falta informação vital para continuar   |
+| `Confirmation`  | ✅ Sim   | Confirmação antes de ação importante    |
+| `Preference`    | ✅ Sim   | Escolha entre opções válidas            |
+| `Suggestion`    | ❌ Não   | Sugestão/feedback (processado no ciclo) |
+
+### Atalhos TUI - Interação Durante Pesquisa
+
+| Tecla   | Ação                                          |
+| ------- | --------------------------------------------- |
+| `Tab`   | Focar/desfocar campo de mensagem              |
+| `Enter` | Enviar mensagem para o agente (quando focado) |
+| `Esc`   | Desfocar input ou sair (quando não focado)    |
+
+### Layout da Tela de Pesquisa com Input
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 🔍 DEEP RESEARCH v0.1.0 │ Pesquisando...                        │
+│ Pergunta: [sua pergunta aqui...]                                │
+├───────────────────────────────────────┬─────────────────────────┤
+│ 💭 Raciocínio do Agente              │ 🎯 Ação Atual           │
+│                                       │    Step: 3              │
+│ Buscando informações sobre...         │    Ação: SEARCH         │
+├───────────────────────────────────────┼─────────────┬───────────┤
+│ 📋 Logs                              │ 📊 Stats    │ 👥 Personas│
+│ [17:30:01] ℹ️ Buscando...            │ URLs: 45    │ ● Agente  │
+├───────────────────────────────────────┴─────────────┴───────────┤
+│ ████████████████░░░░░░░░░░░░░░░░░░░░░░  40%  Step 4 SEARCH     │
+├─────────────────────────────────────────────────────────────────┤
+│ 💬 Enviar mensagem │ Tab: focar │ Enter: enviar                │◀ NOVO!
+│ [_____________________________________________________ ]       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Tela de Input Requerido (Blocking)
+
+Quando o agente precisa de uma resposta crítica, a tela muda para:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ ❓ PERGUNTA DO AGENTE                                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Tipo: clarification                                            │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │ Você poderia confirmar se deseja que eu faça uma        │   │
+│  │ busca via API especificamente no crate 'parrachos'      │   │
+│  │ dentro do diretório especificado?                       │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌─ Sua Resposta ─────────────────────────────────────────┐    │
+│  │ █                                                      │    │
+│  └────────────────────────────────────────────────────────┘    │
+│                                                                 │
+│  Enter: Enviar resposta  │  Esc: Cancelar                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Layout com Sandbox Ativo
+
+Quando o agente está executando código, um painel dedicado mostra o progresso:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 🔍 DEEP RESEARCH v0.1.0 │ Pesquisando...                        │
+├───────────────────────────────────┬─────────────────────────────┤
+│ 💭 Raciocínio do Agente          │ 🖥️ SANDBOX                  │
+│                                   │ ──────────────────────────  │
+│ Preciso processar os dados        │ 🐍 Python                   │
+│ encontrados para extrair          │ ⏳ GERANDO...               │
+│ informações estatísticas...       │    1/3 tentativas           │
+│                                   │    timeout: 10000ms         │
+│                                   │                             │
+│                                   │ 📝 Calcular média e desvio  │
+│                                   │    padrão dos valores...    │
+│                                   │                             │
+│                                   │ 💻 Código:                  │
+│                                   │ ┌───────────────────────┐   │
+│                                   │ │ import statistics     │   │
+│                                   │ │ values = [...]        │   │
+│                                   │ │ mean = statistics...  │   │
+│                                   │ └───────────────────────┘   │
+├───────────────────────────────────┴─────────────────────────────┤
+│ ████████████████░░░░░░░░░░░░░░░░░░░░░░  40%  Step 4 CODING     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Fluxo de Execução
+
+#### Pergunta Blocking (Clarificação)
+
+```
+1. LLM retorna AgentAction::AskUser { is_blocking: true, ... }
+2. Agente emite AgentProgress::AgentQuestion
+3. Agente muda estado para InputRequired
+4. TUI mostra tela de pergunta dedicada
+5. Usuário digita resposta e pressiona Enter
+6. Resposta enviada via canal para InteractionHub
+7. Agente processa e adiciona ao knowledge como UserProvided
+8. Agente retoma execução automaticamente
+```
+
+#### Input Async (Mensagem Espontânea)
+
+```
+1. Usuário pressiona Tab durante pesquisa (foca input)
+2. Digita mensagem e pressiona Enter
+3. Mensagem entra na fila user_message_queue
+4. Enviada via canal para o InteractionHub do agente
+5. poll_user_messages() processa no próximo step
+6. Adicionado ao knowledge como UserProvided
+7. LLM vê novo contexto e ajusta ações
+```
+
+### API: Compatibilidade OpenAI Responses
+
+O estado `InputRequired` mapeia diretamente para o conceito de `input_required` da OpenAI:
+
+```json
+{
+  "status": "input_required",
+  "pending_input": {
+    "type": "clarification",
+    "question": "Qual é a cidade de origem da sua viagem?",
+    "options": null
+  }
+}
+```
+
+### Módulos do Sistema de Interação
+
+| Módulo              | Arquivo                | Descrição                          |
+| ------------------- | ---------------------- | ---------------------------------- |
+| **InteractionHub**  | `agent/interaction.rs` | Hub central de comunicação         |
+| **PendingQuestion** | `agent/interaction.rs` | Estrutura de pergunta pendente     |
+| **UserResponse**    | `agent/interaction.rs` | Estrutura de resposta do usuário   |
+| **QuestionType**    | `agent/interaction.rs` | Enum de tipos de pergunta          |
+| **ChatbotAdapter**  | `agent/chatbot.rs`     | Trait para integração com chatbots |
+| **RichMessage**     | `agent/chatbot.rs`     | Mensagens formatadas com botões    |
+
+### Estruturas Principais
+
+#### PendingQuestion
+
+```rust
+pub struct PendingQuestion {
+    pub id: Uuid,                        // ID único da pergunta
+    pub question_type: QuestionType,     // Tipo (Clarification, Confirmation, etc.)
+    pub question: String,                // Texto da pergunta
+    pub options: Option<Vec<String>>,    // Opções (para Preference)
+    pub is_blocking: bool,               // Se deve pausar até resposta
+    pub created_at: DateTime<Utc>,       // Timestamp de criação
+}
+```
+
+#### UserResponse
+
+```rust
+pub struct UserResponse {
+    pub question_id: Option<Uuid>,       // ID da pergunta (None = espontânea)
+    pub content: String,                 // Conteúdo da resposta
+    pub timestamp: DateTime<Utc>,        // Timestamp
+    pub selected_option: Option<usize>,  // Índice da opção selecionada
+}
+```
+
+### Integração com Chatbots (Produção)
+
+A trait `ChatbotAdapter` permite integração com plataformas de chat:
+
+```rust
+#[async_trait]
+pub trait ChatbotAdapter: Send + Sync {
+    /// Envia mensagem para o usuário
+    async fn send_message(&self, message: &str) -> Result<(), ChatbotError>;
+
+    /// Envia pergunta e aguarda resposta (blocking)
+    async fn ask_user(&self, question: &PendingQuestion) -> Result<UserResponse, ChatbotError>;
+
+    /// Envia opções para o usuário escolher
+    async fn send_options(&self, question: &str, options: &[String]) -> Result<String, ChatbotError>;
+
+    /// Tenta receber mensagem sem bloquear
+    fn try_receive(&self) -> Result<Option<UserResponse>, ChatbotError>;
+
+    /// Recebe mensagem (blocking com timeout)
+    async fn receive_message(&self, timeout: Duration) -> Result<UserResponse, ChatbotError>;
+}
+```
+
+#### Plataformas Suportadas (Futuro)
+
+| Plataforma    | Status       | Descrição                      |
+| ------------- | ------------ | ------------------------------ |
+| **TUI**       | ✅ Pronto    | Interface terminal (dev/test)  |
+| **DigiSac**   | 🔜 Planejado | Integração via crate existente |
+| **Suri**      | 🔜 Planejado | API de mensagens (tlw_irus)    |
+| **Parrachos** | 🔜 Planejado | Webhook/callback para UI web   |
+
+### Exemplo de Uso Programático
+
+```rust
+use deep_research::agent::{DeepResearchAgent, UserResponse};
+
+// Criar agente com canais de interação
+let (agent, response_tx, question_rx) = DeepResearchAgent::new(llm, search, budget)
+    .with_interaction_channels(16);
+
+// Spawn task para processar perguntas
+tokio::spawn(async move {
+    while let Some(question) = question_rx.recv().await {
+        println!("Agente pergunta: {}", question.question);
+
+        // Obter resposta do usuário (ex: via stdin, chatbot, etc.)
+        let user_input = get_user_input().await;
+
+        // Enviar resposta de volta
+        let response = UserResponse::to_question(question.id.to_string(), user_input);
+        response_tx.send(response).await.unwrap();
+    }
+});
+
+// Executar pesquisa
+let result = agent.run("Minha pergunta complexa").await;
+```
 
 ### Telas da TUI
 
