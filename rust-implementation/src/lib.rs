@@ -168,6 +168,14 @@ pub mod search_metrics;
 /// - Integração com SearchMetrics
 pub mod search_cache;
 
+/// Sistema de evidências para auditoria e debugging.
+///
+/// Coleta evidências estruturadas do funcionamento do sistema:
+/// - [`evidence::SearchEvidenceReport`]: Evidências de operações de busca
+/// - [`evidence::EvaluationEvidenceReport`]: Evidências de avaliações
+/// - [`evidence::LatencyStats`]: Estatísticas de latência
+pub mod evidence;
+
 /// Comparação de readers: Jina vs Rust + OpenAI.
 ///
 /// Módulo para benchmark e comparação de diferentes métodos

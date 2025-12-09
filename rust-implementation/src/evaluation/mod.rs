@@ -4,10 +4,16 @@
 
 mod determiner;
 mod pipeline;
+pub mod prompts;
 mod trace;
 
 pub use determiner::*;
 pub use pipeline::*;
+pub use prompts::{
+    get_completeness_prompt, get_definitive_prompt, get_freshness_prompt,
+    get_plurality_prompt, get_question_evaluation_prompt, get_reject_all_answers_prompt,
+    PromptBuilder, PromptPair, FRESHNESS_THRESHOLDS, PLURALITY_RULES,
+};
 pub use trace::*;
 
 use std::time::Duration;
@@ -23,24 +29,7 @@ pub struct EvaluationContext {
     pub knowledge_items: Vec<KnowledgeItem>,
 }
 
-/// Par de prompts para enviar ao LLM (sistema + usuário).
-///
-/// Em APIs de LLM como OpenAI, as mensagens são divididas em:
-/// - **System**: Define o comportamento e contexto do modelo
-/// - **User**: A pergunta ou tarefa específica
-///
-/// Este struct agrupa ambos para facilitar o gerenciamento.
-#[derive(Debug, Clone)]
-pub struct PromptPair {
-    /// Prompt de sistema que define o comportamento do LLM.
-    ///
-    /// Exemplo: "Você é um avaliador rigoroso de respostas..."
-    pub system: String,
-    /// Prompt do usuário com a tarefa específica.
-    ///
-    /// Exemplo: "Avalie se esta resposta está completa: ..."
-    pub user: String,
-}
+// PromptPair está definido em prompts.rs e re-exportado acima
 
 /// Tipos de avaliação - enum garante que não existem tipos "inventados"
 ///
