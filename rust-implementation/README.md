@@ -175,17 +175,18 @@ A TUI possui um sistema de navegação por abas (tabs) que permite alternar entr
 
 ### Tabs Disponíveis
 
-| Tab | Tecla | Descrição |
-| --- | ----- | --------- |
-| 🔍 **Pesquisa** | `1` | Navegação entre Input → Research → Result |
-| ⚙️ **Configurações** | `2` | Visualiza todas as configurações carregadas |
+| Tab                  | Tecla | Descrição                                   |
+| -------------------- | ----- | ------------------------------------------- |
+| 🔍 **Pesquisa**      | `1`   | Navegação entre Input → Research → Result   |
+| ⚙️ **Configurações** | `2`   | Visualiza todas as configurações carregadas |
 
 ### Comportamento das Tabs
 
 - **Tab Pesquisa** navega entre as 3 telas de fluxo:
+
   - `Input` → `Research` → `Result`
   - Tecla `r` alterna entre Result ↔ Research (ver logs)
-  
+
 - **Tab Configurações** exibe:
   - Configurações de Runtime (threads, webreader)
   - Configurações do LLM (provider, modelo, temperatura)
@@ -523,14 +524,14 @@ A tela de configurações exibe todas as configurações carregadas do ambiente.
 
 #### Legenda da Tela de Config:
 
-| Ref   | Elemento         | O Que Mostra                         | Como Analisar                    |
-| ----- | ---------------- | ------------------------------------ | -------------------------------- |
-| `[A]` | Worker Threads   | Número de threads paralelas          | Mais = mais rápido (até limite)  |
-| `[B]` | API Keys         | Status das chaves (✅/❌)             | ❌ = funcionalidade indisponível |
-| `[C]` | Provider/Model   | LLM configurado para uso             | Afeta qualidade e custo          |
-| `[D]` | Embedding Model  | Modelo para embeddings               | Usado em busca semântica         |
-| `[E]` | Agent Limits     | Limites de operação do agente        | Ajuste para controle de custo    |
-| `[F]` | Ajuda            | Atalhos de navegação                 | Use números para trocar tabs     |
+| Ref   | Elemento        | O Que Mostra                  | Como Analisar                    |
+| ----- | --------------- | ----------------------------- | -------------------------------- |
+| `[A]` | Worker Threads  | Número de threads paralelas   | Mais = mais rápido (até limite)  |
+| `[B]` | API Keys        | Status das chaves (✅/❌)     | ❌ = funcionalidade indisponível |
+| `[C]` | Provider/Model  | LLM configurado para uso      | Afeta qualidade e custo          |
+| `[D]` | Embedding Model | Modelo para embeddings        | Usado em busca semântica         |
+| `[E]` | Agent Limits    | Limites de operação do agente | Ajuste para controle de custo    |
+| `[F]` | Ajuda           | Atalhos de navegação          | Use números para trocar tabs     |
 
 ---
 
