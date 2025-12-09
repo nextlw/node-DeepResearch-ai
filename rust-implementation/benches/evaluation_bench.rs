@@ -27,6 +27,8 @@ fn create_eval_context(topic: TopicCategory, knowledge_count: usize) -> Evaluati
                 title: format!("Source {}", i),
                 exact_quote: None,
                 relevance_score: Some(0.8),
+                answer_chunk: None,
+                answer_position: None,
             }],
         })
         .collect();

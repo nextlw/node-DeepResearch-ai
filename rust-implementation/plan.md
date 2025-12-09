@@ -67,3 +67,79 @@ Este plano divide o trabalho de QA e testes em três frentes independentes. Cada
 1. Cada pessoa deve criar uma branch separada (ex: `test/agent-fix`, `test/persona-update`).
 2. Utilizar os comandos de teste isolados listados acima para não esperar a suíte inteira rodar.
 3. Reportar falhas categorizadas por área (Agente vs. Domínio vs. Performance).
+
+Vou analisar as ferramentas TypeScript e comparar com as implementações Rust:
+
+[13 tools called]
+
+Agora tenho todas as informações! Aqui está a análise completa:
+
+## 📊 Comparação: Tools TypeScript vs Rust
+
+| Tool TypeScript           | Função                        | Rust Impl                  | Status Pipeline    | Notas                                       |
+| ------------------------- | ----------------------------- | -------------------------- | ------------------ | ------------------------------------------- |
+| **cosine.ts**             | Similaridade cosseno          | `simd.rs`                  | ✅ **REAL + SIMD** | AVX2 10x mais rápido                        |
+| **embeddings.ts**         | Gerar embeddings Jina         | `llm.rs`                   | ✅ **REAL**        | OpenAI `text-embedding-3-small`             |
+| **jina-dedup.ts**         | Dedup queries semântica       | `simd.rs` + `agent/mod.rs` | ✅ **REAL**        | SIMD + embeddings                           |
+| **evaluator.ts**          | Validação fast-fail           | `evaluation/pipeline.rs`   | ✅ **REAL**        | Definitive/Freshness/Plurality/Completeness |
+| **query-rewriter.ts**     | Expandir queries com personas | `personas/`                | ✅ **REAL**        | 7 personas cognitivas                       |
+| **jina-search.ts**        | Busca web                     | `search.rs`                | ✅ **REAL**        | JinaClient `search`                         |
+| **read.ts**               | Ler conteúdo URL              | `search.rs`                | ✅ **REAL**        | `read_url`, `read_urls_batch`               |
+| **jina-rerank.ts**        | Reranking de URLs             | `search.rs`                | ✅ **REAL**        | `rerank` com Jina                           |
+| **code-sandbox.ts**       | Execução de código            | `agent/mod.rs`             | ⚠️ **STUB**        | `execute_sandbox` retorna fixo              |
+| **error-analyzer.ts**     | Analisar falhas               | ❌ **NÃO IMPL**            | ❌                 | Não existe em Rust                          |
+| **build-ref.ts**          | Construir referências         | `agent/mod.rs`             | ⚠️ **PARCIAL**     | `extract_references_from_knowledge` básico  |
+| **finalizer.ts**          | Polir resposta final          | ❌ **NÃO IMPL**            | ❌                 | Não existe em Rust                          |
+| **reducer.ts**            | Mesclar múltiplas respostas   | ❌ **NÃO IMPL**            | ❌                 | Para multi-agente                           |
+| **research-planner.ts**   | Dividir em subproblemas       | ❌ **NÃO IMPL**            | ❌                 | Para multi-agente                           |
+| **segment.ts**            | Chunking de texto             | ❌ **NÃO IMPL**            | ❌                 | Usado em build-ref                          |
+| **jina-classify-spam.ts** | Classificar spam              | ❌ **NÃO IMPL**            | ❌                 | Filtragem de URLs                           |
+| **jina-latechunk.ts**     | Late chunking                 | ❌ **NÃO IMPL**            | ❌                 | Chunking semântico                          |
+
+---
+
+## 📈 Resumo
+
+### ✅ Implementados e na Pipeline (8/17)
+
+```
+cosine.ts        → simd.rs               ⚡ SIMD AVX2
+embeddings.ts    → llm.rs                🧠 OpenAI embeddings
+jina-dedup.ts    → simd.rs + agent       🔄 Dedup semântica
+evaluator.ts     → evaluation/pipeline   🔍 Fast-fail validation
+query-rewriter.ts→ personas/             🎭 7 personas cognitivas
+jina-search.ts   → search.rs             🔍 Jina Search
+read.ts          → search.rs             📖 URL reading
+jina-rerank.ts   → search.rs             📊 Jina Rerank
+```
+
+### ⚠️ Stub/Parcial (2/17)
+
+```
+code-sandbox.ts  → agent/mod.rs          ❌ Retorna fixo "Sandbox output"
+build-ref.ts     → agent/mod.rs          ⚠️ Básico, sem chunking
+```
+
+### ❌ Não Implementados (7/17)
+
+```
+error-analyzer.ts     Analisar erros e sugerir melhorias
+finalizer.ts          Polir resposta final (editor sênior)
+reducer.ts            Mesclar respostas de multi-agente
+research-planner.ts   Dividir em subproblemas (multi-agente)
+segment.ts            Chunking de texto para referências
+jina-classify-spam.ts Classificar URLs spam
+jina-latechunk.ts     Late chunking semântico
+```
+
+---
+
+## 🎯 Prioridade de Implementação
+
+1. **Alta** - `error-analyzer.ts` → Melhorar loop de retry
+2. **Alta** - `segment.ts` + `build-ref.ts` → Referências precisas
+3. **Média** - `finalizer.ts` → Qualidade de resposta
+4. **Média** - `jina-classify-spam.ts` → Filtrar URLs ruins
+5. **Baixa** - `reducer.ts` + `research-planner.ts` → Multi-agente (futuro)
+
+Quer que eu implemente alguma dessas ferramentas faltantes?

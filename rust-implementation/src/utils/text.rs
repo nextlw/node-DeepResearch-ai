@@ -105,42 +105,8 @@ pub fn normalize_query(query: &str) -> String {
         .to_lowercase()
 }
 
-/// Divide texto em chunks de tamanho aproximado
-pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<&str> {
-    if text.len() <= chunk_size {
-        return vec![text];
-    }
-
-    let mut chunks = Vec::new();
-    let mut start = 0;
-
-    while start < text.len() {
-        let end = (start + chunk_size).min(text.len());
-
-        // Ajusta para boundary de caractere
-        let mut adjusted_end = end;
-        while adjusted_end > start && !text.is_char_boundary(adjusted_end) {
-            adjusted_end -= 1;
-        }
-
-        // Tenta terminar em espaço para não cortar palavras
-        if adjusted_end < text.len() {
-            if let Some(space_pos) = text[start..adjusted_end].rfind(char::is_whitespace) {
-                adjusted_end = start + space_pos + 1;
-            }
-        }
-
-        chunks.push(&text[start..adjusted_end]);
-
-        start = if adjusted_end > overlap {
-            adjusted_end - overlap
-        } else {
-            adjusted_end
-        };
-    }
-
-    chunks
-}
+// NOTA: Para chunking de texto, use `segment::chunk_text` que oferece
+// 4 estratégias: newline, punctuation, characters(n), regex(pattern)
 
 #[cfg(test)]
 mod tests {
@@ -189,18 +155,5 @@ mod tests {
     #[test]
     fn test_normalize_query() {
         assert_eq!(normalize_query("  Hello,  WORLD!!!  "), "hello world");
-    }
-
-    #[test]
-    fn test_chunk_text() {
-        let text = "This is a test text for chunking functionality";
-        let chunks = chunk_text(text, 20, 5);
-        assert!(chunks.len() > 1);
-
-        // Verify overlap
-        for i in 1..chunks.len() {
-            // Chunks should have some overlap
-            assert!(chunks[i - 1].len() > 5 || chunks[i].len() > 5);
-        }
     }
 }

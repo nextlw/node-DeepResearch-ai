@@ -106,6 +106,171 @@ pub struct SystemMetrics {
     pub cpu_percent: f32,
 }
 
+/// Estado do AgentAnalyzer (análise de erros em background)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentAnalyzerState {
+    /// Se está ativo (análise em andamento)
+    pub is_active: bool,
+    /// Número de falhas que dispararam a análise
+    pub failures_count: usize,
+    /// Entradas do diário sendo analisadas
+    pub diary_entries: usize,
+    /// Timestamp de início
+    pub started_at: Option<String>,
+    /// Último recap (resumo)
+    pub last_recap: Option<String>,
+    /// Última blame (culpa)
+    pub last_blame: Option<String>,
+    /// Última melhoria sugerida
+    pub last_improvement: Option<String>,
+    /// Tempo de execução em ms
+    pub duration_ms: Option<u128>,
+    /// Logs específicos do analyzer
+    pub logs: Vec<LogEntry>,
+}
+
+/// Execução de sandbox completada (para histórico)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxExecution {
+    /// Problema/tarefa resolvido
+    pub problem: String,
+    /// Linguagem de programação usada
+    pub language: String,
+    /// Se foi bem-sucedido
+    pub success: bool,
+    /// Número de tentativas
+    pub attempts: usize,
+    /// Tempo de execução em ms
+    pub execution_time_ms: u64,
+    /// Output da execução (se sucesso)
+    pub output: Option<String>,
+    /// Erro da execução (se falha)
+    pub error: Option<String>,
+    /// Preview do código final
+    pub code_preview: String,
+    /// Timestamp de conclusão
+    pub completed_at: String,
+}
+
+/// Estado do Sandbox de execução de código
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SandboxState {
+    /// Se está ativo (execução em andamento)
+    pub is_active: bool,
+    /// Problema/tarefa sendo resolvido
+    pub problem: String,
+    /// Tentativa atual (1-based)
+    pub current_attempt: usize,
+    /// Máximo de tentativas
+    pub max_attempts: usize,
+    /// Status atual: "idle", "generating", "executing", "success", "error"
+    pub status: String,
+    /// Preview do código sendo executado
+    pub code_preview: String,
+    /// Output da execução (se sucesso)
+    pub output: Option<String>,
+    /// Erro da execução (se falha)
+    pub error: Option<String>,
+    /// Tempo de execução em ms
+    pub execution_time_ms: u64,
+    /// Timeout configurado em ms
+    pub timeout_ms: u64,
+    /// Timestamp de início
+    pub started_at: Option<String>,
+    /// Linguagem de programação (JavaScript, Python)
+    pub language: String,
+    /// Logs específicos do sandbox
+    pub logs: Vec<LogEntry>,
+    /// Histórico de execuções completadas
+    #[serde(default)]
+    pub executions: Vec<SandboxExecution>,
+}
+
+impl SandboxState {
+    /// Inicia uma nova execução de sandbox
+    pub fn start(&mut self, problem: String, max_attempts: usize, timeout_ms: u64, language: String) {
+        self.is_active = true;
+        self.problem = problem;
+        self.current_attempt = 0;
+        self.max_attempts = max_attempts;
+        self.status = "generating".to_string();
+        self.code_preview.clear();
+        self.output = None;
+        self.error = None;
+        self.execution_time_ms = 0;
+        self.timeout_ms = timeout_ms;
+        self.language = language.clone();
+        self.started_at = Some(chrono::Local::now().format("%H:%M:%S").to_string());
+        self.logs.clear();
+
+        let lang_emoji = if language == "Python" { "🐍" } else { "📜" };
+        self.logs.push(LogEntry::new(
+            LogLevel::Info,
+            format!("{} Sandbox {} iniciado: {}", lang_emoji, language, if self.problem.len() > 50 {
+                format!("{}...", &self.problem[..50])
+            } else {
+                self.problem.clone()
+            }),
+        ));
+    }
+
+    /// Atualiza uma tentativa
+    pub fn update_attempt(&mut self, attempt: usize, code_preview: String, status: String, error: Option<String>) {
+        self.current_attempt = attempt;
+        self.code_preview = code_preview;
+        self.status = status.clone();
+        if let Some(e) = &error {
+            self.logs.push(LogEntry::new(LogLevel::Warning, format!("❌ Tentativa {}: {}", attempt, e)));
+        } else if status == "executing" {
+            self.logs.push(LogEntry::new(LogLevel::Info, format!("🔄 Tentativa {}/{}: Executando {}...", attempt, self.max_attempts, self.language)));
+        }
+    }
+
+    /// Completa a execução
+    pub fn complete(&mut self, success: bool, output: Option<String>, error: Option<String>, attempts: usize, execution_time_ms: u64, code_preview: String, language: String) {
+        self.is_active = false;
+        self.current_attempt = attempts;
+        self.status = if success { "success".to_string() } else { "error".to_string() };
+        self.output = output.clone();
+        self.error = error.clone();
+        self.execution_time_ms = execution_time_ms;
+        self.code_preview = code_preview.clone();
+        self.language = language.clone();
+
+        let lang_emoji = if language == "Python" { "🐍" } else { "📜" };
+        if success {
+            self.logs.push(LogEntry::new(
+                LogLevel::Success,
+                format!("✅ {} Sucesso em {} tentativa(s), {}ms", lang_emoji, attempts, execution_time_ms),
+            ));
+            if let Some(out) = &output {
+                let preview = if out.len() > 100 { format!("{}...", &out[..100]) } else { out.clone() };
+                self.logs.push(LogEntry::new(LogLevel::Info, format!("📤 Output: {}", preview)));
+            }
+        } else if let Some(e) = &error {
+            self.logs.push(LogEntry::new(LogLevel::Error, format!("❌ {} Falhou após {} tentativa(s): {}", lang_emoji, attempts, e)));
+        }
+
+        // Salvar no histórico de execuções
+        self.executions.push(SandboxExecution {
+            problem: self.problem.clone(),
+            language,
+            success,
+            attempts,
+            execution_time_ms,
+            output,
+            error,
+            code_preview,
+            completed_at: chrono::Local::now().format("%H:%M:%S").to_string(),
+        });
+    }
+
+    /// Reseta o estado
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Estado de uma tarefa paralela
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TaskStatus {
@@ -241,6 +406,9 @@ pub struct ResearchSession {
     /// Steps completados
     #[serde(default)]
     pub completed_steps: Vec<CompletedStep>,
+    /// Execuções de sandbox (código executado)
+    #[serde(default)]
+    pub sandbox_executions: Vec<SandboxExecution>,
 }
 
 /// Estatísticas de tempo da sessão
@@ -269,8 +437,77 @@ pub struct SessionStats {
     pub tokens_used: u64,
 }
 
+/// Tab ativa na navegação
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActiveTab {
+    /// Tab de pesquisa (Input/Research/Result)
+    #[default]
+    Search,
+    /// Tab de configurações
+    Config,
+}
+
+impl ActiveTab {
+    /// Retorna o índice da tab (para widget Tabs)
+    pub fn index(&self) -> usize {
+        match self {
+            ActiveTab::Search => 0,
+            ActiveTab::Config => 1,
+        }
+    }
+
+    /// Cria tab a partir do índice
+    pub fn from_index(idx: usize) -> Self {
+        match idx {
+            0 => ActiveTab::Search,
+            1 => ActiveTab::Config,
+            _ => ActiveTab::Search,
+        }
+    }
+
+    /// Próxima tab (cyclic)
+    pub fn next(&self) -> Self {
+        match self {
+            ActiveTab::Search => ActiveTab::Config,
+            ActiveTab::Config => ActiveTab::Search,
+        }
+    }
+
+    /// Tab anterior (cyclic)
+    pub fn prev(&self) -> Self {
+        self.next() // Com 2 tabs, next == prev
+    }
+}
+
+/// Configurações carregadas (snapshot para exibição na TUI)
+#[derive(Debug, Clone, Default)]
+pub struct LoadedConfig {
+    // Runtime
+    pub worker_threads: String,
+    pub max_threads: usize,
+    pub max_blocking_threads: usize,
+    pub webreader: String,
+    // LLM
+    pub llm_provider: String,
+    pub llm_model: String,
+    pub embedding_provider: String,
+    pub embedding_model: String,
+    pub temperature: f32,
+    pub api_base_url: Option<String>,
+    // Agent
+    pub min_steps_before_answer: usize,
+    pub allow_direct_answer: bool,
+    pub default_token_budget: u64,
+    pub max_urls_per_step: usize,
+    pub max_queries_per_step: usize,
+    pub max_consecutive_failures: usize,
+    // API Keys (mascaradas)
+    pub openai_key_present: bool,
+    pub jina_key_present: bool,
+}
+
 /// Estado da tela
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppScreen {
     /// Tela de input da pergunta
     Input,
@@ -278,6 +515,21 @@ pub enum AppScreen {
     Research,
     /// Tela de resultado
     Result,
+    /// Tela de configurações
+    Config,
+    /// Aguardando input do usuário (pergunta do agente)
+    ///
+    /// Compatível com OpenAI Responses API (input_required).
+    InputRequired {
+        /// ID da pergunta pendente
+        question_id: String,
+        /// Tipo da pergunta
+        question_type: String,
+        /// Texto da pergunta
+        question: String,
+        /// Opções de resposta (se aplicável)
+        options: Option<Vec<String>>,
+    },
 }
 
 /// Eventos que podem ser enviados para a TUI
@@ -355,6 +607,87 @@ pub enum AppEvent {
         /// Número de tarefas que falharam
         fail_count: usize,
     },
+    /// AgentAnalyzer iniciou análise em background
+    AgentAnalyzerStarted {
+        /// Número de falhas consecutivas que dispararam a análise
+        failures_count: usize,
+        /// Número de entradas do diário sendo analisadas
+        diary_entries: usize,
+    },
+    /// AgentAnalyzer concluiu análise
+    AgentAnalyzerCompleted {
+        /// Resumo cronológico
+        recap: String,
+        /// Identificação do problema
+        blame: String,
+        /// Sugestões de melhoria
+        improvement: String,
+        /// Tempo de execução em ms
+        duration_ms: u128,
+    },
+    /// Agente fez uma pergunta ao usuário (interação)
+    ///
+    /// Compatível com OpenAI Responses API (input_required).
+    AgentQuestion {
+        /// ID único da pergunta
+        question_id: String,
+        /// Tipo da pergunta (clarification, confirmation, preference, suggestion)
+        question_type: String,
+        /// Texto da pergunta
+        question: String,
+        /// Opções de resposta (se aplicável)
+        options: Option<Vec<String>>,
+        /// Se é blocking (agente pausado aguardando)
+        is_blocking: bool,
+    },
+    /// Resposta do usuário enviada ao agente
+    UserResponse {
+        /// ID da pergunta respondida (None se espontânea)
+        question_id: Option<String>,
+        /// Conteúdo da resposta
+        response: String,
+    },
+    /// Sandbox iniciou execução de código
+    SandboxStart {
+        /// Problema/tarefa sendo resolvido
+        problem: String,
+        /// Máximo de tentativas configurado
+        max_attempts: usize,
+        /// Timeout em ms
+        timeout_ms: u64,
+        /// Linguagem de programação (JavaScript, Python, Auto)
+        language: String,
+    },
+    /// Sandbox - atualização de tentativa
+    SandboxAttempt {
+        /// Número da tentativa atual (1-based)
+        attempt: usize,
+        /// Máximo de tentativas
+        max_attempts: usize,
+        /// Preview do código sendo executado
+        code_preview: String,
+        /// Status: "generating", "executing", "success", "error"
+        status: String,
+        /// Mensagem de erro (se aplicável)
+        error: Option<String>,
+    },
+    /// Sandbox concluiu execução
+    SandboxComplete {
+        /// Se foi bem-sucedido
+        success: bool,
+        /// Output da execução (se sucesso)
+        output: Option<String>,
+        /// Erro (se falha)
+        error: Option<String>,
+        /// Número total de tentativas
+        attempts: usize,
+        /// Tempo total de execução em ms
+        execution_time_ms: u64,
+        /// Preview do código final
+        code_preview: String,
+        /// Linguagem de programação usada
+        language: String,
+    },
 }
 
 /// Estado da aplicação
@@ -365,6 +698,12 @@ pub struct App {
     pub started_at: String,
     /// Tela atual
     pub screen: AppScreen,
+    /// Tab ativa (para navegação entre seções)
+    pub active_tab: ActiveTab,
+    /// Tela anterior (para navegação entre Result <-> Research)
+    pub previous_screen: Option<AppScreen>,
+    /// Configurações carregadas (para exibição)
+    pub loaded_config: LoadedConfig,
     /// Texto sendo digitado
     pub input_text: String,
     /// Posição do cursor no input
@@ -433,6 +772,18 @@ pub struct App {
     pub all_tasks: Vec<ParallelTask>,
     /// Histórico de steps completados
     pub completed_steps: Vec<CompletedStep>,
+    /// Estado do AgentAnalyzer (análise de erros em background)
+    pub agent_analyzer: AgentAnalyzerState,
+    /// Estado do Sandbox de execução de código
+    pub sandbox: SandboxState,
+    /// Mensagem temporária do clipboard (feedback ao usuário)
+    pub clipboard_message: Option<String>,
+    /// Se o campo de input está focado (durante pesquisa)
+    pub input_focused: bool,
+    /// Contador de mensagens pendentes na fila para o agente
+    pub pending_user_messages: usize,
+    /// Fila de mensagens do usuário para enviar ao agente
+    pub user_message_queue: VecDeque<String>,
 }
 
 /// Step completado para histórico
@@ -463,6 +814,9 @@ impl App {
             session_id: Uuid::new_v4().to_string(),
             started_at: chrono::Local::now().to_rfc3339(),
             screen: AppScreen::Input,
+            active_tab: ActiveTab::Search,
+            previous_screen: None,
+            loaded_config: LoadedConfig::default(),
             input_text: String::new(),
             cursor_pos: 0,
             question: String::new(),
@@ -497,10 +851,99 @@ impl App {
             completed_batches: Vec::new(),
             all_tasks: Vec::new(),
             completed_steps: Vec::new(),
+            agent_analyzer: AgentAnalyzerState::default(),
+            sandbox: SandboxState::default(),
+            clipboard_message: None,
+            input_focused: false,
+            pending_user_messages: 0,
+            user_message_queue: VecDeque::new(),
         };
         // Carregar sessões anteriores
         app.load_sessions();
         app
+    }
+
+    /// Define as configurações carregadas (chamado pelo main)
+    pub fn set_loaded_config(&mut self, config: LoadedConfig) {
+        self.loaded_config = config;
+    }
+
+    /// Navega para a próxima tab
+    pub fn next_tab(&mut self) {
+        self.active_tab = self.active_tab.next();
+        self.sync_screen_with_tab();
+    }
+
+    /// Navega para a tab anterior
+    pub fn prev_tab(&mut self) {
+        self.active_tab = self.active_tab.prev();
+        self.sync_screen_with_tab();
+    }
+
+    /// Vai para tab específica
+    pub fn go_to_tab(&mut self, tab: ActiveTab) {
+        self.active_tab = tab;
+        self.sync_screen_with_tab();
+    }
+
+    /// Sincroniza a tela com a tab ativa
+    fn sync_screen_with_tab(&mut self) {
+        match self.active_tab {
+            ActiveTab::Search => {
+                // Voltar para tela de pesquisa apropriada
+                if let Some(prev) = &self.previous_screen {
+                    match prev {
+                        AppScreen::Result => {
+                            if self.is_complete {
+                                self.screen = AppScreen::Result;
+                            } else {
+                                self.screen = AppScreen::Research;
+                            }
+                        }
+                        AppScreen::Research => self.screen = AppScreen::Research,
+                        _ => {
+                            // Se estava em Input ou Config, decide baseado no estado
+                            if self.is_complete && self.answer.is_some() {
+                                self.screen = AppScreen::Result;
+                            } else if self.start_time.is_some() {
+                                self.screen = AppScreen::Research;
+                            } else {
+                                self.screen = AppScreen::Input;
+                            }
+                        }
+                    }
+                } else {
+                    // Sem tela anterior, decide baseado no estado
+                    if self.is_complete && self.answer.is_some() {
+                        self.screen = AppScreen::Result;
+                    } else if self.start_time.is_some() {
+                        self.screen = AppScreen::Research;
+                    } else {
+                        self.screen = AppScreen::Input;
+                    }
+                }
+            }
+            ActiveTab::Config => {
+                // Salvar tela atual antes de ir para Config
+                if self.screen != AppScreen::Config {
+                    self.previous_screen = Some(self.screen.clone());
+                }
+                self.screen = AppScreen::Config;
+            }
+        }
+    }
+
+    /// Alterna entre Result e Research (quando pesquisa completa)
+    pub fn toggle_result_research(&mut self) {
+        match self.screen {
+            AppScreen::Result => {
+                self.screen = AppScreen::Research;
+            }
+            AppScreen::Research if self.is_complete => {
+                self.screen = AppScreen::Result;
+            }
+            _ => {}
+        }
     }
 
     /// Cria app com pergunta pré-definida
@@ -510,6 +953,7 @@ impl App {
         app.started_at = chrono::Local::now().to_rfc3339();
         app.question = question;
         app.screen = AppScreen::Research;
+        app.active_tab = ActiveTab::Search;
         app.start_time = Some(Instant::now());
         app
     }
@@ -616,8 +1060,8 @@ impl App {
             AppEvent::AddVisitedUrl(url) => {
                 if !self.visited_urls.contains(&url) {
                     self.visited_urls.push(url);
-                }
-            }
+        }
+    }
             AppEvent::StartBatch { batch_id, batch_type, task_count } => {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -673,6 +1117,81 @@ impl App {
                     )));
                     self.completed_batches.push(batch);
                 }
+            }
+            AppEvent::AgentAnalyzerStarted { failures_count, diary_entries } => {
+                self.agent_analyzer.is_active = true;
+                self.agent_analyzer.failures_count = failures_count;
+                self.agent_analyzer.diary_entries = diary_entries;
+                self.agent_analyzer.started_at = Some(chrono::Local::now().format("%H:%M:%S").to_string());
+                self.agent_analyzer.logs.push(LogEntry::info(format!(
+                    "Iniciando análise de {} falhas ({} entradas)",
+                    failures_count, diary_entries
+                )));
+            }
+            AppEvent::AgentAnalyzerCompleted { recap, blame, improvement, duration_ms } => {
+                self.agent_analyzer.is_active = false;
+                self.agent_analyzer.last_recap = Some(recap.clone());
+                self.agent_analyzer.last_blame = Some(blame.clone());
+                self.agent_analyzer.last_improvement = Some(improvement.clone());
+                self.agent_analyzer.duration_ms = Some(duration_ms);
+                self.agent_analyzer.logs.push(LogEntry::success(format!(
+                    "Análise concluída em {}ms",
+                    duration_ms
+                )));
+                self.agent_analyzer.logs.push(LogEntry::warning(format!(
+                    "📊 {}",
+                    recap
+                )));
+                self.agent_analyzer.logs.push(LogEntry::error(format!(
+                    "🎯 {}",
+                    blame
+                )));
+                self.agent_analyzer.logs.push(LogEntry::success(format!(
+                    "💡 {}",
+                    improvement
+                )));
+            }
+            // Eventos de interação com usuário
+            AppEvent::AgentQuestion { question_id, question_type, question, options, is_blocking } => {
+                self.logs.push_back(LogEntry::info(format!(
+                    "❓ [{}] {}",
+                    question_type, question
+                )));
+
+                if is_blocking {
+                    // Mudar para tela de input necessário
+                    self.screen = AppScreen::InputRequired {
+                        question_id,
+                        question_type,
+                        question,
+                        options,
+                    };
+                    // Limpar input para a resposta
+                    self.input_text.clear();
+                    self.cursor_pos = 0;
+                }
+            }
+            AppEvent::UserResponse { question_id, response } => {
+                self.logs.push_back(LogEntry::success(format!(
+                    "✅ Resposta enviada: {}",
+                    response
+                )));
+                // Se estava aguardando input, voltar para tela de pesquisa
+                if matches!(self.screen, AppScreen::InputRequired { .. }) {
+                    self.screen = AppScreen::Research;
+                }
+                // A resposta será processada pelo agente via canal
+                let _ = question_id; // Usar se necessário para rastrear
+            }
+            // Eventos de Sandbox
+            AppEvent::SandboxStart { problem, max_attempts, timeout_ms, language } => {
+                self.sandbox.start(problem, max_attempts, timeout_ms, language);
+            }
+            AppEvent::SandboxAttempt { attempt, max_attempts: _, code_preview, status, error } => {
+                self.sandbox.update_attempt(attempt, code_preview, status, error);
+            }
+            AppEvent::SandboxComplete { success, output, error, attempts, execution_time_ms, code_preview, language } => {
+                self.sandbox.complete(success, output, error, attempts, execution_time_ms, code_preview, language);
             }
         }
     }
@@ -845,6 +1364,45 @@ impl App {
         self.cursor_pos = self.char_count();
     }
 
+    /// Alterna o foco do input durante a pesquisa
+    pub fn toggle_input_focus(&mut self) {
+        self.input_focused = !self.input_focused;
+    }
+
+    /// Foca o campo de input
+    pub fn focus_input(&mut self) {
+        self.input_focused = true;
+    }
+
+    /// Desfoca o campo de input
+    pub fn unfocus_input(&mut self) {
+        self.input_focused = false;
+    }
+
+    /// Enfileira uma mensagem do usuário para enviar ao agente
+    pub fn queue_user_message(&mut self, message: String) {
+        if !message.trim().is_empty() {
+            self.user_message_queue.push_back(message.clone());
+            self.pending_user_messages = self.user_message_queue.len();
+            self.logs.push_back(LogEntry::new(
+                LogLevel::Info,
+                format!("📤 Mensagem enfileirada: {:.40}...", message),
+            ));
+        }
+    }
+
+    /// Retira a próxima mensagem da fila
+    pub fn dequeue_user_message(&mut self) -> Option<String> {
+        let msg = self.user_message_queue.pop_front();
+        self.pending_user_messages = self.user_message_queue.len();
+        msg
+    }
+
+    /// Verifica se há mensagens pendentes
+    pub fn has_pending_messages(&self) -> bool {
+        !self.user_message_queue.is_empty()
+    }
+
     /// Navega para trás no histórico
     pub fn history_up(&mut self) {
         if self.history.is_empty() {
@@ -887,6 +1445,8 @@ impl App {
         self.session_id = Uuid::new_v4().to_string();
         self.started_at = chrono::Local::now().to_rfc3339();
         self.screen = AppScreen::Input;
+        self.active_tab = ActiveTab::Search;
+        self.previous_screen = None;
         self.question.clear();
         self.current_step = 0;
         self.current_action = "Aguardando...".into();
@@ -914,6 +1474,8 @@ impl App {
         self.completed_batches.clear();
         self.all_tasks.clear();
         self.completed_steps.clear();
+        self.agent_analyzer = AgentAnalyzerState::default();
+        self.clipboard_message = None;
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -966,6 +1528,7 @@ impl App {
             parallel_batches: self.completed_batches.clone(),
             all_tasks: self.all_tasks.clone(),
             completed_steps: self.completed_steps.clone(),
+            sandbox_executions: self.sandbox.executions.clone(),
         }
     }
 
@@ -1157,6 +1720,40 @@ impl App {
                 if !task.data_info.is_empty() {
                     output.push_str(&format!("    Dados: {}\n", task.data_info));
                 }
+            }
+        }
+
+        // Execuções de Sandbox
+        if !self.sandbox.executions.is_empty() {
+            output.push_str("\n───────────────────────────────────────────────────────────────────\n");
+            output.push_str(" EXECUÇÕES DE CÓDIGO (SANDBOX)\n");
+            output.push_str("───────────────────────────────────────────────────────────────────\n\n");
+            for (i, exec) in self.sandbox.executions.iter().enumerate() {
+                let status = if exec.success { "✅" } else { "❌" };
+                let lang_emoji = if exec.language == "Python" { "🐍" } else { "📜" };
+                output.push_str(&format!("{} {} Execução #{} [{}] - {}\n",
+                    status, lang_emoji, i + 1, exec.completed_at, exec.language));
+                output.push_str(&format!("   Problema: {}\n",
+                    if exec.problem.len() > 80 { format!("{}...", &exec.problem[..77]) } else { exec.problem.clone() }));
+                output.push_str(&format!("   Tentativas: {} | Tempo: {}ms\n",
+                    exec.attempts, exec.execution_time_ms));
+                if let Some(out) = &exec.output {
+                    let out_preview = if out.len() > 100 { format!("{}...", &out[..97]) } else { out.clone() };
+                    output.push_str(&format!("   Output: {}\n", out_preview));
+                }
+                if let Some(err) = &exec.error {
+                    output.push_str(&format!("   Erro: {}\n", err));
+                }
+                if !exec.code_preview.is_empty() {
+                    output.push_str("   Código:\n");
+                    for line in exec.code_preview.lines().take(5) {
+                        output.push_str(&format!("      {}\n", line));
+                    }
+                    if exec.code_preview.lines().count() > 5 {
+                        output.push_str("      ...\n");
+                    }
+                }
+                output.push_str("\n");
             }
         }
 

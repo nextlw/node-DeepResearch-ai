@@ -26,7 +26,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # HTTP client
-reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.11", features = ["json", "rustls-tls", "stream"] }
 
 # Parallel processing
 rayon = "1.8"
@@ -52,17 +52,32 @@ uuid = { version = "1.6", features = ["v4"] }
 config = "0.13"
 dotenvy = "0.15"
 
+# CPU detection
+num_cpus = "1.16"
+
 # Random number generation
 rand = "0.8"
 
 # URL parsing
 url = "2.4"
 
+# Regular expressions
+regex = "1.10"
+
 # URL encoding
 urlencoding = "2.1"
 
 # PDF extraction
 pdf-extract = "0.8"
+
+# Suppress stderr during PDF extraction (fixes TUI corruption)
+gag = "1.0"
+
+# HTML parsing and text extraction (Mozilla Readability algorithm)
+readability = "0.3"
+
+# Fallback HTML to text
+html2text = "0.12"
 
 # MIME type detection
 mime_guess = "2.0"
@@ -73,6 +88,20 @@ futures = "0.3"
 # TUI - Full terminal UI
 ratatui = "0.29"
 crossterm = "0.28"
+
+# Clipboard support (cross-platform)
+arboard = "3.4"
+
+# JavaScript engine (sandbox para execução de código)
+boa_engine = "0.20"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# OPTIONAL: Backends de produção (Railway)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PostgreSQL para histórico persistente
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "chrono", "uuid"], optional = true }
+# Qdrant para busca vetorial semântica
+qdrant-client = { version = "1.9", optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -110,6 +139,9 @@ harness = false
 [features]
 default = []
 simd = []  # Enable SIMD optimizations (requires nightly for some features)
+# Backends de produção para histórico de sessões
+postgres = ["sqlx"]  # PostgreSQL para Railway
+qdrant = ["qdrant-client"]  # Qdrant para busca semântica
 
 [profile.release]
 lto = true

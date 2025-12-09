@@ -10,13 +10,40 @@
 //   deep-research-cli --budget 500000 "pergunta complexa"
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+use deep_research::config::{
+    create_tokio_runtime, install_panic_hook, load_runtime_config, RuntimeConfig,
+    load_llm_config, load_agent_config, LlmConfig, AgentConfig,
+};
 use deep_research::llm::OpenAiClient;
 use deep_research::prelude::*;
 use deep_research::reader_comparison::ReaderComparison;
 use deep_research::search::JinaClient;
 use deep_research::tui::create_event_channel;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// Configuração global do runtime (carregada uma vez, thread-safe)
+static RUNTIME_CONFIG: OnceLock<RuntimeConfig> = OnceLock::new();
+/// Configuração global do LLM
+static LLM_CONFIG: OnceLock<LlmConfig> = OnceLock::new();
+/// Configuração global do agente
+static AGENT_CONFIG: OnceLock<AgentConfig> = OnceLock::new();
+
+/// Obtém a configuração do runtime (thread-safe)
+fn get_runtime_config() -> &'static RuntimeConfig {
+    RUNTIME_CONFIG.get().expect("Runtime config not initialized")
+}
+
+/// Obtém a configuração do LLM (thread-safe)
+fn get_llm_config() -> &'static LlmConfig {
+    LLM_CONFIG.get().expect("LLM config not initialized")
+}
+
+/// Obtém a configuração do agente (thread-safe)
+#[allow(dead_code)]
+fn get_agent_config() -> &'static AgentConfig {
+    AGENT_CONFIG.get().expect("Agent config not initialized")
+}
 
 /// Tenta carregar o arquivo .env de múltiplos locais possíveis
 fn load_dotenv() {
@@ -60,8 +87,7 @@ fn load_dotenv() {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     // Carregar .env PRIMEIRO, antes de qualquer coisa
     load_dotenv();
 
@@ -74,6 +100,59 @@ async fn main() -> anyhow::Result<()> {
     if !is_tui_mode {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     }
+
+    // Carregar configuração do runtime a partir do .env
+    let config = load_runtime_config();
+
+    // Carregar configuração do LLM a partir do .env
+    let llm_config = load_llm_config();
+
+    // Carregar configuração do agente a partir do .env
+    let agent_config = load_agent_config();
+
+    // Log da configuração efetiva
+    let effective_threads = config.effective_worker_threads();
+    if !is_tui_mode {
+        log::info!(
+            "🚀 Runtime: {} threads (max: {}) | WebReader: {}",
+            effective_threads,
+            config.max_threads,
+            config.webreader
+        );
+        log::info!(
+            "🤖 LLM: {} | Model: {}",
+            llm_config.provider,
+            llm_config.model
+        );
+        log::info!(
+            "🔢 Embeddings: {} | Model: {}",
+            llm_config.embedding_provider,
+            llm_config.active_embedding_model()
+        );
+        log::info!(
+            "⚙️  Agent: min_steps={} | allow_direct={} | budget={}",
+            agent_config.min_steps_before_answer,
+            agent_config.allow_direct_answer,
+            agent_config.default_token_budget
+        );
+    }
+
+    // Armazenar configurações globalmente para acesso em outras funções (thread-safe)
+    RUNTIME_CONFIG.set(config.clone()).expect("Runtime config already initialized");
+    LLM_CONFIG.set(llm_config.clone()).expect("LLM config already initialized");
+    AGENT_CONFIG.set(agent_config.clone()).expect("Agent config already initialized");
+
+    // Instalar panic hook customizado (isolamento de threads)
+    install_panic_hook();
+
+    // Criar runtime Tokio com configuração customizada
+    let runtime = create_tokio_runtime(&config)?;
+
+    // Executar main async dentro do runtime customizado
+    runtime.block_on(async_main(args, is_tui_mode))
+}
+
+async fn async_main(args: Vec<String>, is_tui_mode: bool) -> anyhow::Result<()> {
 
     if args.len() < 2 {
         eprintln!("Deep Research CLI v{}", deep_research::VERSION);
@@ -178,10 +257,14 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     });
 
+    // Criar cliente LLM com configuração do .env
     let llm_client: Arc<dyn deep_research::llm::LlmClient> =
-        Arc::new(OpenAiClient::new(openai_key));
+        Arc::new(OpenAiClient::from_config(openai_key, get_llm_config()));
+
+    // Usar preferência de WebReader da configuração global
+    let webreader_pref = get_runtime_config().webreader;
     let search_client: Arc<dyn deep_research::search::SearchClient> =
-        Arc::new(JinaClient::new(jina_key));
+        Arc::new(JinaClient::with_preference(jina_key, webreader_pref));
 
     // Criar e executar agente
     let agent = DeepResearchAgent::new(llm_client, search_client, budget)
@@ -362,6 +445,42 @@ async fn run_comparison_mode(urls_arg: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Cria LoadedConfig a partir das configurações globais
+fn create_loaded_config() -> deep_research::tui::LoadedConfig {
+    use deep_research::tui::LoadedConfig;
+
+    let runtime = get_runtime_config();
+    let llm = get_llm_config();
+    let agent = get_agent_config();
+
+    LoadedConfig {
+        // Runtime
+        worker_threads: runtime.worker_threads
+            .map(|w| format!("{}", w))
+            .unwrap_or_else(|| format!("auto ({})", runtime.effective_worker_threads())),
+        max_threads: runtime.max_threads,
+        max_blocking_threads: runtime.max_blocking_threads,
+        webreader: format!("{:?}", runtime.webreader),
+        // LLM
+        llm_provider: format!("{:?}", llm.provider),
+        llm_model: llm.model.clone(),
+        embedding_provider: format!("{:?}", llm.embedding_provider),
+        embedding_model: llm.active_embedding_model().to_string().clone(),
+        temperature: llm.default_temperature,
+        api_base_url: llm.api_base_url.clone(),
+        // Agent
+        min_steps_before_answer: agent.min_steps_before_answer,
+        allow_direct_answer: agent.allow_direct_answer,
+        default_token_budget: agent.default_token_budget,
+        max_urls_per_step: agent.max_urls_per_step,
+        max_queries_per_step: agent.max_queries_per_step,
+        max_consecutive_failures: agent.max_consecutive_failures,
+        // API Keys (verificar presença)
+        openai_key_present: std::env::var("OPENAI_API_KEY").is_ok(),
+        jina_key_present: std::env::var("JINA_API_KEY").is_ok(),
+    }
+}
+
 /// Executa o modo TUI interativo
 async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
     use crossterm::{
@@ -369,7 +488,8 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     };
-    use deep_research::tui::{App, AppScreen};
+    use deep_research::tui::{App, AppScreen, ActiveTab};
+    use deep_research::agent::UserResponse;
     use ratatui::{backend::CrosstermBackend, Terminal};
     use std::io;
     use std::time::Duration;
@@ -399,19 +519,29 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
         App::with_question(question.to_string())
     };
 
-    // Canal para eventos
+    // Carregar configurações para exibição
+    app.set_loaded_config(create_loaded_config());
+
+    // Canal para eventos da TUI
     let (tx, rx) = create_event_channel();
+
+    // Canal para enviar respostas do usuário de volta para o agente
+    // Usamos Option para poder substituir quando uma nova pesquisa inicia
+    let mut user_response_tx: Option<tokio::sync::mpsc::Sender<UserResponse>> = None;
 
     // Handle de tarefa do agente (opcional)
     let mut agent_task: Option<tokio::task::JoinHandle<_>> = None;
 
     // Se já tem pergunta, iniciar pesquisa
     if !question.is_empty() {
+        let (new_tx, new_rx) = tokio::sync::mpsc::channel::<UserResponse>(16);
+        user_response_tx = Some(new_tx);
         agent_task = Some(spawn_research_task(
             question.to_string(),
             openai_key.clone(),
             jina_key.clone(),
             tx.clone(),
+            new_rx,
         ));
     }
 
@@ -439,14 +569,29 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                                     if !app.input_text.is_empty() {
                                         let q = app.input_text.clone();
                                         app.start_research();
+
+                                        // Criar novo canal para resposta do usuário para esta pesquisa
+                                        let (new_tx, new_rx) = tokio::sync::mpsc::channel::<UserResponse>(16);
+                                        user_response_tx = Some(new_tx);
+
                                         agent_task = Some(spawn_research_task(
                                             q,
                                             openai_key.clone(),
                                             jina_key.clone(),
                                             tx.clone(),
+                                            new_rx,
                                         ));
                                     }
                                 }
+                                KeyCode::Esc => {
+                                    app.should_quit = true;
+                                    break;
+                                }
+                                // Navegação por tabs (antes do Char genérico)
+                                KeyCode::Tab => app.next_tab(),
+                                KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                // Caso genérico para caracteres (input de texto)
                                 KeyCode::Char(c) => app.input_char(c),
                                 KeyCode::Backspace => app.input_backspace(),
                                 KeyCode::Delete => app.input_delete(),
@@ -456,50 +601,226 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                                 KeyCode::End => app.cursor_end(),
                                 KeyCode::Up => app.history_up(),
                                 KeyCode::Down => app.history_down(),
-                                KeyCode::Esc => {
-                                    app.should_quit = true;
-                                    break;
-                                }
                                 _ => {}
                             }
                         }
                         AppScreen::Research => {
-                            match key.code {
-                                KeyCode::Char('q') | KeyCode::Esc => {
-                                    app.should_quit = true;
-                                    break;
-                                }
-                                KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
-                                KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
-                                KeyCode::PageUp => {
-                                    for _ in 0..5 {
-                                        app.scroll_up();
+                            // Se o input está focado, processar digitação
+                            if app.input_focused {
+                                match key.code {
+                                    KeyCode::Tab | KeyCode::Esc => {
+                                        // Desfocar input
+                                        app.unfocus_input();
                                     }
-                                }
-                                KeyCode::PageDown => {
-                                    for _ in 0..5 {
-                                        app.scroll_down();
+                                    KeyCode::Enter => {
+                                        // Enviar mensagem para a fila do agente
+                                        if !app.input_text.is_empty() {
+                                            let message = app.input_text.clone();
+                                            app.queue_user_message(message.clone());
+
+                                            // Enviar via canal para o agente (async, não bloqueia)
+                                            if let Some(ref tx) = user_response_tx {
+                                                let user_resp = UserResponse::spontaneous(message);
+                                                let _ = tx.try_send(user_resp);
+                                            }
+
+                                            app.input_text.clear();
+                                            app.cursor_pos = 0;
+                                        }
                                     }
+                                    KeyCode::Char(c) => app.input_char(c),
+                                    KeyCode::Backspace => app.input_backspace(),
+                                    KeyCode::Delete => app.input_delete(),
+                                    KeyCode::Left => app.cursor_left(),
+                                    KeyCode::Right => app.cursor_right(),
+                                    KeyCode::Home => app.cursor_home(),
+                                    KeyCode::End => app.cursor_end(),
+                                    _ => {}
                                 }
-                                _ => {}
+                            } else {
+                                // Input não focado - navegação normal
+                                match key.code {
+                                    KeyCode::Char('q') => {
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Esc => {
+                                        // Esc sem input focado = sair
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Tab => {
+                                        // Focar no input
+                                        app.focus_input();
+                                    }
+                                    // Navegação por tabs (números)
+                                    KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                    KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                    // Alternar entre Research e Result quando concluído
+                                    KeyCode::Char('r') if app.is_complete => {
+                                        app.toggle_result_research();
+                                    }
+                                    KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
+                                    KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
+                                    KeyCode::PageUp => {
+                                        for _ in 0..5 {
+                                            app.scroll_up();
+                                        }
+                                    }
+                                    KeyCode::PageDown => {
+                                        for _ in 0..5 {
+                                            app.scroll_down();
+                                        }
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                         AppScreen::Result => {
-                            match key.code {
-                                KeyCode::Enter => {
-                                    app.reset();
+                            // Se o input está focado, processar digitação
+                            if app.input_focused {
+                                match key.code {
+                                    KeyCode::Tab | KeyCode::Esc => {
+                                        // Desfocar input
+                                        app.unfocus_input();
+                                    }
+                                    KeyCode::Enter => {
+                                        // Iniciar nova pesquisa com o texto digitado
+                                        if !app.input_text.is_empty() {
+                                            let q = app.input_text.clone();
+                                            app.reset();
+                                            app.input_text = q.clone();
+                                            app.start_research();
+
+                                            // Criar novo canal para resposta do usuário
+                                            let (new_tx, new_rx) = tokio::sync::mpsc::channel::<UserResponse>(16);
+                                            user_response_tx = Some(new_tx);
+
+                                            agent_task = Some(spawn_research_task(
+                                                q,
+                                                openai_key.clone(),
+                                                jina_key.clone(),
+                                                tx.clone(),
+                                                new_rx,
+                                            ));
+                                        }
+                                    }
+                                    KeyCode::Char(c) => app.input_char(c),
+                                    KeyCode::Backspace => app.input_backspace(),
+                                    KeyCode::Delete => app.input_delete(),
+                                    KeyCode::Left => app.cursor_left(),
+                                    KeyCode::Right => app.cursor_right(),
+                                    KeyCode::Home => app.cursor_home(),
+                                    KeyCode::End => app.cursor_end(),
+                                    _ => {}
                                 }
+                            } else {
+                                // Input não focado - navegação normal
+                                match key.code {
+                                    KeyCode::Char('q') => {
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Esc => {
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Tab => {
+                                        // Focar no input para follow-up
+                                        app.focus_input();
+                                    }
+                                    // Navegação por tabs
+                                    KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                    KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                    // Alternar para ver logs da pesquisa
+                                    KeyCode::Char('r') => app.toggle_result_research(),
+                                    // Copiar resposta
+                                    KeyCode::Char('c') => {
+                                        if let Some(answer) = &app.answer {
+                                            // Tentar copiar para clipboard
+                                            #[cfg(feature = "clipboard")]
+                                            {
+                                                if let Ok(mut ctx) = arboard::Clipboard::new() {
+                                                    if ctx.set_text(answer.clone()).is_ok() {
+                                                        app.clipboard_message = Some("✅ Copiado!".to_string());
+                                                    }
+                                                }
+                                            }
+                                            #[cfg(not(feature = "clipboard"))]
+                                            {
+                                                app.clipboard_message = Some("📋 Clipboard não disponível".to_string());
+                                            }
+                                        }
+                                    }
+                                    // Scroll na resposta
+                                    KeyCode::Up | KeyCode::Char('k') => app.result_scroll_up(),
+                                    KeyCode::Down | KeyCode::Char('j') => app.result_scroll_down(),
+                                    KeyCode::PageUp => app.result_page_up(),
+                                    KeyCode::PageDown => app.result_page_down(),
+                                    KeyCode::Home => app.result_scroll = 0,
+                                    KeyCode::End => app.result_scroll = usize::MAX,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        // Tela de configurações
+                        AppScreen::Config => {
+                            match key.code {
                                 KeyCode::Char('q') | KeyCode::Esc => {
                                     app.should_quit = true;
                                     break;
                                 }
-                                // Scroll na resposta
-                                KeyCode::Up | KeyCode::Char('k') => app.result_scroll_up(),
-                                KeyCode::Down | KeyCode::Char('j') => app.result_scroll_down(),
-                                KeyCode::PageUp => app.result_page_up(),
-                                KeyCode::PageDown => app.result_page_down(),
-                                KeyCode::Home => app.result_scroll = 0,
-                                KeyCode::End => app.result_scroll = usize::MAX,
+                                // Navegação por tabs
+                                KeyCode::Tab => app.next_tab(),
+                                KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                // Backspace volta para tela anterior
+                                KeyCode::Backspace => app.go_to_tab(ActiveTab::Search),
+                                _ => {}
+                            }
+                        }
+                        // Tela de input requerido pelo agente
+                        AppScreen::InputRequired { ref question_id, .. } => {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    // Enviar resposta do usuário
+                                    if !app.input_text.is_empty() {
+                                        let response_text = app.input_text.clone();
+                                        let qid = question_id.clone();
+
+                                        // Enviar para a TUI (atualiza UI)
+                                        app.handle_event(deep_research::tui::AppEvent::UserResponse {
+                                            question_id: Some(qid.clone()),
+                                            response: response_text.clone(),
+                                        });
+
+                                        // Enviar para o agente via canal
+                                        if let Some(ref tx) = user_response_tx {
+                                            let user_resp = UserResponse::to_question(qid, response_text);
+                                            let _ = tx.try_send(user_resp);
+                                        }
+
+                                        app.input_text.clear();
+                                        app.cursor_pos = 0;
+                                    }
+                                }
+                                KeyCode::Char(c) => app.input_char(c),
+                                KeyCode::Backspace => app.input_backspace(),
+                                KeyCode::Delete => app.input_delete(),
+                                KeyCode::Left => app.cursor_left(),
+                                KeyCode::Right => app.cursor_right(),
+                                KeyCode::Home => app.cursor_home(),
+                                KeyCode::End => app.cursor_end(),
+                                KeyCode::Esc => {
+                                    // Cancelar - voltar para pesquisa sem resposta
+                                    // Enviar resposta vazia para desbloquear o agente
+                                    if let Some(ref tx) = user_response_tx {
+                                        let qid = question_id.clone();
+                                        let user_resp = UserResponse::to_question(qid, "[cancelado]");
+                                        let _ = tx.try_send(user_resp);
+                                    }
+                                    app.screen = AppScreen::Research;
+                                }
                                 _ => {}
                             }
                         }
@@ -567,15 +888,23 @@ fn spawn_research_task(
     openai_key: String,
     jina_key: String,
     tx: std::sync::mpsc::Sender<deep_research::tui::AppEvent>,
+    mut user_response_rx: tokio::sync::mpsc::Receiver<deep_research::agent::UserResponse>,
 ) -> tokio::task::JoinHandle<deep_research::agent::ResearchResult> {
     use deep_research::agent::AgentProgress;
     use deep_research::tui::{AppEvent, LogEntry, LogLevel};
 
+    // Obter preferência de WebReader da configuração global
+    let webreader_pref = get_runtime_config().webreader;
+
+    // Clonar configuração do LLM para mover para a task
+    let llm_config = get_llm_config().clone();
+
     tokio::spawn(async move {
+        // Criar cliente LLM com configuração do .env
         let llm_client: Arc<dyn deep_research::llm::LlmClient> =
-            Arc::new(OpenAiClient::new(openai_key));
+            Arc::new(OpenAiClient::from_config(openai_key, &llm_config));
         let search_client: Arc<dyn deep_research::search::SearchClient> =
-            Arc::new(JinaClient::new(jina_key));
+            Arc::new(JinaClient::with_preference(jina_key, webreader_pref));
 
         // Criar callback para enviar eventos em tempo real para a TUI
         let tx_clone = tx.clone();
@@ -655,13 +984,202 @@ fn spawn_research_task(
                 AgentProgress::BatchEnd { batch_id, total_ms, success_count, fail_count } => {
                     AppEvent::EndBatch { batch_id, total_ms, success_count, fail_count }
                 }
+                // Novos eventos de personas e deduplicação
+                AgentProgress::PersonaQuery { persona, original, expanded, weight } => {
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("🎭 [{}] {:.30}... → {:.50}... (w:{:.1})",
+                            persona, original, expanded, weight)
+                    ))
+                }
+                AgentProgress::Dedup { original_count, unique_count, removed_count, threshold } => {
+                    if removed_count > 0 {
+                        AppEvent::Log(LogEntry::new(
+                            LogLevel::Warning,
+                            format!("🔄 Dedup: {} → {} queries ({} duplicadas, thresh:{:.2})",
+                                original_count, unique_count, removed_count, threshold)
+                        ))
+                    } else {
+                        AppEvent::Log(LogEntry::new(
+                            LogLevel::Info,
+                            format!("🔄 Dedup: {} queries únicas (0 duplicadas)",
+                                unique_count)
+                        ))
+                    }
+                }
+                // Eventos de validação fast-fail
+                AgentProgress::ValidationStart { eval_types } => {
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("🔍 Validação Fast-Fail iniciada: [{}]",
+                            eval_types.join(" → "))
+                    ))
+                }
+                AgentProgress::ValidationStep { eval_type, passed, confidence, reasoning, duration_ms } => {
+                    let icon = if passed { "✅" } else { "❌" };
+                    let level = if passed { LogLevel::Success } else { LogLevel::Warning };
+                    AppEvent::Log(LogEntry::new(
+                        level,
+                        format!("{} {}: {:.0}% conf | {}ms | {:.40}...",
+                            icon, eval_type, confidence * 100.0, duration_ms, reasoning)
+                    ))
+                }
+                AgentProgress::ValidationEnd { overall_passed, failed_at, total_evals, passed_evals } => {
+                    let (icon, msg, level) = if overall_passed {
+                        ("✅", format!("Validação APROVADA: {}/{} etapas", passed_evals, total_evals), LogLevel::Success)
+                    } else {
+                        let fail_point = failed_at.unwrap_or("?".into());
+                        ("❌", format!("Validação REPROVADA em {}: {}/{} etapas", fail_point, passed_evals, total_evals), LogLevel::Error)
+                    };
+                    AppEvent::Log(LogEntry::new(level, format!("{} {}", icon, msg)))
+                }
+                // Eventos do AgentAnalyzer (análise de erros em background)
+                AgentProgress::AgentAnalysisStarted { failures_count, diary_entries } => {
+                    // Enviar evento específico para o AgentAnalyzer
+                    let _ = tx_clone.send(AppEvent::AgentAnalyzerStarted {
+                        failures_count,
+                        diary_entries,
+                    });
+                    // Também enviar log geral
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("🔬 AgentAnalyzer: Analisando {} falhas ({} entradas)...",
+                            failures_count, diary_entries)
+                    ))
+                }
+                AgentProgress::AgentAnalysisCompleted { recap, blame, improvement, duration_ms } => {
+                    // Enviar evento específico para o AgentAnalyzer
+                    let _ = tx_clone.send(AppEvent::AgentAnalyzerCompleted {
+                        recap: recap.clone(),
+                        blame: blame.clone(),
+                        improvement: improvement.clone(),
+                        duration_ms,
+                    });
+                    // Também enviar log geral resumido
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Success,
+                        format!("🔬 AgentAnalyzer concluído ({}ms) - Melhoria aplicada ao prompt",
+                            duration_ms)
+                    ))
+                }
+                // Eventos de interação com usuário
+                AgentProgress::AgentQuestion { question_id, question_type, question, options, is_blocking } => {
+                    // Enviar evento para a TUI mostrar a pergunta
+                    let _ = tx_clone.send(AppEvent::AgentQuestion {
+                        question_id: question_id.clone(),
+                        question_type: question_type.clone(),
+                        question: question.clone(),
+                        options: options.clone(),
+                        is_blocking,
+                    });
+                    let icon = if is_blocking { "⏸️" } else { "💬" };
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("{} [{}] Pergunta ao usuário: {:.50}...",
+                            icon, question_type, question)
+                    ))
+                }
+                AgentProgress::UserResponseReceived { question_id, response, was_spontaneous } => {
+                    let icon = if was_spontaneous { "💬" } else { "✅" };
+                    let msg = if let Some(qid) = question_id {
+                        format!("{} Resposta recebida ({}): {:.50}...", icon, qid, response)
+                    } else {
+                        format!("{} Mensagem do usuário: {:.50}...", icon, response)
+                    };
+                    AppEvent::Log(LogEntry::new(LogLevel::Success, msg))
+                }
+                AgentProgress::ResumedAfterInput { question_id } => {
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("▶️ Retomando execução após resposta ({})", question_id)
+                    ))
+                }
+                // Eventos de Sandbox (execução de código)
+                AgentProgress::SandboxStart { problem, max_attempts, timeout_ms, language } => {
+                    let _ = tx_clone.send(AppEvent::SandboxStart {
+                        problem: problem.clone(),
+                        max_attempts,
+                        timeout_ms,
+                        language: language.clone(),
+                    });
+                    let lang_emoji = if language == "Python" { "🐍" } else { "📜" };
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("{} Sandbox {} iniciado: {} (max {} tentativas, {}ms timeout)",
+                            lang_emoji, language,
+                            if problem.len() > 50 { format!("{}...", &problem[..50]) } else { problem },
+                            max_attempts, timeout_ms)
+                    ))
+                }
+                AgentProgress::SandboxAttempt { attempt, max_attempts, code_preview, status, error } => {
+                    let _ = tx_clone.send(AppEvent::SandboxAttempt {
+                        attempt,
+                        max_attempts,
+                        code_preview: code_preview.clone(),
+                        status: status.clone(),
+                        error: error.clone(),
+                    });
+                    let msg = if let Some(e) = error {
+                        format!("🔄 Sandbox tentativa {}/{}: {} - {}", attempt, max_attempts, status, e)
+                    } else {
+                        format!("🔄 Sandbox tentativa {}/{}: {}", attempt, max_attempts, status)
+                    };
+                    AppEvent::Log(LogEntry::new(LogLevel::Info, msg))
+                }
+                AgentProgress::SandboxComplete { success, output, error, attempts, execution_time_ms, code_preview, language } => {
+                    let _ = tx_clone.send(AppEvent::SandboxComplete {
+                        success,
+                        output: output.clone(),
+                        error: error.clone(),
+                        attempts,
+                        execution_time_ms,
+                        code_preview: code_preview.clone(),
+                        language: language.clone(),
+                    });
+                    let lang_emoji = if language == "Python" { "🐍" } else { "📜" };
+                    if success {
+                        let out_preview = output.as_ref()
+                            .map(|o| if o.len() > 80 { format!("{}...", &o[..80]) } else { o.clone() })
+                            .unwrap_or_default();
+                        AppEvent::Log(LogEntry::new(
+                            LogLevel::Success,
+                            format!("{} {} concluído: {} tentativas, {}ms → {}",
+                                lang_emoji, language, attempts, execution_time_ms, out_preview)
+                        ))
+                    } else {
+                        let err = error.unwrap_or_else(|| "Unknown error".into());
+                        AppEvent::Log(LogEntry::new(
+                            LogLevel::Error,
+                            format!("{} {} falhou após {} tentativas, {}ms: {}",
+                                lang_emoji, language, attempts, execution_time_ms, err)
+                        ))
+                    }
+                }
             };
             let _ = tx_clone.send(app_event);
         });
 
-        // Criar agente com callback de progresso
-        let agent = DeepResearchAgent::new(llm_client, search_client, None)
-            .with_progress_callback(progress_callback);
+        // Criar agente com callback de progresso e canais de interação
+        let (agent, response_tx, _question_rx) = DeepResearchAgent::new(llm_client, search_client, None)
+            .with_progress_callback(progress_callback)
+            .with_interaction_channels(16);
+
+        // Spawn task para receber respostas do usuário da TUI e enviar para o agente
+        let tx_for_bridge = tx.clone();
+        tokio::spawn(async move {
+            while let Some(user_resp) = user_response_rx.recv().await {
+                // Enviar resposta para o InteractionHub do agente
+                if response_tx.send(user_resp.clone()).await.is_err() {
+                    // Canal fechado, agente terminou
+                    break;
+                }
+                // Log de debug
+                let _ = tx_for_bridge.send(AppEvent::Log(LogEntry::new(
+                    LogLevel::Info,
+                    format!("📨 Resposta enviada ao agente: {:.30}...", user_resp.content)
+                )));
+            }
+        });
 
         let result = agent.run(question).await;
 
@@ -716,7 +1234,14 @@ fn spawn_research_task(
                 let refs: Vec<String> = result
                     .references
                     .iter()
-                    .map(|r| format!("{} - {}", r.title, r.url))
+                    .map(|r| {
+                        // Incluir score de relevância se disponível (referência semântica)
+                        if let Some(score) = r.relevance_score {
+                            format!("[{:.0}%] {} - {}", score * 100.0, r.title, r.url)
+                        } else {
+                            format!("{} - {}", r.title, r.url)
+                        }
+                    })
                     .collect();
                 let _ = tx.send(AppEvent::SetAnswer(answer.clone()));
                 let _ = tx.send(AppEvent::SetReferences(refs));
@@ -732,36 +1257,87 @@ fn spawn_research_task(
     })
 }
 
+/// Conta threads reais do processo atual
+fn count_process_threads() -> usize {
+    #[cfg(target_os = "macos")]
+    {
+        // No macOS, usar mach API ou contar via sysctl
+        use std::process::Command;
+        Command::new("ps")
+            .args(["-M", "-p", &std::process::id().to_string()])
+            .output()
+            .ok()
+            .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // Cada linha após o header é uma thread
+                Some(stdout.lines().count().saturating_sub(1).max(1))
+            })
+            .unwrap_or(1)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // No Linux, contar diretórios em /proc/self/task
+        std::fs::read_dir("/proc/self/task")
+            .map(|entries| entries.count())
+            .unwrap_or(1)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(1)
+    }
+}
+
+/// Obtém uso de memória do processo atual em MB
+fn get_process_memory_mb() -> f64 {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        // Usar ps para obter RSS (Resident Set Size)
+        Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .ok()
+            .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.trim().parse::<f64>().ok()
+            })
+            .map(|kb| kb / 1024.0) // Converter KB para MB
+            .unwrap_or(0.0)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/self/statm")
+            .ok()
+            .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
+            .map(|pages| (pages * 4096) as f64 / 1024.0 / 1024.0)
+            .unwrap_or(0.0)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        0.0
+    }
+}
+
 /// Atualiza métricas do sistema
 fn update_system_metrics(app: &mut deep_research::tui::App) {
     use deep_research::tui::SystemMetrics;
-    #[cfg(target_os = "linux")]
-    use std::fs;
 
-    // Contar threads (aproximado via /proc ou método específico do OS)
-    let threads = std::thread::available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(1);
+    // Contar threads reais do processo
+    let threads = count_process_threads();
 
-    // Memória (aproximado - em produção usar sysinfo crate)
-    let memory_mb = {
-        #[cfg(target_os = "linux")]
-        {
-            fs::read_to_string("/proc/self/statm")
-                .ok()
-                .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
-                .map(|pages| (pages * 4096) as f64 / 1024.0 / 1024.0)
-                .unwrap_or(0.0)
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            // Estimativa baseada no heap (muito aproximado)
-            0.0
-        }
-    };
+    // Memória real do processo
+    let memory_mb = get_process_memory_mb();
+
+    // Contar tarefas ativas nos batches como indicador de carga
+    let active_tasks: usize = app.active_batches.values()
+        .flat_map(|batch| batch.tasks.iter())
+        .filter(|t| matches!(t.status, deep_research::tui::TaskStatus::Running))
+        .count();
 
     app.metrics = SystemMetrics {
-        threads,
+        threads: threads + active_tasks, // Threads do processo + tarefas tokio ativas
         memory_mb,
         cpu_percent: 0.0,
     };

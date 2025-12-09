@@ -1,22 +1,63 @@
 //! Renderização da interface TUI
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Tabs, Wrap},
     Frame,
 };
 
-use super::app::{App, AppScreen, LogLevel, ReadMethod, TaskStatus};
+use super::app::{App, AppScreen, LogLevel, ReadMethod, TaskStatus, AgentAnalyzerState};
 
 /// Renderiza a interface completa
 pub fn render(frame: &mut Frame<'_>, app: &App) {
-    match app.screen {
+    match &app.screen {
         AppScreen::Input => render_input_screen(frame, app),
         AppScreen::Research => render_research_screen(frame, app),
         AppScreen::Result => render_result_screen(frame, app),
+        AppScreen::Config => render_config_screen(frame, app),
+        AppScreen::InputRequired { question_id, question_type, question, options } => {
+            render_input_required_screen(frame, app, question_id, question_type, question, options.as_ref());
+        }
     }
+}
+
+/// Renderiza a barra de tabs no topo
+fn render_tabs(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    // Títulos das tabs com indicadores de estado
+    let search_title = match &app.screen {
+        AppScreen::Input => "🔍 Pesquisa [Input]",
+        AppScreen::Research => {
+            if app.is_complete {
+                "🔍 Pesquisa [Concluído]"
+            } else {
+                "🔍 Pesquisa [Em andamento...]"
+            }
+        }
+        AppScreen::Result => "🔍 Pesquisa [Resultado]",
+        _ => "🔍 Pesquisa",
+    };
+
+    let titles = vec![search_title, "⚙️  Configurações"];
+
+    let tabs = Tabs::new(titles)
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
+        .select(app.active_tab.index())
+        .style(Style::default().fg(Color::DarkGray))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::UNDERLINED),
+        )
+        .divider(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+
+    frame.render_widget(tabs, area);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -26,17 +67,29 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 fn render_input_screen(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
 
-    // Layout vertical
+    // Layout vertical com tabs
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),   // Tabs
+            Constraint::Min(10),     // Conteúdo
+        ])
+        .split(area);
+
+    // Renderizar tabs
+    render_tabs(frame, app, main_chunks[0]);
+
+    // Layout do conteúdo
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),   // Header/Logo
+            Constraint::Length(6),   // Header/Logo (reduzido)
             Constraint::Length(5),   // Input box
             Constraint::Min(5),      // Histórico
             Constraint::Length(3),   // Ajuda
         ])
-        .margin(2)
-        .split(area);
+        .margin(1)
+        .split(main_chunks[1]);
 
     // Header com logo
     let logo = r#"
@@ -151,10 +204,12 @@ fn render_input_screen(frame: &mut Frame<'_>, app: &App) {
         Span::raw(" Pesquisar  "),
         Span::styled("↑↓", Style::default().fg(Color::Yellow)),
         Span::raw(" Histórico  "),
+        Span::styled("Tab/1-2", Style::default().fg(Color::Cyan)),
+        Span::raw(" Tabs  "),
         Span::styled("Esc/q", Style::default().fg(Color::Red)),
         Span::raw(" Sair"),
     ]))
-    .alignment(ratatui::layout::Alignment::Center)
+    .alignment(Alignment::Center)
     .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(help, chunks[3]);
 }
@@ -164,6 +219,19 @@ fn render_input_screen(frame: &mut Frame<'_>, app: &App) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn render_research_screen(frame: &mut Frame<'_>, app: &App) {
+    // Layout principal com tabs
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),  // Tabs
+            Constraint::Min(10),    // Conteúdo
+        ])
+        .split(frame.area());
+
+    // Renderizar tabs
+    render_tabs(frame, app, main_chunks[0]);
+
+    // Layout do conteúdo
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -171,13 +239,113 @@ fn render_research_screen(frame: &mut Frame<'_>, app: &App) {
             Constraint::Length(8),  // Raciocínio e Ação (em cima)
             Constraint::Min(8),     // Logs e Stats (em baixo)
             Constraint::Length(3),  // Barra de progresso
+            Constraint::Length(4),  // Input do usuário + ajuda navegação
         ])
-        .split(frame.area());
+        .split(main_chunks[1]);
 
     render_header(frame, app, chunks[0]);
     render_thinking_panel(frame, app, chunks[1]);
     render_main_content(frame, app, chunks[2]);
     render_progress(frame, app, chunks[3]);
+    render_user_input_with_nav(frame, app, chunks[4]);
+}
+
+/// Renderiza o campo de input do usuário (sempre visível durante pesquisa)
+fn render_user_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    // Indicador de mensagens pendentes na fila
+    let queue_indicator = if app.pending_user_messages > 0 {
+        format!(" 📨 {} msg(s) na fila ", app.pending_user_messages)
+    } else {
+        String::new()
+    };
+
+    let title = format!(
+        " 💬 Enviar mensagem ao agente{} │ Enter: enviar │ Tab: focar ",
+        queue_indicator
+    );
+
+    // Texto com cursor
+    let chars: Vec<char> = app.input_text.chars().collect();
+    let cursor_pos = app.cursor_pos.min(chars.len());
+    let before: String = chars[..cursor_pos].iter().collect();
+    let after: String = chars[cursor_pos..].iter().collect();
+
+    let input_content = if app.input_text.is_empty() && !app.input_focused {
+        Line::from(vec![
+            Span::styled(
+                "Pressione Tab para digitar uma mensagem...",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::raw(before),
+            Span::styled(
+                if app.input_focused { "│" } else { "" },
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::RAPID_BLINK),
+            ),
+            Span::raw(after),
+        ])
+    };
+
+    let border_color = if app.input_focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+
+    let input = Paragraph::new(input_content)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color)),
+        )
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(input, area);
+}
+
+/// Renderiza o campo de input do usuário com barra de navegação
+fn render_user_input_with_nav(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    // Dividir área entre input e navegação
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),  // Input
+            Constraint::Length(1),  // Navegação
+        ])
+        .split(area);
+
+    // Renderizar input normal
+    render_user_input(frame, app, chunks[0]);
+
+    // Barra de navegação
+    let nav_hint = if app.is_complete {
+        Line::from(vec![
+            Span::styled("r", Style::default().fg(Color::Green)),
+            Span::raw(" Ver resultado  "),
+            Span::styled("1-2", Style::default().fg(Color::Cyan)),
+            Span::raw(" Tabs  "),
+            Span::styled("q", Style::default().fg(Color::Red)),
+            Span::raw(" Sair"),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("1-2", Style::default().fg(Color::Cyan)),
+            Span::raw(" Tabs  "),
+            Span::styled("↑↓", Style::default().fg(Color::Yellow)),
+            Span::raw(" Scroll logs  "),
+            Span::styled("q", Style::default().fg(Color::Red)),
+            Span::raw(" Sair"),
+        ])
+    };
+
+    let nav = Paragraph::new(nav_hint)
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(Color::DarkGray));
+
+    frame.render_widget(nav, chunks[1]);
 }
 
 /// Renderiza o header
@@ -298,23 +466,389 @@ fn render_thinking_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(action, chunks[1]);
 }
 
-/// Renderiza o conteúdo principal (logs + tasks + stats + personas)
+/// Renderiza o conteúdo principal (logs + analyzer + tasks + stats + personas)
 fn render_main_content(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    // Layout sempre com painel de tarefas: logs (40%), tasks (20%), stats (20%), personas (20%)
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(40),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-        ])
-        .split(area);
+    // Determinar quais painéis especiais estão ativos
+    let has_analyzer = app.agent_analyzer.is_active || app.agent_analyzer.last_improvement.is_some();
+    let has_sandbox = app.sandbox.is_active || app.sandbox.status == "success" || app.sandbox.status == "error";
 
-    render_logs(frame, app, chunks[0]);
-    render_parallel_tasks(frame, app, chunks[1]);
-    render_stats(frame, app, chunks[2]);
-    render_personas(frame, app, chunks[3]);
+    match (has_analyzer, has_sandbox) {
+        // Ambos ativos: logs (30%), analyzer (18%), sandbox (18%), tasks (12%), stats (12%), personas (10%)
+        (true, true) => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(28),
+                    Constraint::Percentage(17),
+                    Constraint::Percentage(17),
+                    Constraint::Percentage(13),
+                    Constraint::Percentage(13),
+                    Constraint::Percentage(12),
+                ])
+                .split(area);
+
+            render_logs(frame, app, chunks[0]);
+            render_agent_analyzer(frame, &app.agent_analyzer, chunks[1]);
+            render_sandbox(frame, &app.sandbox, chunks[2]);
+            render_parallel_tasks(frame, app, chunks[3]);
+            render_stats(frame, app, chunks[4]);
+            render_personas(frame, app, chunks[5]);
+        }
+        // Apenas AgentAnalyzer: logs (35%), analyzer (20%), tasks (15%), stats (15%), personas (15%)
+        (true, false) => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(35),
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(15),
+                    Constraint::Percentage(15),
+                    Constraint::Percentage(15),
+                ])
+                .split(area);
+
+            render_logs(frame, app, chunks[0]);
+            render_agent_analyzer(frame, &app.agent_analyzer, chunks[1]);
+            render_parallel_tasks(frame, app, chunks[2]);
+            render_stats(frame, app, chunks[3]);
+            render_personas(frame, app, chunks[4]);
+        }
+        // Apenas Sandbox: logs (35%), sandbox (20%), tasks (15%), stats (15%), personas (15%)
+        (false, true) => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(35),
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(15),
+                    Constraint::Percentage(15),
+                    Constraint::Percentage(15),
+                ])
+                .split(area);
+
+            render_logs(frame, app, chunks[0]);
+            render_sandbox(frame, &app.sandbox, chunks[1]);
+            render_parallel_tasks(frame, app, chunks[2]);
+            render_stats(frame, app, chunks[3]);
+            render_personas(frame, app, chunks[4]);
+        }
+        // Layout padrão: logs (40%), tasks (20%), stats (20%), personas (20%)
+        (false, false) => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(40),
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(20),
+                ])
+                .split(area);
+
+            render_logs(frame, app, chunks[0]);
+            render_parallel_tasks(frame, app, chunks[1]);
+            render_stats(frame, app, chunks[2]);
+            render_personas(frame, app, chunks[3]);
+        }
+    }
+}
+
+/// Renderiza o painel do AgentAnalyzer (segundo agente)
+fn render_agent_analyzer(frame: &mut Frame<'_>, analyzer: &AgentAnalyzerState, area: Rect) {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    // Header com status
+    if analyzer.is_active {
+        lines.push(Line::from(vec![
+            Span::styled("🔬 ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "ANALISANDO...",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("   {} falhas", analyzer.failures_count),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("   {} entradas", analyzer.diary_entries),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    } else if analyzer.last_improvement.is_some() {
+        lines.push(Line::from(vec![
+            Span::styled("✅ ", Style::default().fg(Color::Green)),
+            Span::styled(
+                "CONCLUÍDO",
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        if let Some(ms) = analyzer.duration_ms {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   {}ms", ms),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+
+    // Mostrar logs do analyzer com wrap
+    let visible_height = (area.height as usize).saturating_sub(6);
+    let logs_to_show: Vec<_> = analyzer.logs.iter().rev().take(visible_height).collect();
+
+    for entry in logs_to_show.into_iter().rev() {
+        let style = match entry.level {
+            LogLevel::Info => Style::default().fg(Color::White),
+            LogLevel::Success => Style::default().fg(Color::Green),
+            LogLevel::Warning => Style::default().fg(Color::Yellow),
+            LogLevel::Error => Style::default().fg(Color::Red),
+            LogLevel::Debug => Style::default().fg(Color::DarkGray),
+        };
+
+        // Quebrar mensagem em múltiplas linhas se necessário
+        let max_width = (area.width as usize).saturating_sub(4);
+        let msg = &entry.message;
+
+        if msg.len() <= max_width {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", entry.level.symbol()), style),
+                Span::styled(msg.clone(), style),
+            ]));
+        } else {
+            // Primeira linha com símbolo
+            let first_chunk: String = msg.chars().take(max_width - 3).collect();
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", entry.level.symbol()), style),
+                Span::styled(first_chunk, style),
+            ]));
+
+            // Linhas de continuação
+            let mut remaining: String = msg.chars().skip(max_width - 3).collect();
+            while !remaining.is_empty() {
+                let chunk_size = max_width.saturating_sub(3);
+                let chunk: String = remaining.chars().take(chunk_size).collect();
+                lines.push(Line::from(vec![
+                    Span::styled("   ", Style::default()),
+                    Span::styled(chunk.clone(), style),
+                ]));
+                remaining = remaining.chars().skip(chunk_size).collect();
+            }
+        }
+    }
+
+    // Se tiver resultado, mostrar resumo
+    if let Some(improvement) = &analyzer.last_improvement {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("─── Aplicado ───", Style::default().fg(Color::DarkGray)),
+        ]));
+
+        // Mostrar melhoria com wrap
+        let max_width = (area.width as usize).saturating_sub(4);
+        let chunks: Vec<String> = improvement
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(max_width)
+            .map(|c| c.iter().collect())
+            .collect();
+
+        for chunk in chunks.iter().take(3) {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {}", chunk), Style::default().fg(Color::Cyan)),
+            ]));
+        }
+        if chunks.len() > 3 {
+            lines.push(Line::from(vec![
+                Span::styled(" ...", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+
+    let border_color = if analyzer.is_active {
+        Color::Yellow
+    } else if analyzer.last_improvement.is_some() {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
+
+    let content = Paragraph::new(Text::from(lines))
+        .block(
+            Block::default()
+                .title(" 🔬 Analyzer ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color)),
+        );
+
+    frame.render_widget(content, area);
+}
+
+/// Renderiza o painel do Sandbox (execução de código)
+fn render_sandbox(frame: &mut Frame<'_>, sandbox: &super::app::SandboxState, area: Rect) {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    // Determinar emoji da linguagem
+    let lang_emoji = if sandbox.language == "Python" { "🐍" } else { "📜" };
+    let lang_color = if sandbox.language == "Python" { Color::Yellow } else { Color::Cyan };
+
+    // Header com status
+    let (status_icon, status_text, status_color) = match sandbox.status.as_str() {
+        "generating" => ("⏳", "GERANDO...", Color::Yellow),
+        "executing" => ("🔄", "EXECUTANDO...", Color::Cyan),
+        "success" => ("✅", "SUCESSO", Color::Green),
+        "error" => ("❌", "FALHOU", Color::Red),
+        _ => ("⏸️", "IDLE", Color::DarkGray),
+    };
+
+    if sandbox.is_active || sandbox.status == "success" || sandbox.status == "error" {
+        // Linguagem no topo
+        if !sandbox.language.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{} ", lang_emoji), Style::default().fg(lang_color)),
+                Span::styled(
+                    sandbox.language.clone(),
+                    Style::default().fg(lang_color).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
+            Span::styled(
+                status_text,
+                Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+
+        // Tentativas
+        if sandbox.max_attempts > 0 {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   {}/{} tentativas", sandbox.current_attempt, sandbox.max_attempts),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+
+        // Tempo
+        if sandbox.execution_time_ms > 0 {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   {}ms", sandbox.execution_time_ms),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        } else if sandbox.is_active {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   timeout: {}ms", sandbox.timeout_ms),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+
+        // Problema truncado
+        if !sandbox.problem.is_empty() {
+            let problem_preview = if sandbox.problem.len() > 30 {
+                format!("{}...", &sandbox.problem[..27])
+            } else {
+                sandbox.problem.clone()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("📝 ", Style::default().fg(Color::White)),
+                Span::styled(problem_preview, Style::default().fg(Color::White)),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+
+        // Preview do código (truncado)
+        if !sandbox.code_preview.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("💻 Código:", Style::default().fg(Color::Cyan)),
+            ]));
+
+            // Mostrar primeiras linhas do código
+            let code_lines: Vec<&str> = sandbox.code_preview.lines().take(4).collect();
+            for code_line in code_lines {
+                let line_preview = if code_line.len() > 25 {
+                    format!("  {}...", &code_line[..22])
+                } else {
+                    format!("  {}", code_line)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(line_preview, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
+
+        // Output ou Erro
+        if let Some(output) = &sandbox.output {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("📤 Output:", Style::default().fg(Color::Green)),
+            ]));
+            let out_preview = if output.len() > 50 { format!("{}...", &output[..47]) } else { output.clone() };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {}", out_preview), Style::default().fg(Color::White)),
+            ]));
+        }
+
+        if let Some(error) = &sandbox.error {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("❌ Erro:", Style::default().fg(Color::Red)),
+            ]));
+            let err_preview = if error.len() > 50 { format!("{}...", &error[..47]) } else { error.clone() };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {}", err_preview), Style::default().fg(Color::Red)),
+            ]));
+        }
+    } else {
+        // Estado idle
+        lines.push(Line::from(vec![
+            Span::styled("⏸️ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("IDLE", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Aguardando execução",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "de código...",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
+
+    let border_color = match sandbox.status.as_str() {
+        "generating" | "executing" => Color::Yellow,
+        "success" => Color::Green,
+        "error" => Color::Red,
+        _ => Color::DarkGray,
+    };
+
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" 🖥️ Sandbox ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color)),
+        )
+        .wrap(Wrap { trim: true });
+
+    frame.render_widget(content, area);
 }
 
 /// Renderiza o painel de tarefas paralelas em execução
@@ -520,41 +1054,74 @@ fn format_bytes(bytes: usize) -> String {
     }
 }
 
-/// Renderiza a área de logs
+/// Renderiza a área de logs (com wrap de mensagens longas)
 fn render_logs(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let visible_height = area.height.saturating_sub(2) as usize;
     // Largura disponível para a mensagem (descontando bordas, timestamp e símbolo)
     let max_msg_width = (area.width as usize).saturating_sub(18);
+    // Largura para linhas de continuação (sem timestamp/símbolo)
+    let continuation_width = (area.width as usize).saturating_sub(6);
 
-    let items: Vec<ListItem<'_>> = app
-        .logs
-        .iter()
-        .skip(app.log_scroll)
-        .take(visible_height)
-        .map(|entry| {
-            let style = match entry.level {
-                LogLevel::Info => Style::default().fg(Color::White),
-                LogLevel::Success => Style::default().fg(Color::Green),
-                LogLevel::Warning => Style::default().fg(Color::Yellow),
-                LogLevel::Error => Style::default().fg(Color::Red),
-                LogLevel::Debug => Style::default().fg(Color::DarkGray),
-            };
+    // Construir lista de linhas com wrap
+    let mut items: Vec<ListItem<'_>> = Vec::new();
+    let mut line_count = 0;
 
-            // Truncar mensagem para caber na largura
-            let truncated_msg = truncate(&entry.message, max_msg_width);
+    for entry in app.logs.iter().skip(app.log_scroll) {
+        if line_count >= visible_height {
+            break;
+        }
 
+        let style = match entry.level {
+            LogLevel::Info => Style::default().fg(Color::White),
+            LogLevel::Success => Style::default().fg(Color::Green),
+            LogLevel::Warning => Style::default().fg(Color::Yellow),
+            LogLevel::Error => Style::default().fg(Color::Red),
+            LogLevel::Debug => Style::default().fg(Color::DarkGray),
+        };
+
+        let msg = &entry.message;
+
+        if msg.len() <= max_msg_width {
+            // Mensagem cabe em uma linha
             let content = Line::from(vec![
                 Span::styled(
                     format!("[{}] ", entry.timestamp),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(format!("{} ", entry.level.symbol()), style),
-                Span::styled(truncated_msg, style),
+                Span::styled(msg.clone(), style),
             ]);
+            items.push(ListItem::new(content));
+            line_count += 1;
+        } else {
+            // Mensagem precisa de wrap - primeira linha com timestamp/símbolo
+            let first_chunk: String = msg.chars().take(max_msg_width).collect();
+            let first_line = Line::from(vec![
+                Span::styled(
+                    format!("[{}] ", entry.timestamp),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(format!("{} ", entry.level.symbol()), style),
+                Span::styled(first_chunk, style),
+            ]);
+            items.push(ListItem::new(first_line));
+            line_count += 1;
 
-            ListItem::new(content)
-        })
-        .collect();
+            // Linhas de continuação (indentadas)
+            let mut remaining: String = msg.chars().skip(max_msg_width).collect();
+            while !remaining.is_empty() && line_count < visible_height {
+                let chunk: String = remaining.chars().take(continuation_width).collect();
+                let continuation_line = Line::from(vec![
+                    Span::styled("     ", Style::default()), // Indentação
+                    Span::styled("↳ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(chunk.clone(), style),
+                ]);
+                items.push(ListItem::new(continuation_line));
+                remaining = remaining.chars().skip(continuation_width).collect();
+                line_count += 1;
+            }
+        }
+    }
 
     let scroll_info = if app.logs.len() > visible_height {
         format!(
@@ -725,22 +1292,151 @@ fn render_progress(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// TELA DE INPUT REQUERIDO (PERGUNTA DO AGENTE)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Renderiza tela quando o agente precisa de input do usuário
+///
+/// Compatível com OpenAI Responses API (input_required state).
+fn render_input_required_screen(
+    frame: &mut Frame<'_>,
+    app: &App,
+    question_id: &str,
+    question_type: &str,
+    question: &str,
+    options: Option<&Vec<String>>,
+) {
+    let area = frame.area();
+
+    // Layout vertical
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),   // Header
+            Constraint::Length(3),   // Status
+            Constraint::Min(5),      // Pergunta e opções
+            Constraint::Length(4),   // Input
+            Constraint::Length(2),   // Ajuda
+        ])
+        .margin(2)
+        .split(area);
+
+    // Header
+    let header_text = format!("❓ ENTRADA REQUERIDA - {}", question_type.to_uppercase());
+    let header = Paragraph::new(header_text)
+        .style(Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD))
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title(" 🤖 Agente aguardando resposta "));
+    frame.render_widget(header, chunks[0]);
+
+    // Status
+    let status = Paragraph::new(format!(
+        "ID: {} │ Step: {} │ Tokens: {}",
+        &question_id[..8],
+        app.current_step,
+        app.tokens_used
+    ))
+    .style(Style::default().fg(Color::DarkGray))
+    .alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(status, chunks[1]);
+
+    // Pergunta e opções
+    let mut question_lines = vec![
+        Line::from(vec![
+            Span::styled("Pergunta: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(question, Style::default().fg(Color::White))),
+        Line::from(""),
+    ];
+
+    // Adicionar opções se houver
+    if let Some(opts) = options {
+        question_lines.push(Line::from(vec![
+            Span::styled("Opções:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        ]));
+        for (i, opt) in opts.iter().enumerate() {
+            question_lines.push(Line::from(vec![
+                Span::styled(format!("  {}. ", i + 1), Style::default().fg(Color::Yellow)),
+                Span::styled(opt, Style::default().fg(Color::White)),
+            ]));
+        }
+    }
+
+    let question_widget = Paragraph::new(question_lines)
+        .wrap(Wrap { trim: false })
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" Pergunta do Agente "));
+    frame.render_widget(question_widget, chunks[2]);
+
+    // Input área
+    let input_title = if options.is_some() {
+        " Digite número ou resposta "
+    } else {
+        " Sua resposta "
+    };
+
+    let input_text = if app.input_text.is_empty() {
+        vec![
+            Span::styled("█", Style::default().fg(Color::Green).add_modifier(Modifier::SLOW_BLINK)),
+        ]
+    } else {
+        vec![
+            Span::styled(&app.input_text, Style::default().fg(Color::White)),
+            Span::styled("█", Style::default().fg(Color::Green).add_modifier(Modifier::SLOW_BLINK)),
+        ]
+    };
+
+    let input_widget = Paragraph::new(Line::from(input_text))
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green))
+            .title(input_title));
+    frame.render_widget(input_widget, chunks[3]);
+
+    // Ajuda
+    let help = Paragraph::new("Enter: Enviar │ Esc: Cancelar (continua sem resposta)")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(help, chunks[4]);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // TELA DE RESULTADO
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
+    // Layout principal com tabs
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),  // Tabs
+            Constraint::Min(10),    // Conteúdo
+        ])
+        .split(frame.area());
+
+    // Renderizar tabs
+    render_tabs(frame, app, main_chunks[0]);
+
+    // Layout do conteúdo
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),   // Header com UUID e JSON path
             Constraint::Min(5),      // Resposta
-            Constraint::Length(5),   // Referências
-            Constraint::Length(5),   // URLs visitadas
-            Constraint::Length(4),   // Stats finais
+            Constraint::Length(4),   // Referências (reduzido)
+            Constraint::Length(4),   // URLs visitadas (reduzido)
+            Constraint::Length(3),   // Stats finais (reduzido)
+            Constraint::Length(3),   // Input para follow-up
             Constraint::Length(2),   // Ajuda
         ])
-        .margin(1)
-        .split(frame.area());
+        .split(main_chunks[1]);
 
     // Header com UUID e caminhos dos arquivos
     let session_id_short = &app.session_id[..8];
@@ -806,6 +1502,28 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
         )
         .style(Style::default().fg(Color::White));
     frame.render_widget(answer, chunks[1]);
+
+    // Scrollbar visual para resposta
+    if total_lines > visible_height {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"))
+            .track_symbol(Some("│"))
+            .thumb_symbol("█");
+
+        let mut scrollbar_state = ScrollbarState::new(max_scroll)
+            .position(scroll_pos);
+
+        // Área interna (sem bordas)
+        let scrollbar_area = Rect {
+            x: chunks[1].x + chunks[1].width - 1,
+            y: chunks[1].y + 1,
+            width: 1,
+            height: chunks[1].height.saturating_sub(2),
+        };
+
+        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    }
 
     // Referências (URLs das fontes)
     let refs_items: Vec<ListItem<'_>> = app
@@ -892,7 +1610,7 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     ]);
 
     let stats = Paragraph::new(stats_text)
-    .alignment(ratatui::layout::Alignment::Center)
+    .alignment(Alignment::Center)
     .block(
         Block::default()
                 .title(" 📊 Estatísticas ")
@@ -901,18 +1619,77 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     );
     frame.render_widget(stats, chunks[4]);
 
-    // Ajuda
+    // Campo de input para follow-up
+    render_followup_input(frame, app, chunks[5]);
+
+    // Ajuda (com mensagem de clipboard se houver)
+    let clipboard_msg = app.clipboard_message.as_deref().unwrap_or("");
     let help = Paragraph::new(Line::from(vec![
-        Span::styled("↑↓/PgUp/Dn", Style::default().fg(Color::Yellow)),
+        Span::styled("Tab", Style::default().fg(Color::Yellow)),
+        Span::raw(" Focar input  "),
+        Span::styled("↑↓", Style::default().fg(Color::DarkGray)),
         Span::raw(" Scroll  "),
-        Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::raw(" Nova  "),
+        Span::styled("c", Style::default().fg(Color::Cyan)),
+        Span::raw(" Copiar  "),
+        Span::styled("r", Style::default().fg(Color::Magenta)),
+        Span::raw(" Logs  "),
         Span::styled("q", Style::default().fg(Color::Red)),
         Span::raw(" Sair"),
+        if !clipboard_msg.is_empty() {
+            Span::styled(format!("  {}", clipboard_msg), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+        } else {
+            Span::raw("")
+        },
     ]))
-    .alignment(ratatui::layout::Alignment::Center)
+    .alignment(Alignment::Center)
     .style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(help, chunks[5]);
+    frame.render_widget(help, chunks[6]);
+}
+
+/// Renderiza o campo de input para follow-up na tela de resultado
+fn render_followup_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let title = " 💬 Continuar conversa │ Tab: focar │ Enter: enviar ";
+
+    // Texto com cursor
+    let chars: Vec<char> = app.input_text.chars().collect();
+    let cursor_pos = app.cursor_pos.min(chars.len());
+    let before: String = chars[..cursor_pos].iter().collect();
+    let after: String = chars[cursor_pos..].iter().collect();
+
+    let input_content = if app.input_text.is_empty() && !app.input_focused {
+        Line::from(vec![
+            Span::styled(
+                "Digite uma pergunta de follow-up ou nova pesquisa...",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::raw(before),
+            Span::styled(
+                if app.input_focused { "│" } else { "" },
+                Style::default().fg(Color::Green).add_modifier(Modifier::RAPID_BLINK),
+            ),
+            Span::raw(after),
+        ])
+    };
+
+    let border_color = if app.input_focused {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
+
+    let input = Paragraph::new(input_content)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color)),
+        )
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(input, area);
 }
 
 /// Trunca uma string para o tamanho máximo
@@ -924,4 +1701,249 @@ fn truncate(s: &str, max_len: usize) -> String {
     } else {
         s[..max_len].to_string()
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TELA DE CONFIGURAÇÕES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+fn render_config_screen(frame: &mut Frame<'_>, app: &App) {
+    let area = frame.area();
+
+    // Layout principal
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),   // Tabs
+            Constraint::Length(3),   // Header
+            Constraint::Min(10),     // Conteúdo das configs
+            Constraint::Length(2),   // Ajuda
+        ])
+        .split(area);
+
+    // Tabs no topo
+    render_tabs(frame, app, chunks[0]);
+
+    // Header
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(
+            " ⚙️  CONFIGURAÇÕES CARREGADAS ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " │ Carregadas do arquivo .env e variáveis de ambiente",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    frame.render_widget(header, chunks[1]);
+
+    // Área de conteúdo dividida em 3 colunas
+    let content_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(33),  // Runtime
+            Constraint::Percentage(34),  // LLM
+            Constraint::Percentage(33),  // Agent
+        ])
+        .margin(1)
+        .split(chunks[2]);
+
+    // Coluna 1: Runtime Config
+    render_runtime_config(frame, app, content_chunks[0]);
+
+    // Coluna 2: LLM Config
+    render_llm_config(frame, app, content_chunks[1]);
+
+    // Coluna 3: Agent Config
+    render_agent_config(frame, app, content_chunks[2]);
+
+    // Ajuda
+    let help = Paragraph::new(Line::from(vec![
+        Span::styled("Tab/1-2", Style::default().fg(Color::Yellow)),
+        Span::raw(" Navegar tabs  "),
+        Span::styled("Backspace", Style::default().fg(Color::Cyan)),
+        Span::raw(" Voltar  "),
+        Span::styled("q/Esc", Style::default().fg(Color::Red)),
+        Span::raw(" Sair"),
+    ]))
+    .alignment(Alignment::Center)
+    .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(help, chunks[3]);
+}
+
+/// Renderiza configurações do Runtime
+fn render_runtime_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let config = &app.loaded_config;
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" 🚀 RUNTIME ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" Worker Threads: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&config.worker_threads, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Max Threads:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.max_threads), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Blocking:       ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.max_blocking_threads), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" WebReader:      ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&config.webreader, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" ═══ API Keys ═══ ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" OpenAI:  ", Style::default().fg(Color::DarkGray)),
+            if config.openai_key_present {
+                Span::styled("✅ Configurada", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("❌ Não encontrada", Style::default().fg(Color::Red))
+            },
+        ]),
+        Line::from(vec![
+            Span::styled(" Jina:    ", Style::default().fg(Color::DarkGray)),
+            if config.jina_key_present {
+                Span::styled("✅ Configurada", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("❌ Não encontrada", Style::default().fg(Color::Red))
+            },
+        ]),
+    ];
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .title(" 🖥️ Runtime ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow)),
+    );
+
+    frame.render_widget(content, area);
+}
+
+/// Renderiza configurações do LLM
+fn render_llm_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let config = &app.loaded_config;
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" 🤖 LLM ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" Provider:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&config.llm_provider, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Model:       ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&config.llm_model, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Temperature: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{:.2}", config.temperature), Style::default().fg(Color::White)),
+        ]),
+    ];
+
+    // API Base URL se presente
+    if let Some(ref url) = config.api_base_url {
+        lines.push(Line::from(vec![
+            Span::styled(" API Base:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(truncate(url, 20), Style::default().fg(Color::Yellow)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(" ═══ Embeddings ═══ ", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(" Provider:    ", Style::default().fg(Color::DarkGray)),
+        Span::styled(&config.embedding_provider, Style::default().fg(Color::White)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(" Model:       ", Style::default().fg(Color::DarkGray)),
+        Span::styled(&config.embedding_model, Style::default().fg(Color::Cyan)),
+    ]));
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .title(" 🧠 LLM ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta)),
+    );
+
+    frame.render_widget(content, area);
+}
+
+/// Renderiza configurações do Agent
+fn render_agent_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let config = &app.loaded_config;
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" 🕵️ AGENT ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" Min Steps:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.min_steps_before_answer), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Direct Answer: ", Style::default().fg(Color::DarkGray)),
+            if config.allow_direct_answer {
+                Span::styled("✅ Sim", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("❌ Não", Style::default().fg(Color::Red))
+            },
+        ]),
+        Line::from(vec![
+            Span::styled(" Token Budget:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.default_token_budget), Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" ═══ Limites ═══ ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" URLs/Step:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.max_urls_per_step), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Queries/Step:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.max_queries_per_step), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Max Failures:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.max_consecutive_failures), Style::default().fg(Color::Yellow)),
+        ]),
+    ];
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .title(" 🤖 Agent ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green)),
+    );
+
+    frame.render_widget(content, area);
 }

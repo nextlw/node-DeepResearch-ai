@@ -161,6 +161,14 @@ pub trait SearchClient: Send + Sync {
 
     /// Lê múltiplas URLs com comparação em paralelo
     async fn read_urls_comparative_batch(&self, urls: &[Url]) -> Vec<ComparativeReadResult>;
+
+    /// Lê uma URL com progresso compartilhado (Rust primeiro, Jina fallback)
+    /// Retorna (Result, método_usado, tentativas, bytes_processados)
+    async fn read_url_with_fallback_progress(
+        &self,
+        url: &Url,
+        progress: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    ) -> (Result<UrlContent, SearchError>, &'static str, u8, usize);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -307,11 +315,93 @@ impl SearchClient for MockSearchClient {
             .map(|url| futures::executor::block_on(self.read_url_comparative(url)))
             .collect()
     }
+
+    async fn read_url_with_fallback_progress(
+        &self,
+        url: &Url,
+        progress: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    ) -> (Result<UrlContent, SearchError>, &'static str, u8, usize) {
+        use std::sync::atomic::Ordering;
+        progress.store(50, Ordering::Relaxed);
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        progress.store(100, Ordering::Relaxed);
+
+        let content = UrlContent {
+            title: "Mock Title".into(),
+            text: "Mock content from URL".into(),
+            url: url.clone(),
+            word_count: 4,
+            read_time_ms: Some(100),
+            source: Some("mock".into()),
+        };
+        (Ok(content), "mock", 1, 21)
+    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // IMPLEMENTAÇÃO JINA (STUB)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Preferência de método para leitura de URLs.
+///
+/// Re-exportado de `crate::config::WebReaderPreference` para conveniência.
+pub use crate::config::WebReaderPreference;
+
+/// Verifica se uma URL requer Jina Reader (JS-heavy, paywalls, redes sociais)
+///
+/// Essas URLs não funcionam bem com leitura Rust local porque:
+/// - Requerem JavaScript para renderizar conteúdo
+/// - Têm paywalls que Jina consegue contornar
+/// - Bloqueiam crawlers tradicionais
+fn url_requires_jina(url: &str) -> bool {
+    const JINA_REQUIRED_DOMAINS: &[&str] = &[
+        // Redes sociais que requerem JS
+        "tiktok.com",
+        "instagram.com",
+        "twitter.com",
+        "x.com",
+        "facebook.com",
+        "threads.net",
+        "snapchat.com",
+        "pinterest.com",
+        // Plataformas de vídeo (requerem JS)
+        "youtube.com",
+        "youtu.be",
+        "vimeo.com",
+        "twitch.tv",
+        "dailymotion.com",
+        // Apps e SPAs
+        "linkedin.com",
+        "discord.com",
+        "slack.com",
+        "notion.so",
+        "figma.com",
+        "canva.com",
+        "medium.com",
+        // Paywalls que Jina consegue ler
+        "wsj.com",
+        "ft.com",
+        "nytimes.com",
+        "washingtonpost.com",
+        "bloomberg.com",
+        "economist.com",
+        "reuters.com",
+        // URL shorteners (precisam resolver redirect)
+        "t.co",
+        "bit.ly",
+        "goo.gl",
+        "tinyurl.com",
+        "ow.ly",
+        // Google Apps (requerem JS)
+        "maps.google.com",
+        "drive.google.com",
+        "docs.google.com",
+        "sheets.google.com",
+    ];
+
+    let url_lower = url.to_lowercase();
+    JINA_REQUIRED_DOMAINS.iter().any(|domain| url_lower.contains(domain))
+}
 
 /// Cliente para Jina AI APIs
 pub struct JinaClient {
@@ -323,8 +413,23 @@ pub struct JinaClient {
     reader_endpoint: String,
     /// Endpoint para reranking
     rerank_endpoint: String,
+    /// Endpoint para embeddings
+    embeddings_endpoint: String,
+    /// Modelo de embeddings (jina-embeddings-v3)
+    embeddings_model: String,
     /// Cliente HTTP
     client: reqwest::Client,
+    /// Preferência de método de leitura de URLs
+    webreader_preference: WebReaderPreference,
+}
+
+/// Resultado de embedding Jina
+#[derive(Debug, Clone)]
+pub struct JinaEmbeddingResult {
+    /// Vetor de embedding
+    pub vector: Vec<f32>,
+    /// Tokens usados
+    pub tokens_used: u64,
 }
 
 impl JinaClient {
@@ -337,6 +442,7 @@ impl JinaClient {
     /// - Busca: `https://svip.jina.ai/` (POST com JSON body)
     /// - Reader: `https://r.jina.ai`
     /// - Rerank: `https://api.jina.ai/v1/rerank`
+    /// - Embeddings: `https://api.jina.ai/v1/embeddings` (jina-embeddings-v3)
     ///
     /// # Exemplo
     /// ```rust,ignore
@@ -344,17 +450,486 @@ impl JinaClient {
     /// let results = client.search(&query).await?;
     /// ```
     pub fn new(api_key: String) -> Self {
+        Self::with_preference(api_key, WebReaderPreference::default())
+    }
+
+    /// Cria um novo cliente Jina AI com preferência de WebReader.
+    ///
+    /// # Argumentos
+    /// * `api_key` - Sua chave de API Jina AI
+    /// * `webreader_preference` - Preferência de método de leitura (Jina, Rust, Compare)
+    ///
+    /// # Exemplo
+    /// ```rust,ignore
+    /// let client = JinaClient::with_preference(
+    ///     "jina_api_key".into(),
+    ///     WebReaderPreference::RustOnly,
+    /// );
+    /// ```
+    pub fn with_preference(api_key: String, webreader_preference: WebReaderPreference) -> Self {
+        // Carregar modelo de embedding do .env
+        let llm_config = crate::config::load_llm_config();
+        let embeddings_model = llm_config.jina_embedding_model.clone();
+
+        log::info!(
+            "🔧 JinaClient: WebReader={} | Embedding={}",
+            webreader_preference,
+            embeddings_model
+        );
+
         Self {
             api_key,
             search_endpoint: "https://svip.jina.ai/".into(),
             reader_endpoint: "https://r.jina.ai".into(),
             rerank_endpoint: "https://api.jina.ai/v1/rerank".into(),
+            embeddings_endpoint: "https://api.jina.ai/v1/embeddings".into(),
+            embeddings_model,
             client: reqwest::Client::new(),
+            webreader_preference,
+        }
+    }
+
+    /// Cria um novo cliente Jina AI com configuração completa.
+    ///
+    /// # Argumentos
+    /// * `api_key` - Sua chave de API Jina AI
+    /// * `webreader_preference` - Preferência de método de leitura
+    /// * `embedding_model` - Modelo de embedding (ex: "jina-embeddings-v4")
+    pub fn with_config(
+        api_key: String,
+        webreader_preference: WebReaderPreference,
+        embedding_model: String,
+    ) -> Self {
+        log::info!(
+            "🔧 JinaClient: WebReader={} | Embedding={}",
+            webreader_preference,
+            embedding_model
+        );
+
+        Self {
+            api_key,
+            search_endpoint: "https://svip.jina.ai/".into(),
+            reader_endpoint: "https://r.jina.ai".into(),
+            rerank_endpoint: "https://api.jina.ai/v1/rerank".into(),
+            embeddings_endpoint: "https://api.jina.ai/v1/embeddings".into(),
+            embeddings_model: embedding_model,
+            client: reqwest::Client::new(),
+            webreader_preference,
+        }
+    }
+
+    /// Retorna o modelo de embedding configurado
+    pub fn embedding_model(&self) -> &str {
+        &self.embeddings_model
+    }
+
+    /// Retorna a preferência de WebReader configurada.
+    pub fn webreader_preference(&self) -> WebReaderPreference {
+        self.webreader_preference
+    }
+
+    /// Gera embeddings para um único texto usando Jina Embeddings v3
+    pub async fn embed(&self, text: &str) -> Result<JinaEmbeddingResult, SearchError> {
+        self.embed_batch(&[text.to_string()])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| SearchError::ParseError("No embedding returned".into()))
+    }
+
+    /// Gera embeddings em batch usando Jina Embeddings v4
+    ///
+    /// Jina v4 suporta até 32,768 tokens por input e dimensões de 2048 (single-vector)
+    /// É multimodal (texto e imagem) e multilíngue (30+ idiomas)
+    pub async fn embed_batch(&self, texts: &[String]) -> Result<Vec<JinaEmbeddingResult>, SearchError> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Formatar input conforme API v4 - aceita objetos com "text"
+        let input: Vec<serde_json::Value> = texts
+            .iter()
+            .map(|t| serde_json::json!({"text": t}))
+            .collect();
+
+        let request_body = serde_json::json!({
+            "model": self.embeddings_model,
+            "task": "text-matching",
+            "normalized": true,
+            "embedding_type": "float",
+            "input": input
+        });
+
+        log::debug!("🔢 Jina Embeddings v4: {} textos", texts.len());
+
+        let response = self
+            .client
+            .post(&self.embeddings_endpoint)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|e| SearchError::NetworkError(e.to_string()))?;
+
+        if response.status() == 429 {
+            return Err(SearchError::RateLimitError);
+        }
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(SearchError::ApiError(format!(
+                "Jina Embeddings API error: {}",
+                error_text
+            )));
+        }
+
+        let embedding_response: JinaEmbeddingResponse = response
+            .json()
+            .await
+            .map_err(|e| SearchError::ParseError(format!("Failed to parse Jina embeddings: {}", e)))?;
+
+        let total_tokens = embedding_response.usage.total_tokens;
+        let prompt_tokens = embedding_response.usage.prompt_tokens;
+        let tokens_per_embedding = prompt_tokens / texts.len().max(1) as u64;
+
+        // Ordenar por index para garantir ordem correta
+        let mut data = embedding_response.data;
+        data.sort_by_key(|d| d.index);
+
+        let results: Vec<JinaEmbeddingResult> = data
+            .into_iter()
+            .map(|d| JinaEmbeddingResult {
+                vector: d.embedding,
+                tokens_used: tokens_per_embedding,
+            })
+            .collect();
+
+        log::info!(
+            "✅ Jina Embeddings v4 ({}): {} vetores | dim={} | {} prompt + {} total tokens",
+            embedding_response.model,
+            results.len(),
+            results.first().map(|r| r.vector.len()).unwrap_or(0),
+            prompt_tokens,
+            total_tokens
+        );
+
+        Ok(results)
+    }
+
+    /// Lê uma URL com Jina usando streaming real e callback de progresso
+    ///
+    /// O callback recebe: (bytes_recebidos, progresso_estimado 0-100)
+    pub async fn read_url_with_progress<F>(
+        &self,
+        url: &Url,
+        mut progress_callback: F,
+    ) -> Result<UrlContent, SearchError>
+    where
+        F: FnMut(usize, u8) + Send,
+    {
+        use futures::StreamExt;
+
+        // Validar URL
+        url::Url::parse(url).map_err(|e| SearchError::InvalidUrl(format!("Invalid URL: {}", e)))?;
+
+        log::info!("📖 Jina Reader (streaming com progresso): {}", url);
+
+        // Formato GET com streaming SSE
+        // Formato oficial: https://r.jina.ai/https://example.com (SEM encoding)
+        let reader_url = format!("{}/{}", self.reader_endpoint, url);
+
+        let response = self
+            .client
+            .get(&reader_url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Accept", "text/event-stream")
+            .header("X-Return-Format", "markdown")
+            .header("X-Md-Link-Style", "discarded")
+            .header("X-Retain-Images", "none")
+            .timeout(std::time::Duration::from_secs(60))
+            .send()
+            .await
+            .map_err(|e| {
+                log::error!("❌ Jina Reader network error: {}", e);
+                SearchError::NetworkError(e.to_string())
+            })?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(SearchError::RateLimitError);
+        }
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(SearchError::FetchError(format!("Jina API error: {}", error_text)));
+        }
+
+        // Processar stream com progresso
+        let mut content = String::new();
+        let mut title = String::new();
+        let mut total_bytes: usize = 0;
+
+        // Estimar tamanho total (páginas típicas ~50-200KB de markdown)
+        let estimated_total: usize = 100_000; // 100KB como estimativa
+
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    total_bytes += chunk.len();
+
+                    // Calcular progresso (cap em 95% até finalizar)
+                    let progress = ((total_bytes as f64 / estimated_total as f64) * 95.0)
+                        .min(95.0) as u8;
+
+                    // Emitir progresso
+                    progress_callback(total_bytes, progress);
+
+                    // Processar chunk
+                    let text = String::from_utf8_lossy(&chunk);
+                    for line in text.lines() {
+                        if line.starts_with("data: ") {
+                            let data = &line[6..];
+                            if data.starts_with('{') {
+                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                                    if let Some(t) = json.get("title").and_then(|v| v.as_str()) {
+                                        title = t.to_string();
+                                    }
+                                    if let Some(c) = json.get("content").and_then(|v| v.as_str()) {
+                                        content = c.to_string();
+                                    }
+                                    if let Some(nested) = json.get("data") {
+                                        if let Some(t) = nested.get("title").and_then(|v| v.as_str()) {
+                                            title = t.to_string();
+                                        }
+                                        if let Some(c) = nested.get("content").and_then(|v| v.as_str()) {
+                                            content = c.to_string();
+                                        }
+                                    }
+                                }
+                            } else if !data.is_empty() && data != "[DONE]" {
+                                content.push_str(data);
+                                content.push('\n');
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("⚠️ Chunk error: {}", e);
+                }
+            }
+        }
+
+        // Progresso final 100%
+        progress_callback(total_bytes, 100);
+
+        // Fallback se não parseou SSE
+        if content.is_empty() {
+            return Err(SearchError::ExtractionError("No content received".into()));
+        }
+
+        let word_count = content.split_whitespace().count();
+
+        log::info!(
+            "✅ Jina Streaming: '{}' | {} bytes | {} palavras",
+            if title.len() > 30 { format!("{}...", &title[..30]) } else { title.clone() },
+            total_bytes,
+            word_count
+        );
+
+        Ok(UrlContent {
+            title,
+            text: content,
+            url: url.clone(),
+            word_count,
+            read_time_ms: None,
+            source: Some("jina".to_string()),
+        })
+    }
+
+    /// Lê uma URL usando o método configurado por WebReaderPreference.
+    ///
+    /// - `JinaOnly`: Usa apenas Jina Reader API
+    /// - `RustOnly`: Usa apenas Rust local + Readability
+    /// - `Compare`: Tenta Rust primeiro, Jina como fallback (padrão)
+    ///
+    /// Retorna (Result, método_usado, tentativas)
+    async fn read_url_with_fallback(
+        &self,
+        url: &Url,
+    ) -> (Result<UrlContent, SearchError>, &'static str, u8) {
+        use crate::utils::FileReader;
+
+        const MIN_CONTENT_LENGTH: usize = 100;
+
+        match self.webreader_preference {
+            // Usar apenas Jina - sem fallback
+            WebReaderPreference::JinaOnly => {
+                log::debug!("📖 [JINA-ONLY] Lendo: {}", url);
+                let jina_start = std::time::Instant::now();
+                let jina_result = self.read_url(url).await;
+                let jina_time = jina_start.elapsed().as_millis();
+
+                match jina_result {
+                    Ok(mut content) => {
+                        if content.text.len() >= MIN_CONTENT_LENGTH {
+                            content.read_time_ms = Some(jina_time);
+                            log::info!("✅ [JINA-ONLY] {} | {}ms | {} bytes", url, jina_time, content.text.len());
+                            (Ok(content), "jina", 1)
+                        } else {
+                            log::error!("❌ [JINA-ONLY] {} | conteúdo insuficiente (<{} bytes)", url, MIN_CONTENT_LENGTH);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto para {}",
+                                    url
+                                ))),
+                                "failed",
+                                1,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("❌ [JINA-ONLY] {} | Erro: {}", url, e);
+                        (Err(e), "failed", 1)
+                    }
+                }
+            }
+
+            // Usar apenas Rust local - sem fallback
+            WebReaderPreference::RustOnly => {
+                log::debug!("📖 [RUST-ONLY] Lendo: {}", url);
+                let reader = FileReader::new();
+                let rust_start = std::time::Instant::now();
+                let rust_result = reader.read_url(url).await;
+                let rust_time = rust_start.elapsed().as_millis();
+
+                match rust_result {
+                    Ok(file_content) => {
+                        if file_content.text.len() >= MIN_CONTENT_LENGTH {
+                            log::info!(
+                                "✅ [RUST-ONLY] {} | {}ms | {} bytes | {} palavras",
+                                url, rust_time, file_content.text.len(), file_content.word_count
+                            );
+                            (
+                                Ok(UrlContent {
+                                    title: file_content.title.unwrap_or_default(),
+                                    text: file_content.text,
+                                    url: file_content.source,
+                                    word_count: file_content.word_count,
+                                    read_time_ms: Some(rust_time),
+                                    source: Some("rust_local".to_string()),
+                                }),
+                                "rust_local",
+                                1,
+                            )
+                        } else {
+                            log::error!("❌ [RUST-ONLY] {} | conteúdo insuficiente (<{} bytes)", url, MIN_CONTENT_LENGTH);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto para {}",
+                                    url
+                                ))),
+                                "failed",
+                                1,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("❌ [RUST-ONLY] {} | Erro: {}", url, e);
+                        (Err(SearchError::FetchError(e.to_string())), "failed", 1)
+                    }
+                }
+            }
+
+            // Comportamento padrão: Rust primeiro, Jina como fallback
+            WebReaderPreference::Compare => {
+                log::debug!("📖 [COMPARE] Lendo (Rust→Jina): {}", url);
+
+                // 1. Tentar Rust local primeiro
+                let reader = FileReader::new();
+                let rust_start = std::time::Instant::now();
+                let rust_result = reader.read_url(url).await;
+                let rust_time = rust_start.elapsed().as_millis();
+
+                if let Ok(file_content) = rust_result {
+                    if file_content.text.len() >= MIN_CONTENT_LENGTH {
+                        log::info!(
+                            "✅ [RUST+Readability] {} | {}ms | {} bytes | {} palavras",
+                            url, rust_time, file_content.text.len(), file_content.word_count
+                        );
+                        return (
+                            Ok(UrlContent {
+                                title: file_content.title.unwrap_or_default(),
+                                text: file_content.text,
+                                url: file_content.source,
+                                word_count: file_content.word_count,
+                                read_time_ms: Some(rust_time),
+                                source: Some("rust_local".to_string()),
+                            }),
+                            "rust_local",
+                            1,
+                        );
+                    }
+                    log::warn!("⚠️ [RUST] {} conteúdo curto ({} bytes)", url, file_content.text.len());
+                } else if let Err(ref e) = rust_result {
+                    log::warn!("⚠️ [RUST] {} falhou ({}ms): {}", url, rust_time, e);
+                }
+
+                // 2. Fallback para Jina
+                let jina_start = std::time::Instant::now();
+                let jina_result = self.read_url(url).await;
+                let jina_time = jina_start.elapsed().as_millis();
+
+                match jina_result {
+                    Ok(mut content) => {
+                        if content.text.len() >= MIN_CONTENT_LENGTH {
+                            content.read_time_ms = Some(rust_time + jina_time);
+                            log::info!("✅ [JINA-FALLBACK] {} | {}ms | {} bytes", url, jina_time, content.text.len());
+                            (Ok(content), "jina", 2)
+                        } else {
+                            log::error!("❌ [AMBOS FALHARAM] {} | conteúdo insuficiente (<{} bytes)", url, MIN_CONTENT_LENGTH);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto em ambos os métodos para {}",
+                                    url
+                                ))),
+                                "failed",
+                                2,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("❌ [AMBOS FALHARAM] {} | Rust e Jina: {}", url, e);
+                        (Err(e), "failed", 2)
+                    }
+                }
+            }
         }
     }
 }
 
 // Estruturas para serialização/deserialização da API Jina
+
+/// Response de embeddings Jina v4
+#[derive(Deserialize, Debug)]
+struct JinaEmbeddingResponse {
+    data: Vec<JinaEmbeddingData>,
+    usage: JinaEmbeddingUsage,
+    model: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct JinaEmbeddingData {
+    embedding: Vec<f32>,
+    index: usize,
+}
+
+#[derive(Deserialize, Debug)]
+struct JinaEmbeddingUsage {
+    total_tokens: u64,
+    prompt_tokens: u64,
+}
 
 /// Request body para busca Jina
 #[derive(Serialize)]
@@ -391,35 +966,7 @@ struct JinaSearchResult {
     snippet: String,
 }
 
-/// Request body para leitura de URL Jina
-#[derive(Serialize)]
-struct JinaReaderRequest {
-    url: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct JinaReaderResponse {
-    code: i32,
-    status: i32,
-    data: Option<JinaReaderData>,
-}
-
-#[derive(Deserialize, Debug)]
-struct JinaReaderData {
-    title: String,
-    #[serde(default)]
-    description: String,
-    url: String,
-    content: String,
-    #[serde(default)]
-    usage: Option<JinaReaderUsage>,
-}
-
-#[derive(Deserialize, Debug)]
-struct JinaReaderUsage {
-    #[serde(default)]
-    tokens: u64,
-}
+// Structs para Jina Reader removidas - agora usamos streaming SSE via GET
 
 #[derive(Serialize)]
 struct JinaRerankRequest {
@@ -542,20 +1089,20 @@ impl SearchClient for JinaClient {
         // Validar URL
         url::Url::parse(url).map_err(|e| SearchError::InvalidUrl(format!("Invalid URL: {}", e)))?;
 
-        log::info!("📖 Jina Reader: {}", url);
+        log::info!("📖 Jina Reader (streaming): {}", url);
 
-        // Usar POST com JSON body (igual ao TypeScript)
-        let request_body = JinaReaderRequest { url: url.clone() };
+        // Usar GET com streaming para receber chunks progressivos
+        // Formato oficial: https://r.jina.ai/https://example.com (SEM encoding)
+        let reader_url = format!("{}/{}", self.reader_endpoint, url);
 
         let response = self
             .client
-            .post(&self.reader_endpoint)
+            .get(&reader_url)
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Accept", "application/json")
-            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream") // Habilitar streaming SSE
+            .header("X-Return-Format", "markdown")
             .header("X-Md-Link-Style", "discarded")
             .header("X-Retain-Images", "none")
-            .json(&request_body)
             .timeout(std::time::Duration::from_secs(60))
             .send()
             .await
@@ -564,14 +1111,15 @@ impl SearchClient for JinaClient {
                 SearchError::NetworkError(e.to_string())
             })?;
 
-        log::info!("📡 Jina Reader response status: {}", response.status());
+        let status = response.status();
+        log::info!("📡 Jina Reader response status: {}", status);
 
-        if response.status() == 429 {
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             log::warn!("⚠️ Jina Reader rate limit exceeded");
             return Err(SearchError::RateLimitError);
         }
 
-        if !response.status().is_success() {
+        if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
             log::error!("❌ Jina Reader API error: {}", error_text);
             return Err(SearchError::FetchError(format!(
@@ -580,51 +1128,81 @@ impl SearchClient for JinaClient {
             )));
         }
 
-        let reader_response: JinaReaderResponse = response.json().await.map_err(|e| {
-            log::error!("❌ Failed to parse Jina Reader response: {}", e);
-            SearchError::ExtractionError(format!("Failed to parse reader response: {}", e))
+        // Processar streaming SSE - cada chunk contém mais conteúdo
+        let mut content = String::new();
+        let mut title = String::new();
+
+        // Ler bytes como stream
+        let bytes = response.bytes().await.map_err(|e| {
+            log::error!("❌ Jina Reader stream error: {}", e);
+            SearchError::NetworkError(e.to_string())
         })?;
 
-        // Verificar código de resposta da API
-        if reader_response.code != 200 {
-            log::error!(
-                "❌ Jina Reader API returned code={} status={}",
-                reader_response.code,
-                reader_response.status
-            );
-            return Err(SearchError::ApiError(format!(
-                "Jina Reader returned code {} status {}",
-                reader_response.code, reader_response.status
-            )));
+        let bytes_received = bytes.len();
+        let raw_text = String::from_utf8_lossy(&bytes);
+
+        // Processar SSE events - formato: "data: {content}\n\n"
+        for line in raw_text.lines() {
+            if line.starts_with("data: ") {
+                let data = &line[6..]; // Remover "data: "
+
+                // Tentar parsear como JSON (último evento contém JSON completo)
+                if data.starts_with('{') {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                        if let Some(t) = json.get("title").and_then(|v| v.as_str()) {
+                            title = t.to_string();
+                        }
+                        if let Some(c) = json.get("content").and_then(|v| v.as_str()) {
+                            content = c.to_string();
+                        }
+                        // Se tem 'data' aninhado (formato da API)
+                        if let Some(nested) = json.get("data") {
+                            if let Some(t) = nested.get("title").and_then(|v| v.as_str()) {
+                                title = t.to_string();
+                            }
+                            if let Some(c) = nested.get("content").and_then(|v| v.as_str()) {
+                                content = c.to_string();
+                            }
+                        }
+                    }
+                } else if !data.is_empty() && data != "[DONE]" {
+                    // Chunk de texto incremental
+                    content.push_str(data);
+                    content.push('\n');
+                }
+            }
         }
 
-        let data = reader_response
-            .data
-            .ok_or_else(|| SearchError::ExtractionError("No data in response".into()))?;
-
-        let word_count = data.content.split_whitespace().count();
-        let tokens_used = data.usage.as_ref().map(|u| u.tokens).unwrap_or(0);
-
-        // Usar todos os campos disponíveis no log
-        log::info!(
-            "✅ Jina Reader: '{}' | url={} | {} palavras | {} tokens | desc='{}'",
-            data.title,
-            data.url,
-            word_count,
-            tokens_used,
-            if data.description.len() > 50 {
-                format!("{}...", &data.description[..50])
-            } else {
-                data.description.clone()
+        // Se não conseguiu parsear SSE, usar conteúdo raw como markdown
+        if content.is_empty() {
+            content = raw_text.to_string();
+            // Tentar extrair título do início do markdown
+            if let Some(first_line) = content.lines().next() {
+                if first_line.starts_with("# ") {
+                    title = first_line[2..].trim().to_string();
+                }
             }
+        }
+
+        let word_count = content.split_whitespace().count();
+
+        log::info!(
+            "✅ Jina Reader: '{}' | {} bytes | {} palavras",
+            if title.len() > 40 {
+                format!("{}...", &title[..40])
+            } else {
+                title.clone()
+            },
+            bytes_received,
+            word_count
         );
 
         Ok(UrlContent {
-            title: data.title,
-            text: data.content,
-            url: data.url, // Usar URL retornada pela API (pode ter sido normalizada)
+            title,
+            text: content,
+            url: url.clone(),
             word_count,
-            read_time_ms: None, // Será preenchido pelo chamador se necessário
+            read_time_ms: None,
             source: Some("jina".to_string()),
         })
     }
@@ -634,22 +1212,38 @@ impl SearchClient for JinaClient {
         use std::time::Instant;
 
         let start = Instant::now();
-        log::info!("⚡ [PARALELO] Iniciando {} requisições simultâneas...", urls.len());
+        log::info!(
+            "⚡ [PARALELO] Iniciando {} leituras (Rust primeiro, Jina fallback)...",
+            urls.len()
+        );
 
-        let futures: Vec<_> = urls.iter().map(|url| self.read_url(url)).collect();
-        let results = join_all(futures).await;
+        // Usar o novo método com fallback
+        let futures: Vec<_> = urls
+            .iter()
+            .map(|url| self.read_url_with_fallback(url))
+            .collect();
+        let results_with_meta = join_all(futures).await;
 
         let elapsed = start.elapsed().as_millis();
         let avg_per_url = elapsed as f64 / urls.len().max(1) as f64;
+
+        // Contar métodos usados
+        let rust_count = results_with_meta.iter().filter(|(_, m, _)| *m == "rust_local").count();
+        let jina_count = results_with_meta.iter().filter(|(_, m, _)| *m == "jina").count();
+        let failed_count = results_with_meta.iter().filter(|(_, m, _)| *m == "failed").count();
+
         log::info!(
-            "⚡ [PARALELO] {} URLs lidas em {}ms (média efetiva: {:.0}ms/URL) - Se sequencial seria ~{}ms",
+            "⚡ [PARALELO] {} URLs em {}ms (média: {:.0}ms) | Rust: {} | Jina: {} | Falhas: {}",
             urls.len(),
             elapsed,
             avg_per_url,
-            urls.len() as u128 * 2000  // Estimativa de 2s por URL sequencial
+            rust_count,
+            jina_count,
+            failed_count
         );
 
-        results
+        // Extrair apenas os resultados
+        results_with_meta.into_iter().map(|(r, _, _)| r).collect()
     }
 
     async fn rerank(
@@ -667,7 +1261,7 @@ impl SearchClient for JinaClient {
             .collect();
 
         let request = JinaRerankRequest {
-            model: "jina-reranker-v1-base-en".into(),
+            model: "jina-reranker-v2-base-multilingual".into(), // Multilingual para PT-BR
             query: query.to_string(),
             documents,
             top_n: Some(urls.len()),
@@ -840,6 +1434,243 @@ impl SearchClient for JinaClient {
         );
 
         results
+    }
+
+    async fn read_url_with_fallback_progress(
+        &self,
+        url: &Url,
+        progress: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    ) -> (Result<UrlContent, SearchError>, &'static str, u8, usize) {
+        use crate::utils::FileReader;
+        use std::sync::atomic::Ordering;
+
+        const MIN_CONTENT_LENGTH: usize = 100;
+
+        // 🔥 FORÇAR JINA para URLs que precisam de JS/paywall bypass
+        if url_requires_jina(url) {
+            progress.store(10, Ordering::Relaxed);
+            log::info!("🔄 [JINA-FORCED] URL requer Jina: {}", url);
+
+            let jina_start = std::time::Instant::now();
+            progress.store(30, Ordering::Relaxed);
+
+            let jina_result = self.read_url(url).await;
+            let jina_time = jina_start.elapsed().as_millis();
+
+            progress.store(90, Ordering::Relaxed);
+
+            match jina_result {
+                Ok(mut content) => {
+                    if content.text.len() >= MIN_CONTENT_LENGTH {
+                        content.read_time_ms = Some(jina_time);
+                        progress.store(100, Ordering::Relaxed);
+                        log::info!(
+                            "✅ [JINA-FORCED] {} | {}ms | {} bytes",
+                            url, jina_time, content.text.len()
+                        );
+                        let bytes = content.text.len();
+                        return (Ok(content), "jina_forced", 1, bytes);
+                    } else {
+                        progress.store(100, Ordering::Relaxed);
+                        log::warn!(
+                            "⚠️ [JINA-FORCED] {} | conteúdo curto ({} bytes)",
+                            url, content.text.len()
+                        );
+                        // Ainda retorna o que conseguiu, pode ser útil
+                        content.read_time_ms = Some(jina_time);
+                        let bytes = content.text.len();
+                        return (Ok(content), "jina_forced_partial", 1, bytes);
+                    }
+                }
+                Err(e) => {
+                    progress.store(100, Ordering::Relaxed);
+                    log::error!("❌ [JINA-FORCED] {} | falha: {}", url, e);
+                    return (Err(e), "jina_forced_failed", 1, 0);
+                }
+            }
+        }
+
+        match self.webreader_preference {
+            // Usar apenas Jina - sem fallback
+            WebReaderPreference::JinaOnly => {
+                progress.store(10, Ordering::Relaxed);
+                log::debug!("📖 [JINA-ONLY] Lendo com progresso: {}", url);
+
+                let jina_start = std::time::Instant::now();
+                progress.store(30, Ordering::Relaxed);
+
+                let jina_result = self.read_url(url).await;
+                let jina_time = jina_start.elapsed().as_millis();
+
+                progress.store(90, Ordering::Relaxed);
+
+                match jina_result {
+                    Ok(mut content) => {
+                        if content.text.len() >= MIN_CONTENT_LENGTH {
+                            content.read_time_ms = Some(jina_time);
+                            progress.store(100, Ordering::Relaxed);
+                            log::info!("✅ [JINA-ONLY] {} | {}ms | {} bytes", url, jina_time, content.text.len());
+                            let bytes = content.text.len();
+                            (Ok(content), "jina", 1, bytes)
+                        } else {
+                            progress.store(100, Ordering::Relaxed);
+                            log::error!("❌ [JINA-ONLY] {} | conteúdo insuficiente", url);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto para {}", url
+                                ))),
+                                "failed",
+                                1,
+                                0,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        progress.store(100, Ordering::Relaxed);
+                        log::error!("❌ [JINA-ONLY] {} | falha: {}", url, e);
+                        (Err(e), "failed", 1, 0)
+                    }
+                }
+            }
+
+            // Usar apenas Rust local - sem fallback
+            WebReaderPreference::RustOnly => {
+                progress.store(10, Ordering::Relaxed);
+                log::debug!("📖 [RUST-ONLY] Lendo com progresso: {}", url);
+
+                let reader = FileReader::new();
+                let rust_start = std::time::Instant::now();
+                progress.store(30, Ordering::Relaxed);
+
+                let rust_result = reader.read_url(url).await;
+                let rust_time = rust_start.elapsed().as_millis();
+
+                progress.store(90, Ordering::Relaxed);
+
+                match rust_result {
+                    Ok(file_content) => {
+                        if file_content.text.len() >= MIN_CONTENT_LENGTH {
+                            progress.store(100, Ordering::Relaxed);
+                            log::info!(
+                                "✅ [RUST-ONLY] {} | {}ms | {} bytes",
+                                url, rust_time, file_content.text.len()
+                            );
+                            let bytes = file_content.text.len();
+                            (
+                                Ok(UrlContent {
+                                    title: file_content.title.unwrap_or_default(),
+                                    text: file_content.text,
+                                    url: file_content.source,
+                                    word_count: file_content.word_count,
+                                    read_time_ms: Some(rust_time),
+                                    source: Some("rust_local".to_string()),
+                                }),
+                                "rust_local",
+                                1,
+                                bytes,
+                            )
+                        } else {
+                            progress.store(100, Ordering::Relaxed);
+                            log::error!("❌ [RUST-ONLY] {} | conteúdo insuficiente", url);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto para {}", url
+                                ))),
+                                "failed",
+                                1,
+                                0,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        progress.store(100, Ordering::Relaxed);
+                        log::error!("❌ [RUST-ONLY] {} | falha: {}", url, e);
+                        (Err(SearchError::FetchError(e.to_string())), "failed", 1, 0)
+                    }
+                }
+            }
+
+            // Comportamento padrão: Rust primeiro, Jina como fallback
+            WebReaderPreference::Compare => {
+                // Fase 1: Rust local (0-50%)
+                progress.store(5, Ordering::Relaxed);
+
+                let reader = FileReader::new();
+                let rust_start = std::time::Instant::now();
+
+                progress.store(15, Ordering::Relaxed);
+                let rust_result = reader.read_url(url).await;
+                let rust_time = rust_start.elapsed().as_millis();
+
+                progress.store(45, Ordering::Relaxed);
+
+                if let Ok(file_content) = rust_result {
+                    if file_content.text.len() >= MIN_CONTENT_LENGTH {
+                        progress.store(100, Ordering::Relaxed);
+                        log::info!(
+                            "✅ [RUST+Readability] {} | {}ms | {} bytes",
+                            url, rust_time, file_content.text.len()
+                        );
+                        let bytes = file_content.text.len();
+                        return (
+                            Ok(UrlContent {
+                                title: file_content.title.unwrap_or_default(),
+                                text: file_content.text,
+                                url: file_content.source,
+                                word_count: file_content.word_count,
+                                read_time_ms: Some(rust_time),
+                                source: Some("rust_local".to_string()),
+                            }),
+                            "rust_local",
+                            1,
+                            bytes,
+                        );
+                    }
+                    log::warn!("⚠️ [RUST] {} conteúdo curto ({} bytes)", url, file_content.text.len());
+                } else if let Err(ref e) = rust_result {
+                    log::warn!("⚠️ [RUST] {} falhou: {}", url, e);
+                }
+
+                // Fase 2: Jina fallback (50-100%)
+                progress.store(55, Ordering::Relaxed);
+
+                let jina_start = std::time::Instant::now();
+                progress.store(65, Ordering::Relaxed);
+
+                let jina_result = self.read_url(url).await;
+                let jina_time = jina_start.elapsed().as_millis();
+
+                progress.store(90, Ordering::Relaxed);
+
+                match jina_result {
+                    Ok(mut content) => {
+                        if content.text.len() >= MIN_CONTENT_LENGTH {
+                            content.read_time_ms = Some(rust_time + jina_time);
+                            progress.store(100, Ordering::Relaxed);
+                            log::info!("✅ [JINA-FALLBACK] {} | {}ms | {} bytes", url, jina_time, content.text.len());
+                            let bytes = content.text.len();
+                            (Ok(content), "jina", 2, bytes)
+                        } else {
+                            progress.store(100, Ordering::Relaxed);
+                            log::error!("❌ [AMBOS] {} | conteúdo insuficiente", url);
+                            (
+                                Err(SearchError::ExtractionError(format!(
+                                    "Conteúdo muito curto em ambos os métodos para {}", url
+                                ))),
+                                "failed",
+                                2,
+                                0,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        progress.store(100, Ordering::Relaxed);
+                        log::error!("❌ [AMBOS] {} | falha: {}", url, e);
+                        (Err(e), "failed", 2, 0)
+                    }
+                }
+            }
+        }
     }
 }
 

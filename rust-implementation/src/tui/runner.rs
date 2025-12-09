@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -13,6 +13,14 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 use super::app::{App, AppEvent, LogEntry};
 use super::ui;
+
+/// Copia texto para o clipboard do sistema
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    use arboard::Clipboard;
+    let mut clipboard = Clipboard::new().map_err(|e| format!("Falha ao acessar clipboard: {}", e))?;
+    clipboard.set_text(text).map_err(|e| format!("Falha ao copiar: {}", e))?;
+    Ok(())
+}
 
 /// Executa a TUI com um receptor de eventos
 pub fn run_tui(question: String, event_rx: Receiver<AppEvent>) -> io::Result<App> {
@@ -61,21 +69,22 @@ fn run_app(
 
         // Processar input do usuário (com timeout)
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+            match event::read()? {
+                // Eventos de teclado
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
                     match app.screen {
                         // Tela de pesquisa - scroll nos logs
                         AppScreen::Research => match key.code {
-                        KeyCode::Char('q') => {
-                            app.should_quit = true;
-                            return Ok(());
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            app.scroll_up();
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            app.scroll_down();
-                        }
+                            KeyCode::Char('q') => {
+                                app.should_quit = true;
+                                return Ok(());
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                app.scroll_up();
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                app.scroll_down();
+                            }
                             KeyCode::PageUp => {
                                 for _ in 0..5 {
                                     app.scroll_up();
@@ -86,15 +95,15 @@ fn run_app(
                                     app.scroll_down();
                                 }
                             }
-                        KeyCode::Esc => {
-                            if app.is_complete {
-                                return Ok(());
+                            KeyCode::Esc => {
+                                if app.is_complete {
+                                    return Ok(());
+                                }
                             }
-                        }
-                        _ => {}
+                            _ => {}
                         },
 
-                        // Tela de resultado - scroll na resposta
+                        // Tela de resultado - scroll na resposta + copiar
                         AppScreen::Result => match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => {
                                 app.should_quit = true;
@@ -117,6 +126,16 @@ fn run_app(
                             }
                             KeyCode::End => {
                                 app.result_scroll = usize::MAX; // será limitado pelo render
+                            }
+                            KeyCode::Char('c') => {
+                                // Copiar resposta para clipboard
+                                if let Some(answer) = &app.answer {
+                                    if copy_to_clipboard(answer).is_ok() {
+                                        app.clipboard_message = Some("✓ Copiado!".to_string());
+                                    } else {
+                                        app.clipboard_message = Some("✗ Erro ao copiar".to_string());
+                                    }
+                                }
                             }
                             KeyCode::Enter => {
                                 // Nova pesquisa
@@ -141,8 +160,96 @@ fn run_app(
                             }
                             _ => {}
                         },
+
+                        // Tela de input requerido pelo agente
+                        AppScreen::InputRequired { .. } => match key.code {
+                            KeyCode::Enter => {
+                                // Enviar resposta
+                                if !app.input_text.is_empty() {
+                                    // Extrair question_id se disponível
+                                    let question_id = if let AppScreen::InputRequired { question_id, .. } = &app.screen {
+                                        Some(question_id.clone())
+                                    } else {
+                                        None
+                                    };
+
+                                    let response = app.input_text.clone();
+                                    app.handle_event(AppEvent::UserResponse {
+                                        question_id,
+                                        response,
+                                    });
+                                    app.input_text.clear();
+                                    app.cursor_pos = 0;
+                                }
+                            }
+                            KeyCode::Char(c) => {
+                                app.input_char(c);
+                            }
+                            KeyCode::Backspace => {
+                                app.input_backspace();
+                            }
+                            KeyCode::Left => {
+                                app.cursor_left();
+                            }
+                            KeyCode::Right => {
+                                app.cursor_right();
+                            }
+                            KeyCode::Home => {
+                                app.cursor_home();
+                            }
+                            KeyCode::End => {
+                                app.cursor_end();
+                            }
+                            KeyCode::Esc => {
+                                // Cancelar - voltar para pesquisa
+                                app.screen = AppScreen::Research;
+                            }
+                            _ => {}
+                        },
+
+                        // Tela de configurações
+                        AppScreen::Config => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => {
+                                app.should_quit = true;
+                                return Ok(());
+                            }
+                            KeyCode::Backspace | KeyCode::Tab => {
+                                // Voltar para pesquisa
+                                app.go_to_tab(super::app::ActiveTab::Search);
+                            }
+                            KeyCode::Char('1') => {
+                                app.go_to_tab(super::app::ActiveTab::Search);
+                            }
+                            KeyCode::Char('2') => {
+                                // Já está em Config
+                            }
+                            _ => {}
+                        },
                     }
                 }
+
+                // Eventos de mouse - scroll
+                Event::Mouse(mouse) => {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            match app.screen {
+                                AppScreen::Research => app.scroll_up(),
+                                AppScreen::Result => app.result_scroll_up(),
+                                _ => {}
+                            }
+                        }
+                        MouseEventKind::ScrollDown => {
+                            match app.screen {
+                                AppScreen::Research => app.scroll_down(),
+                                AppScreen::Result => app.result_scroll_down(),
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                _ => {}
             }
         }
 

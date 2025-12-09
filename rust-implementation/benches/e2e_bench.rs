@@ -316,6 +316,8 @@ fn bench_final_result(c: &mut Criterion) {
                 title: format!("Source {}", i),
                 exact_quote: Some(format!("Quote from source {}", i)),
                 relevance_score: Some(0.9 - (i as f32 * 0.02)),
+                answer_chunk: Some(format!("Answer chunk matching source {}", i)),
+                answer_position: Some((i * 100, i * 100 + 80)),
             })
             .collect();
 

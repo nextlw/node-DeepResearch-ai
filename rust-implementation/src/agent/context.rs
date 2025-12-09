@@ -2,6 +2,7 @@
 // CONTEXTO DO AGENTE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+use super::agent_analyzer::AgentAnalysis;
 use super::DiaryEntry;
 use crate::types::{BoostedSearchSnippet, KnowledgeItem, KnowledgeType};
 
@@ -49,6 +50,18 @@ pub struct AgentContext {
 
     /// Keywords já utilizadas em buscas
     pub all_keywords: Vec<String>,
+
+    /// Embeddings das queries já executadas (para deduplicação SIMD)
+    pub executed_query_embeddings: Vec<Vec<f32>>,
+
+    /// Queries já executadas (texto para referência)
+    pub executed_queries: Vec<String>,
+
+    /// Hints de melhoria do AgentAnalyzer (para injetar no prompt)
+    pub improvement_hints: Vec<String>,
+
+    /// Última análise de erro realizada (para display na TUI)
+    pub last_agent_analysis: Option<AgentAnalysis>,
 }
 
 impl AgentContext {
@@ -65,9 +78,25 @@ impl AgentContext {
             snippets: Vec::new(),
             diary: Vec::new(),
             total_step: 0,
-            allow_direct_answer: true,
+            allow_direct_answer: false, // Forçar pesquisa antes de responder
             all_keywords: Vec::new(),
+            executed_query_embeddings: Vec::new(),
+            executed_queries: Vec::new(),
+            improvement_hints: Vec::new(),
+            last_agent_analysis: None,
         }
+    }
+
+    /// Adiciona embedding de uma query executada
+    pub fn add_executed_query(&mut self, query: String, embedding: Vec<f32>) {
+        self.executed_queries.push(query);
+        self.executed_query_embeddings.push(embedding);
+    }
+
+    /// Adiciona múltiplos embeddings de queries executadas
+    pub fn add_executed_queries(&mut self, queries: Vec<String>, embeddings: Vec<Vec<f32>>) {
+        self.executed_queries.extend(queries);
+        self.executed_query_embeddings.extend(embeddings);
     }
 
     /// Retorna a pergunta atual sendo processada
@@ -141,6 +170,10 @@ impl AgentContext {
     }
 
     /// Verifica se uma URL é ruim (falhou anteriormente)
+    ///
+    /// NOTA: URLs de redes sociais, paywalls e JS-heavy agora são
+    /// automaticamente roteadas para Jina Reader em vez de bloqueadas.
+    /// Veja `search::url_requires_jina()` para a lista de domínios.
     pub fn is_url_bad(&self, url: &str) -> bool {
         self.bad_urls.contains(&url.to_string())
     }
@@ -198,8 +231,30 @@ impl AgentContext {
         self.snippets.clear();
         self.diary.clear();
         self.total_step = 0;
-        self.allow_direct_answer = true;
+        self.allow_direct_answer = false; // Forçar pesquisa antes de responder
         self.all_keywords.clear();
+        self.executed_query_embeddings.clear();
+        self.executed_queries.clear();
+        self.improvement_hints.clear();
+        self.last_agent_analysis = None;
+    }
+
+    /// Adiciona um hint de melhoria do AgentAnalyzer
+    pub fn add_improvement_hint(&mut self, hint: String) {
+        // Evita hints duplicados
+        if !self.improvement_hints.contains(&hint) {
+            self.improvement_hints.push(hint);
+        }
+    }
+
+    /// Define a última análise do agente
+    pub fn set_agent_analysis(&mut self, analysis: AgentAnalysis) {
+        self.last_agent_analysis = Some(analysis);
+    }
+
+    /// Verifica se há hints de melhoria disponíveis
+    pub fn has_improvement_hints(&self) -> bool {
+        !self.improvement_hints.is_empty()
     }
 }
 
@@ -271,5 +326,73 @@ mod tests {
 
         assert!(ctx.is_url_bad("https://bad.com"));
         assert!(!ctx.is_url_bad("https://other.com"));
+    }
+
+    #[test]
+    fn test_improvement_hints() {
+        let mut ctx = AgentContext::new();
+
+        // Inicialmente vazio
+        assert!(!ctx.has_improvement_hints());
+        assert!(ctx.improvement_hints.is_empty());
+
+        // Adicionar hint
+        ctx.add_improvement_hint("Avoid repetitive searches".into());
+        assert!(ctx.has_improvement_hints());
+        assert_eq!(ctx.improvement_hints.len(), 1);
+
+        // Adicionar outro hint
+        ctx.add_improvement_hint("Focus on reliable sources".into());
+        assert_eq!(ctx.improvement_hints.len(), 2);
+
+        // Tentar adicionar hint duplicado (não deve adicionar)
+        ctx.add_improvement_hint("Avoid repetitive searches".into());
+        assert_eq!(ctx.improvement_hints.len(), 2);
+    }
+
+    #[test]
+    fn test_agent_analysis() {
+        let mut ctx = AgentContext::new();
+
+        // Inicialmente nenhuma análise
+        assert!(ctx.last_agent_analysis.is_none());
+
+        // Definir análise
+        let analysis = AgentAnalysis {
+            recap: "Test recap".into(),
+            blame: "Test blame".into(),
+            improvement: "Test improvement".into(),
+            duration_ms: Some(100),
+        };
+        ctx.set_agent_analysis(analysis);
+
+        assert!(ctx.last_agent_analysis.is_some());
+        let stored = ctx.last_agent_analysis.as_ref().unwrap();
+        assert_eq!(stored.recap, "Test recap");
+        assert_eq!(stored.blame, "Test blame");
+        assert_eq!(stored.improvement, "Test improvement");
+    }
+
+    #[test]
+    fn test_reset_clears_hints_and_analysis() {
+        let mut ctx = AgentContext::new();
+
+        // Adicionar dados
+        ctx.add_improvement_hint("Test hint".into());
+        ctx.set_agent_analysis(AgentAnalysis {
+            recap: "recap".into(),
+            blame: "blame".into(),
+            improvement: "improvement".into(),
+            duration_ms: None,
+        });
+
+        assert!(ctx.has_improvement_hints());
+        assert!(ctx.last_agent_analysis.is_some());
+
+        // Reset deve limpar tudo
+        ctx.reset();
+
+        assert!(!ctx.has_improvement_hints());
+        assert!(ctx.last_agent_analysis.is_none());
     }
 }
