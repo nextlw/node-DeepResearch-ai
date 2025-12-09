@@ -14,7 +14,6 @@
 //! - Se resultado < 85% do original, retorna original
 
 use std::sync::Arc;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::llm::LlmClient;
@@ -27,14 +26,14 @@ pub enum FinalizerError {
     /// Erro na comunicação com o LLM.
     #[error("LLM error: {0}")]
     LlmError(String),
-    
+
     /// Resposta gerada é muito curta comparada ao original.
     #[error("Response too short: {ratio}% of original")]
     ResponseTooShort {
         /// Proporção da resposta em relação ao original.
         ratio: f32,
     },
-    
+
     /// Erro de parse na resposta do LLM.
     #[error("Parse error: {0}")]
     ParseError(String),
@@ -46,10 +45,10 @@ pub struct FinalizerConfig {
     /// Proporção mínima do resultado em relação ao original (0.0 - 1.0).
     /// Se o resultado for menor que isso, retorna o original.
     pub min_ratio: f32,
-    
+
     /// Temperatura para geração do LLM.
     pub temperature: f32,
-    
+
     /// Número máximo de tokens para a resposta.
     pub max_tokens: u32,
 }
@@ -69,10 +68,10 @@ impl Default for FinalizerConfig {
 pub struct FinalizedResponse {
     /// Texto polido da resposta.
     pub content: String,
-    
+
     /// Raciocínio do editor sobre as mudanças.
     pub think: String,
-    
+
     /// Se o original foi preservado (não atendeu critérios).
     pub preserved_original: bool,
 }
@@ -94,7 +93,7 @@ pub struct FinalizedResponse {
 pub struct ResponseFinalizer {
     /// Cliente LLM para geração de texto.
     llm_client: Arc<dyn LlmClient>,
-    
+
     /// Configuração do finalizador.
     config: FinalizerConfig,
 }
@@ -110,7 +109,7 @@ impl ResponseFinalizer {
             config: FinalizerConfig::default(),
         }
     }
-    
+
     /// Cria um novo finalizador com configuração customizada.
     ///
     /// # Argumentos
@@ -119,7 +118,7 @@ impl ResponseFinalizer {
     pub fn with_config(llm_client: Arc<dyn LlmClient>, config: FinalizerConfig) -> Self {
         Self { llm_client, config }
     }
-    
+
     /// Finaliza (polir) uma resposta como um editor sênior.
     ///
     /// # Argumentos
@@ -141,14 +140,29 @@ impl ResponseFinalizer {
         if md_content.len() < 100 {
             return Ok(md_content.to_string());
         }
-        
+
         let system_prompt = self.build_system_prompt(language);
         let user_prompt = self.build_user_prompt(md_content, knowledge_items);
-        
-        // Simula chamada ao LLM (em produção, usaria self.llm_client)
-        // Por enquanto, retorna o original com pequenas melhorias
-        let result = self.polish_content(md_content);
-        
+
+        // Tenta usar LLM para polir o conteúdo
+        let (result, tokens_used) = match self.generate_polished_with_llm(&system_prompt, &user_prompt).await {
+            Ok((polished, response)) => {
+                log::info!("✅ ResponseFinalizer: Conteúdo polido com LLM");
+                // Usa tokens reais da resposta do LLM
+                let tokens = (response.prompt_tokens, response.completion_tokens);
+                (polished, tokens)
+            }
+            Err(e) => {
+                log::warn!("⚠️ ResponseFinalizer: Falha ao usar LLM ({}), usando fallback", e);
+                // Fallback: polimento básico sem LLM
+                let polished = self.polish_content(md_content);
+                let polished_len = polished.len();
+                // Estimativa de tokens para fallback
+                let tokens = ((md_content.len() / 4) as u64, (polished_len / 4) as u64);
+                (polished, tokens)
+            }
+        };
+
         // Validação: se resultado é muito menor que original, usa original
         let ratio = result.len() as f32 / md_content.len() as f32;
         if ratio < self.config.min_ratio {
@@ -158,13 +172,13 @@ impl ResponseFinalizer {
             );
             return Ok(md_content.to_string());
         }
-        
-        // Atualiza tracker de tokens (estimativa)
-        tracker.add_tokens("finalizer", (md_content.len() / 4) as u64, (result.len() / 4) as u64);
-        
+
+        // Atualiza tracker de tokens (reais do LLM ou estimativa)
+        tracker.add_tokens("finalizer", tokens_used.0, tokens_used.1);
+
         Ok(result)
     }
-    
+
     /// Constrói o prompt do sistema para o editor.
     fn build_system_prompt(&self, language: &Language) -> String {
         let lang_instruction = match language {
@@ -178,7 +192,7 @@ impl ResponseFinalizer {
             Language::Korean => "한국어로 답변해 주세요.",
             _ => "Respond in English.",
         };
-        
+
         format!(r#"You are a senior editor with multiple best-selling books. Your job is to polish the given response while preserving its original essence and voice.
 
 ## Guidelines
@@ -199,7 +213,7 @@ impl ResponseFinalizer {
 
 Output the polished version directly, no explanations needed."#, lang_instruction)
     }
-    
+
     /// Constrói o prompt do usuário com o conteúdo a ser polido.
     fn build_user_prompt(&self, md_content: &str, knowledge_items: &[KnowledgeItem]) -> String {
         let knowledge_context = if knowledge_items.is_empty() {
@@ -212,7 +226,7 @@ Output the polished version directly, no explanations needed."#, lang_instructio
                 .collect();
             format!("\n\n<context>\n{}\n</context>", items.join("\n"))
         };
-        
+
         format!(r#"Please polish the following response:
 
 <response>
@@ -220,28 +234,52 @@ Output the polished version directly, no explanations needed."#, lang_instructio
 </response>
 {}"#, md_content, knowledge_context)
     }
-    
+
+    /// Gera conteúdo polido usando LLM de forma performática.
+    ///
+    /// Retorna o conteúdo polido e a resposta completa (incluindo tokens)
+    /// para permitir rastreamento preciso de uso de tokens.
+    async fn generate_polished_with_llm(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Result<(String, crate::llm::LlmResponse), FinalizerError> {
+        let prompt = crate::agent::AgentPrompt {
+            system: system_prompt.to_string(),
+            user: user_prompt.to_string(),
+            diary: vec![],
+        };
+
+        let response = self
+            .llm_client
+            .generate_answer(&prompt, self.config.temperature)
+            .await
+            .map_err(|e| FinalizerError::LlmError(e.to_string()))?;
+
+        Ok((response.answer.clone(), response))
+    }
+
     /// Polimento básico do conteúdo (fallback quando LLM não disponível).
     fn polish_content(&self, content: &str) -> String {
         let mut result = content.to_string();
-        
+
         // Remove linhas em branco duplicadas
         while result.contains("\n\n\n") {
             result = result.replace("\n\n\n", "\n\n");
         }
-        
+
         // Remove espaços em branco no final das linhas
         result = result
             .lines()
             .map(|line| line.trim_end())
             .collect::<Vec<_>>()
             .join("\n");
-        
+
         // Garante que termina com uma linha em branco
         if !result.ends_with('\n') {
             result.push('\n');
         }
-        
+
         result
     }
 }
@@ -250,10 +288,11 @@ Output the polished version directly, no explanations needed."#, lang_instructio
 mod tests {
     use super::*;
     use std::sync::Arc;
-    
+    use async_trait::async_trait;
+
     // Mock LLM client para testes
     struct MockLlmClient;
-    
+
     #[async_trait]
     impl LlmClient for MockLlmClient {
         async fn decide_action(
@@ -267,7 +306,7 @@ mod tests {
                 think: "Mock".into(),
             })
         }
-        
+
         async fn generate_answer(
             &self,
             _prompt: &crate::agent::AgentPrompt,
@@ -281,21 +320,21 @@ mod tests {
                 total_tokens: 20,
             })
         }
-        
+
         async fn embed(&self, _text: &str) -> Result<crate::llm::EmbeddingResult, crate::llm::LlmError> {
             Ok(crate::llm::EmbeddingResult {
                 vector: vec![0.0; 1536],
                 tokens_used: 10,
             })
         }
-        
+
         async fn embed_batch(&self, texts: &[String]) -> Result<Vec<crate::llm::EmbeddingResult>, crate::llm::LlmError> {
             Ok(texts.iter().map(|_| crate::llm::EmbeddingResult {
                 vector: vec![0.0; 1536],
                 tokens_used: 10,
             }).collect())
         }
-        
+
         async fn evaluate(
             &self,
             _question: &str,
@@ -308,44 +347,75 @@ mod tests {
                 confidence: 0.95,
             })
         }
-        
+
         async fn determine_eval_types(
             &self,
             _question: &str,
         ) -> Result<Vec<crate::evaluation::EvaluationType>, crate::llm::LlmError> {
             Ok(vec![crate::evaluation::EvaluationType::Definitive])
         }
+
+        async fn generate_code(
+            &self,
+            _problem: &str,
+            _available_vars: &str,
+            _previous_attempts: &[(String, Option<String>)],
+        ) -> Result<crate::llm::CodeGenResponse, crate::llm::LlmError> {
+            Ok(crate::llm::CodeGenResponse {
+                code: "return 42;".into(),
+                think: "Mock code generation".into(),
+            })
+        }
+
+        async fn generate_python_code(
+            &self,
+            _problem: &str,
+            _available_vars: &str,
+            _previous_attempts: &[(String, Option<String>)],
+        ) -> Result<crate::llm::CodeGenResponse, crate::llm::LlmError> {
+            Ok(crate::llm::CodeGenResponse {
+                code: "print(42)".into(),
+                think: "Mock Python code generation".into(),
+            })
+        }
+
+        async fn choose_coding_language(
+            &self,
+            _problem: &str,
+        ) -> Result<crate::agent::SandboxLanguage, crate::llm::LlmError> {
+            Ok(crate::agent::SandboxLanguage::JavaScript)
+        }
     }
-    
+
     #[tokio::test]
     async fn test_finalizer_short_content() {
         let client = Arc::new(MockLlmClient);
         let finalizer = ResponseFinalizer::new(client);
         let mut tracker = TokenTracker::new(Some(100000));
-        
+
         let result = finalizer
             .finalize_answer("Short", &[], &Language::English, &mut tracker)
             .await
             .unwrap();
-        
+
         assert_eq!(result, "Short");
     }
-    
+
     #[tokio::test]
     async fn test_finalizer_removes_extra_newlines() {
         let client = Arc::new(MockLlmClient);
         let finalizer = ResponseFinalizer::new(client);
         let mut tracker = TokenTracker::new(Some(100000));
-        
+
         let content = "This is a test\n\n\n\nwith many\n\n\nnewlines that should be cleaned up properly in the final output.";
         let result = finalizer
             .finalize_answer(content, &[], &Language::English, &mut tracker)
             .await
             .unwrap();
-        
+
         assert!(!result.contains("\n\n\n"));
     }
-    
+
     #[test]
     fn test_config_defaults() {
         let config = FinalizerConfig::default();

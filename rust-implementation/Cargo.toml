@@ -100,9 +100,6 @@ sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "chrono", "uu
 # Qdrant para busca vetorial semântica
 qdrant-client = { version = "1.9", optional = true }
 
-# Regex for text processing
-regex = "1.10"
-
 # Lazy static for static initialization
 once_cell = "1.19"
 
