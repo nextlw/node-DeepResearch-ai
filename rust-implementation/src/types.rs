@@ -134,7 +134,7 @@ impl Default for TopicCategory {
 }
 
 /// Query de busca SERP
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SerpQuery {
     /// Texto da query
     pub q: String,

@@ -140,6 +140,15 @@ pub mod llm;
 /// - Reranking de resultados por relevância
 pub mod search;
 
+/// Sistema de rastreamento de busca (SearchTrace).
+///
+/// Permite rastrear o fluxo de dados de cada operação de busca:
+/// - Origem da query (User, Persona, Reflection, etc.)
+/// - API chamada e timestamps
+/// - Resultados e URLs extraídas
+/// - Métricas agregadas por execução
+pub mod search_trace;
+
 /// Comparação de readers: Jina vs Rust + OpenAI.
 ///
 /// Módulo para benchmark e comparação de diferentes métodos

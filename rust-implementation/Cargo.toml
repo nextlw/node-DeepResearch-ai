@@ -46,7 +46,7 @@ anyhow = "1.0"
 async-trait = "0.1"
 
 # UUID generation
-uuid = { version = "1.6", features = ["v4"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
 
 # Configuration
 config = "0.13"
