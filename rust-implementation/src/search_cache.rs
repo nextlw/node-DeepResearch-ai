@@ -9,7 +9,7 @@
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 use std::time::Duration;
@@ -586,10 +586,10 @@ mod tests {
     fn test_cache_entry_touch() {
         let mut entry = CacheEntry::new("test", 60);
         assert_eq!(entry.hit_count, 0);
-        
+
         entry.touch();
         assert_eq!(entry.hit_count, 1);
-        
+
         entry.touch();
         assert_eq!(entry.hit_count, 2);
     }
@@ -597,15 +597,15 @@ mod tests {
     #[test]
     fn test_cache_set_get() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         let key = CacheKey {
             query: "test".into(),
             tbs: None,
             location: None,
         };
-        
+
         cache.set(key.clone(), "cached value".into());
-        
+
         let result = cache.get(&key);
         assert_eq!(result, Some("cached value".into()));
     }
@@ -613,13 +613,13 @@ mod tests {
     #[test]
     fn test_cache_miss() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         let key = CacheKey {
             query: "nonexistent".into(),
             tbs: None,
             location: None,
         };
-        
+
         let result = cache.get(&key);
         assert_eq!(result, None);
     }
@@ -631,16 +631,16 @@ mod tests {
             ..Default::default()
         };
         let cache: SearchCache<String> = SearchCache::new(config);
-        
+
         let key = CacheKey {
             query: "test".into(),
             tbs: None,
             location: None,
         };
-        
+
         cache.set(key.clone(), "value".into());
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         let result = cache.get(&key);
         assert_eq!(result, None);
     }
@@ -648,16 +648,16 @@ mod tests {
     #[test]
     fn test_cache_remove() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         let key = CacheKey {
             query: "test".into(),
             tbs: None,
             location: None,
         };
-        
+
         cache.set(key.clone(), "value".into());
         assert!(cache.contains(&key));
-        
+
         let removed = cache.remove(&key);
         assert_eq!(removed, Some("value".into()));
         assert!(!cache.contains(&key));
@@ -666,7 +666,7 @@ mod tests {
     #[test]
     fn test_cache_clear() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         for i in 0..5 {
             let key = CacheKey {
                 query: format!("test{}", i),
@@ -675,9 +675,9 @@ mod tests {
             };
             cache.set(key, format!("value{}", i));
         }
-        
+
         assert_eq!(cache.len(), 5);
-        
+
         cache.clear();
         assert_eq!(cache.len(), 0);
     }
@@ -689,7 +689,7 @@ mod tests {
             ..Default::default()
         };
         let cache: SearchCache<String> = SearchCache::new(config);
-        
+
         for i in 0..5 {
             let key = CacheKey {
                 query: format!("test{}", i),
@@ -698,9 +698,9 @@ mod tests {
             };
             cache.set(key, format!("value{}", i));
         }
-        
+
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         let removed = cache.cleanup();
         assert_eq!(removed, 5);
         assert_eq!(cache.len(), 0);
@@ -714,7 +714,7 @@ mod tests {
             ..Default::default()
         };
         let cache: SearchCache<String> = SearchCache::new(config);
-        
+
         for i in 0..5 {
             let key = CacheKey {
                 query: format!("test{}", i),
@@ -723,7 +723,7 @@ mod tests {
             };
             cache.set(key, format!("value{}", i));
         }
-        
+
         // Deve manter apenas 3 entradas
         assert!(cache.len() <= 3);
     }
@@ -731,19 +731,19 @@ mod tests {
     #[test]
     fn test_cache_stats() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         let key = CacheKey {
             query: "test".into(),
             tbs: None,
             location: None,
         };
-        
+
         cache.set(key.clone(), "value".into());
-        
+
         // 2 hits
         cache.get(&key);
         cache.get(&key);
-        
+
         // 1 miss
         let missing = CacheKey {
             query: "missing".into(),
@@ -751,7 +751,7 @@ mod tests {
             location: None,
         };
         cache.get(&missing);
-        
+
         let stats = cache.stats();
         assert_eq!(stats.hits, 2);
         assert_eq!(stats.misses, 1);
@@ -761,41 +761,41 @@ mod tests {
     #[test]
     fn test_cache_hit_rate() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         let key = CacheKey {
             query: "test".into(),
             tbs: None,
             location: None,
         };
-        
+
         cache.set(key.clone(), "value".into());
-        
+
         cache.get(&key); // hit
         cache.get(&key); // hit
         cache.get(&key); // hit
-        
+
         let missing = CacheKey {
             query: "missing".into(),
             tbs: None,
             location: None,
         };
         cache.get(&missing); // miss
-        
+
         assert!((cache.hit_rate() - 0.75).abs() < 0.01);
     }
 
     #[test]
     fn test_cache_contains() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         let key = CacheKey {
             query: "test".into(),
             tbs: None,
             location: None,
         };
-        
+
         assert!(!cache.contains(&key));
-        
+
         cache.set(key.clone(), "value".into());
         assert!(cache.contains(&key));
     }
@@ -803,7 +803,7 @@ mod tests {
     #[test]
     fn test_cache_keys() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         for i in 0..3 {
             let key = CacheKey {
                 query: format!("test{}", i),
@@ -812,7 +812,7 @@ mod tests {
             };
             cache.set(key, format!("value{}", i));
         }
-        
+
         let keys = cache.keys();
         assert_eq!(keys.len(), 3);
     }
@@ -820,18 +820,18 @@ mod tests {
     #[test]
     fn test_cache_entry_info() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         let key = CacheKey {
             query: "test".into(),
             tbs: None,
             location: None,
         };
-        
+
         cache.set(key.clone(), "value".into());
-        
+
         let info = cache.entry_info(&key);
         assert!(info.is_some());
-        
+
         let info = info.unwrap();
         assert!(!info.is_expired);
         assert_eq!(info.hit_count, 0);
@@ -840,24 +840,24 @@ mod tests {
     #[test]
     fn test_cache_get_and_touch() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         let key = CacheKey {
             query: "test".into(),
             tbs: None,
             location: None,
         };
-        
+
         cache.set(key.clone(), "value".into());
-        
+
         // Primeiro acesso
         cache.get_and_touch(&key);
-        
+
         let info = cache.entry_info(&key).unwrap();
         assert_eq!(info.hit_count, 1);
-        
+
         // Segundo acesso
         cache.get_and_touch(&key);
-        
+
         let info = cache.entry_info(&key).unwrap();
         assert_eq!(info.hit_count, 2);
     }
@@ -865,7 +865,7 @@ mod tests {
     #[test]
     fn test_cache_summary() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         let key = CacheKey {
             query: "test".into(),
             tbs: None,
@@ -873,7 +873,7 @@ mod tests {
         };
         cache.set(key.clone(), "value".into());
         cache.get(&key);
-        
+
         let summary = cache.summary();
         assert!(summary.contains("SearchCache"));
         assert!(summary.contains("1 entries"));
@@ -883,7 +883,7 @@ mod tests {
     fn test_config_presets() {
         let short = CacheConfig::short_lived();
         assert_eq!(short.default_ttl_secs, 60);
-        
+
         let long = CacheConfig::long_lived();
         assert_eq!(long.default_ttl_secs, 3600);
     }
@@ -891,16 +891,16 @@ mod tests {
     #[test]
     fn test_cache_with_custom_ttl() {
         let cache: SearchCache<String> = SearchCache::new(CacheConfig::for_tests());
-        
+
         let key = CacheKey {
             query: "test".into(),
             tbs: None,
             location: None,
         };
-        
+
         cache.set_with_ttl(key.clone(), "value".into(), 0);
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         // Deve ter expirado
         assert!(cache.get(&key).is_none());
     }

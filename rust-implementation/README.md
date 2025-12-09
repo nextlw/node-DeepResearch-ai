@@ -8,6 +8,7 @@
 ## 📋 Índice
 
 - [Instalação](#-instalação)
+- [Referência Rápida](#-referência-rápida)
 - [Comandos CLI](#-comandos-cli)
 - [Atalhos TUI](#-atalhos-tui)
 - [Navegação por Tabs](#-navegação-por-tabs)
@@ -38,6 +39,34 @@ cargo build --release
 ./target/release/deep-research-cli "sua pergunta"
 ```
 
+### Features Opcionais
+
+O projeto possui features opcionais que podem ser habilitadas conforme necessário:
+
+| Feature     | Descrição                                                   | Uso                   |
+| ----------- | ----------------------------------------------------------- | --------------------- |
+| `clipboard` | Suporte a copiar respostas para área de transferência (TUI) | Desenvolvimento local |
+| `postgres`  | Backend PostgreSQL para histórico persistente               | Produção (Railway)    |
+| `qdrant`    | Busca vetorial semântica com Qdrant                         | Produção              |
+| `simd`      | Otimizações SIMD (requer nightly)                           | Performance           |
+
+```bash
+# Produção (backend apenas, sem TUI)
+cargo build --release
+
+# Desenvolvimento com TUI (inclui clipboard)
+cargo build --release --features clipboard
+
+# Rodar TUI local com clipboard
+cargo run --features clipboard -- --tui
+
+# Produção completa (PostgreSQL + Qdrant)
+cargo build --release --features "postgres,qdrant"
+
+# Todas as features
+cargo build --release --features "clipboard,postgres,qdrant,simd"
+```
+
 ### Variáveis de Ambiente Necessárias
 
 ```bash
@@ -45,6 +74,89 @@ cargo build --release
 OPENAI_API_KEY=sua-chave-openai
 JINA_API_KEY=sua-chave-jina
 ```
+
+---
+
+## 📖 Referência Rápida
+
+### Menu de Inicialização
+
+Ao executar sem argumentos, um **menu interativo** é exibido:
+
+```bash
+cargo run
+# ou
+./target/release/deep-research-cli
+```
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║     🔬 DEEP RESEARCH CLI                                      ║
+║     Agente de Pesquisa Profunda com IA                        ║
+╚═══════════════════════════════════════════════════════════════╝
+
+▶ 🖥️  Interface TUI Interativa
+  🔍 Pesquisa Direta (terminal)
+  📊 Comparar Web Readers
+  ⚡ Pesquisa com Comparação Live
+  ❓ Ajuda (mostrar comandos)
+  ❌ Sair
+
+↑↓: Navegar │ Enter: Selecionar │ q: Sair
+```
+
+| Tecla   | Ação             |
+| ------- | ---------------- |
+| `↑` `↓` | Navegar opções   |
+| `1-6`   | Seleção direta   |
+| `Enter` | Selecionar opção |
+| `q`     | Sair             |
+
+### Todos os Comandos
+
+| Comando                                          | Descrição                                   |
+| ------------------------------------------------ | ------------------------------------------- |
+| `deep-research-cli "pergunta"`                   | Executa pesquisa direta no terminal         |
+| `deep-research-cli --tui`                        | Abre interface TUI vazia para digitar       |
+| `deep-research-cli --tui "pergunta"`             | Abre TUI com pergunta pré-definida          |
+| `deep-research-cli --budget <tokens> "pergunta"` | Define limite de tokens (padrão: 1.000.000) |
+| `deep-research-cli --compare "url1,url2"`        | Compara Jina Reader vs Rust+OpenAI          |
+| `deep-research-cli --compare-live "pergunta"`    | Pesquisa com comparação em tempo real       |
+
+### Flags Disponíveis
+
+| Flag             | Tipo     | Padrão    | Descrição                                             |
+| ---------------- | -------- | --------- | ----------------------------------------------------- |
+| `--tui`          | `bool`   | `false`   | Ativa modo interface interativa (TUI)                 |
+| `--budget`       | `u64`    | `1000000` | Budget máximo de tokens para a pesquisa               |
+| `--compare`      | `string` | -         | URLs separadas por vírgula para comparação standalone |
+| `--compare-live` | `bool`   | `false`   | Habilita comparação Jina vs Rust durante pesquisa     |
+
+### Features de Compilação
+
+| Feature    | Comando                                                        | Descrição                                  |
+| ---------- | -------------------------------------------------------------- | ------------------------------------------ |
+| Padrão     | `cargo build --release`                                        | Backend sem TUI (produção)                 |
+| Clipboard  | `cargo build --release --features clipboard`                   | Habilita copiar para área de transferência |
+| PostgreSQL | `cargo build --release --features postgres`                    | Backend de histórico persistente           |
+| Qdrant     | `cargo build --release --features qdrant`                      | Busca vetorial semântica                   |
+| SIMD       | `cargo build --release --features simd`                        | Otimizações SIMD (nightly)                 |
+| Completo   | `cargo build --release --features "clipboard,postgres,qdrant"` | Todas as features de produção              |
+
+### Atalhos TUI (Principais)
+
+| Tecla         | Ação                              |
+| ------------- | --------------------------------- |
+| `Tab`         | Alternar entre tabs / focar input |
+| `Enter`       | Enviar pergunta / follow-up       |
+| `q` / `Esc`   | Sair / voltar                     |
+| `c`           | Copiar resposta ¹                 |
+| `r`           | Ver logs da pesquisa              |
+| `↑↓` / `jk`   | Scroll na resposta                |
+| `PageUp/Down` | Scroll rápido                     |
+| `Home/End`    | Início/fim da resposta            |
+
+> ¹ Requer `--features clipboard`
 
 ---
 
@@ -135,21 +247,23 @@ deep-research-cli --compare-live "Qual é a linguagem de programação mais usad
 
 ### `[result]` Tela de Resultado
 
-| Tecla       | Ação                              |
-| ----------- | --------------------------------- |
-| `Tab`       | Focar/desfocar input de follow-up |
-| `Enter`     | Enviar follow-up (se focado)      |
-| `q` / `Esc` | Sair (ou desfocar input)          |
-| `1` / `2`   | Ir para tab específica            |
-| `r`         | Alternar para ver logs            |
-| `c`         | **Copiar resposta p/ clipboard**  |
-| `↑` / `k`   | Scroll resposta para cima         |
-| `↓` / `j`   | Scroll resposta para baixo        |
-| `PageUp`    | Page up na resposta               |
-| `PageDown`  | Page down na resposta             |
-| `Home`      | Início da resposta                |
-| `End`       | Fim da resposta                   |
-| `🖱️ Scroll` | Scroll com roda do mouse          |
+| Tecla       | Ação                               |
+| ----------- | ---------------------------------- |
+| `Tab`       | Focar/desfocar input de follow-up  |
+| `Enter`     | Enviar follow-up (se focado)       |
+| `q` / `Esc` | Sair (ou desfocar input)           |
+| `1` / `2`   | Ir para tab específica             |
+| `r`         | Alternar para ver logs             |
+| `c`         | **Copiar resposta p/ clipboard** ¹ |
+| `↑` / `k`   | Scroll resposta para cima          |
+| `↓` / `j`   | Scroll resposta para baixo         |
+| `PageUp`    | Page up na resposta                |
+| `PageDown`  | Page down na resposta              |
+| `Home`      | Início da resposta                 |
+| `End`       | Fim da resposta                    |
+| `🖱️ Scroll` | Scroll com roda do mouse           |
+
+> ¹ Requer compilação com `--features clipboard`
 
 ### `[config]` Tela de Configurações
 
@@ -784,7 +898,7 @@ less logs/$(ls -t logs/ | head -1)
 **Novidades v0.1.x:**
 
 - 🖱️ **Mouse scroll** - Roda do mouse funciona em todas as telas
-- 📋 **Copiar resposta** - Tecla `c` copia para clipboard do sistema
+- 📋 **Copiar resposta** - Tecla `c` copia para clipboard do sistema (requer `--features clipboard`)
 - 📜 **Scrollbar visual** - Indicador de posição na resposta
 
 ### `[tui-state]` Estado da Aplicação (App)

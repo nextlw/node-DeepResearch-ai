@@ -33,4 +33,4 @@ pub use app::{
     ParallelBatch, ParallelTask, PersonaStats, ReadMethod, ResearchSession, SandboxExecution,
     SandboxState, SystemMetrics, TaskStatus,
 };
-pub use runner::{create_event_channel, run_tui, TuiLogger};
+pub use runner::{create_event_channel, execute_benchmark, run_tui, TuiLogger};

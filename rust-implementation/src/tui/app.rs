@@ -186,6 +186,174 @@ pub struct SandboxState {
     pub executions: Vec<SandboxExecution>,
 }
 
+/// Estado dos Benchmarks
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BenchmarksState {
+    /// Benchmarks disponíveis
+    pub available: Vec<BenchmarkInfo>,
+    /// Índice do benchmark selecionado
+    pub selected: Option<usize>,
+    /// Benchmark em execução
+    pub running: Option<String>,
+    /// Resultado do último benchmark executado
+    pub last_result: Option<BenchmarkResult>,
+    /// Logs da execução atual
+    pub execution_logs: VecDeque<LogEntry>,
+    /// Scroll position nos logs
+    pub log_scroll: usize,
+}
+
+/// Informação sobre um benchmark
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkInfo {
+    /// Nome do benchmark
+    pub name: String,
+    /// Descrição
+    pub description: String,
+    /// Nome do arquivo de benchmark
+    pub bench_file: String,
+}
+
+/// Resultado de um benchmark
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkResult {
+    /// Nome do benchmark
+    pub name: String,
+    /// Timestamp de início
+    pub started_at: String,
+    /// Timestamp de fim
+    pub finished_at: String,
+    /// Duração em segundos
+    pub duration_secs: f64,
+    /// Saída do benchmark
+    pub output: String,
+    /// Se foi bem-sucedido
+    pub success: bool,
+    /// Erro (se houver)
+    pub error: Option<String>,
+}
+
+impl BenchmarksState {
+    /// Cria novo estado de benchmarks
+    pub fn new() -> Self {
+        let mut state = Self {
+            available: Vec::new(),
+            selected: None,
+            running: None,
+            last_result: None,
+            execution_logs: VecDeque::new(),
+            log_scroll: 0,
+        };
+        state.load_available_benchmarks();
+        state
+    }
+
+    /// Carrega lista de benchmarks disponíveis
+    fn load_available_benchmarks(&mut self) {
+        self.available = vec![
+            BenchmarkInfo {
+                name: "Personas".to_string(),
+                description: "Performance de criação e expansão de queries pelas personas".to_string(),
+                bench_file: "personas_bench".to_string(),
+            },
+            BenchmarkInfo {
+                name: "Search".to_string(),
+                description: "Performance de buscas e cache de resultados".to_string(),
+                bench_file: "search_bench".to_string(),
+            },
+            BenchmarkInfo {
+                name: "Evaluation".to_string(),
+                description: "Performance de avaliação de respostas".to_string(),
+                bench_file: "evaluation_bench".to_string(),
+            },
+            BenchmarkInfo {
+                name: "Agent".to_string(),
+                description: "Performance do agente e gerenciamento de estado".to_string(),
+                bench_file: "agent_bench".to_string(),
+            },
+            BenchmarkInfo {
+                name: "E2E".to_string(),
+                description: "Benchmark end-to-end completo do sistema".to_string(),
+                bench_file: "e2e_bench".to_string(),
+            },
+            BenchmarkInfo {
+                name: "SIMD".to_string(),
+                description: "Performance de similaridade cosseno com SIMD".to_string(),
+                bench_file: "simd_bench".to_string(),
+            },
+        ];
+    }
+
+    /// Seleciona próximo benchmark
+    pub fn select_next(&mut self) {
+        if self.available.is_empty() {
+            return;
+        }
+        let new_idx = match self.selected {
+            Some(idx) if idx < self.available.len() - 1 => idx + 1,
+            Some(_) => 0,
+            None => 0,
+        };
+        self.selected = Some(new_idx);
+    }
+
+    /// Seleciona benchmark anterior
+    pub fn select_prev(&mut self) {
+        if self.available.is_empty() {
+            return;
+        }
+        let new_idx = match self.selected {
+            Some(idx) if idx > 0 => idx - 1,
+            Some(_) => self.available.len() - 1,
+            None => 0,
+        };
+        self.selected = Some(new_idx);
+    }
+
+    /// Retorna o benchmark selecionado
+    pub fn get_selected(&self) -> Option<&BenchmarkInfo> {
+        self.selected.and_then(|idx| self.available.get(idx))
+    }
+
+    /// Scroll up nos logs
+    pub fn scroll_up(&mut self) {
+        self.log_scroll = self.log_scroll.saturating_sub(1);
+    }
+
+    /// Scroll down nos logs
+    pub fn scroll_down(&mut self) {
+        let max_scroll = self.execution_logs.len().saturating_sub(10);
+        if self.log_scroll < max_scroll {
+            self.log_scroll += 1;
+        }
+    }
+
+    /// Inicia execução de um benchmark
+    pub fn start_benchmark(&mut self, bench_file: &str) {
+        self.running = Some(bench_file.to_string());
+        self.execution_logs.clear();
+        self.log_scroll = 0;
+        self.execution_logs.push_back(LogEntry::info(
+            format!("Iniciando benchmark: {}", bench_file)
+        ));
+    }
+
+    /// Finaliza execução de um benchmark com resultado
+    pub fn finish_benchmark(&mut self, result: BenchmarkResult) {
+        self.running = None;
+        self.last_result = Some(result);
+    }
+
+    /// Adiciona log de execução
+    pub fn add_execution_log(&mut self, level: LogLevel, message: String) {
+        self.execution_logs.push_back(LogEntry::new(level, message));
+        // Auto-scroll para o final
+        if self.execution_logs.len() > 10 {
+            self.log_scroll = self.execution_logs.len().saturating_sub(10);
+        }
+    }
+}
+
 impl SandboxState {
     /// Inicia uma nova execução de sandbox
     pub fn start(&mut self, problem: String, max_attempts: usize, timeout_ms: u64, language: String) {
@@ -445,6 +613,8 @@ pub enum ActiveTab {
     Search,
     /// Tab de configurações
     Config,
+    /// Tab de benchmarks
+    Benchmarks,
 }
 
 impl ActiveTab {
@@ -453,6 +623,7 @@ impl ActiveTab {
         match self {
             ActiveTab::Search => 0,
             ActiveTab::Config => 1,
+            ActiveTab::Benchmarks => 2,
         }
     }
 
@@ -461,6 +632,7 @@ impl ActiveTab {
         match idx {
             0 => ActiveTab::Search,
             1 => ActiveTab::Config,
+            2 => ActiveTab::Benchmarks,
             _ => ActiveTab::Search,
         }
     }
@@ -469,40 +641,157 @@ impl ActiveTab {
     pub fn next(&self) -> Self {
         match self {
             ActiveTab::Search => ActiveTab::Config,
-            ActiveTab::Config => ActiveTab::Search,
+            ActiveTab::Config => ActiveTab::Benchmarks,
+            ActiveTab::Benchmarks => ActiveTab::Search,
         }
     }
 
     /// Tab anterior (cyclic)
     pub fn prev(&self) -> Self {
-        self.next() // Com 2 tabs, next == prev
+        match self {
+            ActiveTab::Search => ActiveTab::Benchmarks,
+            ActiveTab::Config => ActiveTab::Search,
+            ActiveTab::Benchmarks => ActiveTab::Config,
+        }
     }
 }
 
 /// Configurações carregadas (snapshot para exibição na TUI)
+///
+/// Esta estrutura representa um snapshot das configurações atuais do sistema,
+/// formatadas como strings para exibição na interface de usuário textual (TUI).
+/// Os valores são calculados a partir das configurações reais e convertidos
+/// para representações legíveis pelo usuário.
 #[derive(Debug, Clone, Default)]
 pub struct LoadedConfig {
     // Runtime
+    /// Número de threads de trabalho configuradas, formatado como string.
+    ///
+    /// Pode ser um número fixo (ex: "4") ou "auto (N)" quando o cálculo
+    /// é dinâmico baseado no número de cores da CPU e `max_threads`.
+    /// Este valor é usado apenas para exibição na TUI.
     pub worker_threads: String,
+
+    /// Número máximo de threads permitidas para o runtime Tokio.
+    ///
+    /// Este valor define o limite superior quando o cálculo de threads
+    /// é dinâmico. O valor efetivo será o mínimo entre o número de cores
+    /// da CPU e este valor.
     pub max_threads: usize,
+
+    /// Número máximo de threads bloqueantes permitidas.
+    ///
+    /// Threads bloqueantes são usadas para operações que podem bloquear
+    /// a thread atual, como I/O síncrono ou operações de CPU intensivas.
+    /// Este valor controla o tamanho do pool de threads bloqueantes do Tokio.
     pub max_blocking_threads: usize,
+
+    /// Provedor de leitura web configurado, formatado como string.
+    ///
+    /// Indica qual biblioteca ou serviço está sendo usado para fazer
+    /// requisições HTTP e extrair conteúdo de páginas web durante a pesquisa.
     pub webreader: String,
+
     // LLM
+    /// Provedor do modelo de linguagem (LLM) configurado.
+    ///
+    /// Representa qual serviço de LLM está sendo usado, como "openai",
+    /// "anthropic", "local", etc. Este valor é formatado como string
+    /// para exibição na interface.
     pub llm_provider: String,
+
+    /// Nome do modelo de linguagem específico sendo utilizado.
+    ///
+    /// Exemplos: "gpt-4", "gpt-3.5-turbo", "claude-3-opus", etc.
+    /// Este é o modelo que será usado para gerar respostas e análises.
     pub llm_model: String,
+
+    /// Provedor de embeddings configurado.
+    ///
+    /// Pode ser diferente do `llm_provider`, permitindo usar um serviço
+    /// específico para gerar embeddings vetoriais. Exemplos: "openai", "jina".
     pub embedding_provider: String,
+
+    /// Nome do modelo de embeddings específico sendo utilizado.
+    ///
+    /// Este modelo é usado para converter texto em vetores numéricos
+    /// que permitem busca semântica e comparação de similaridade.
     pub embedding_model: String,
+
+    /// Temperatura do modelo LLM para geração de texto.
+    ///
+    /// Controla a aleatoriedade das respostas geradas:
+    /// - Valores baixos (0.0-0.3): respostas mais determinísticas e focadas
+    /// - Valores médios (0.5-0.7): equilíbrio entre criatividade e precisão
+    /// - Valores altos (0.8-1.0): respostas mais criativas e variadas
     pub temperature: f32,
+
+    /// URL base da API customizada, se configurada.
+    ///
+    /// Quando `Some`, indica que está sendo usada uma URL customizada
+    /// para a API do LLM, permitindo usar proxies ou servidores alternativos.
+    /// Quando `None`, usa a URL padrão do provedor.
     pub api_base_url: Option<String>,
+
     // Agent
+    /// Número mínimo de passos que o agente deve executar antes de
+    /// considerar fornecer uma resposta final.
+    ///
+    /// Este valor garante que o agente realize uma pesquisa adequada
+    /// antes de concluir, evitando respostas prematuras baseadas em
+    /// informações insuficientes.
     pub min_steps_before_answer: usize,
+
+    /// Se o agente pode fornecer uma resposta direta sem pesquisa.
+    ///
+    /// Quando `true`, o agente pode responder imediatamente se tiver
+    /// confiança suficiente na resposta. Quando `false`, sempre realiza
+    /// pesquisa mesmo para perguntas simples.
     pub allow_direct_answer: bool,
+
+    /// Orçamento padrão de tokens para uma sessão de pesquisa.
+    ///
+    /// Define o limite máximo de tokens que podem ser consumidos durante
+    /// uma pesquisa completa. Quando este limite é atingido, o agente
+    /// deve finalizar a pesquisa e fornecer a melhor resposta possível
+    /// com os recursos disponíveis.
     pub default_token_budget: u64,
+
+    /// Número máximo de URLs que podem ser processadas em um único passo.
+    ///
+    /// Limita quantas páginas web podem ser acessadas e analisadas
+    /// simultaneamente em cada iteração do processo de pesquisa,
+    /// controlando o uso de recursos e tempo de resposta.
     pub max_urls_per_step: usize,
+
+    /// Número máximo de consultas de busca que podem ser feitas por passo.
+    ///
+    /// Limita quantas consultas podem ser enviadas aos mecanismos de busca
+    /// (como Google, Bing, etc.) em cada iteração, controlando custos
+    /// e tempo de processamento.
     pub max_queries_per_step: usize,
+
+    /// Número máximo de falhas consecutivas permitidas antes de abortar.
+    ///
+    /// Se o agente falhar (erro de API, timeout, etc.) este número
+    /// de vezes seguidas, a pesquisa será interrompida para evitar
+    /// loops infinitos ou consumo excessivo de recursos.
     pub max_consecutive_failures: usize,
+
     // API Keys (mascaradas)
+    /// Indica se a chave da API OpenAI está presente no ambiente.
+    ///
+    /// Este valor é `true` se a variável de ambiente `OPENAI_API_KEY`
+    /// está definida, independentemente do valor. Usado apenas para
+    /// indicar na interface se as credenciais necessárias estão
+    /// configuradas, sem expor os valores reais das chaves.
     pub openai_key_present: bool,
+
+    /// Indica se a chave da API Jina está presente no ambiente.
+    ///
+    /// Este valor é `true` se a variável de ambiente `JINA_API_KEY`
+    /// está definida. Jina é usado como provedor alternativo de embeddings,
+    /// e esta flag indica se está disponível para uso.
     pub jina_key_present: bool,
 }
 
@@ -517,6 +806,8 @@ pub enum AppScreen {
     Result,
     /// Tela de configurações
     Config,
+    /// Tela de benchmarks
+    Benchmarks,
     /// Aguardando input do usuário (pergunta do agente)
     ///
     /// Compatível com OpenAI Responses API (input_required).
@@ -688,6 +979,35 @@ pub enum AppEvent {
         /// Linguagem de programação usada
         language: String,
     },
+    /// Benchmark iniciou execução
+    BenchmarkStarted {
+        /// Nome do arquivo de benchmark
+        bench_file: String,
+        /// Nome do benchmark
+        bench_name: String,
+    },
+    /// Benchmark atualizou log
+    BenchmarkLog {
+        /// Mensagem do log
+        message: String,
+        /// Nível do log
+        level: LogLevel,
+    },
+    /// Benchmark concluiu execução
+    BenchmarkComplete {
+        /// Nome do arquivo de benchmark
+        bench_file: String,
+        /// Nome do benchmark
+        bench_name: String,
+        /// Se foi bem-sucedido
+        success: bool,
+        /// Output completo
+        output: String,
+        /// Erro (se houver)
+        error: Option<String>,
+        /// Duração em segundos
+        duration_secs: f64,
+    },
 }
 
 /// Estado da aplicação
@@ -784,6 +1104,8 @@ pub struct App {
     pub pending_user_messages: usize,
     /// Fila de mensagens do usuário para enviar ao agente
     pub user_message_queue: VecDeque<String>,
+    /// Estado dos benchmarks
+    pub benchmarks: BenchmarksState,
 }
 
 /// Step completado para histórico
@@ -857,6 +1179,7 @@ impl App {
             input_focused: false,
             pending_user_messages: 0,
             user_message_queue: VecDeque::new(),
+            benchmarks: BenchmarksState::new(),
         };
         // Carregar sessões anteriores
         app.load_sessions();
@@ -929,6 +1252,13 @@ impl App {
                     self.previous_screen = Some(self.screen.clone());
                 }
                 self.screen = AppScreen::Config;
+            }
+            ActiveTab::Benchmarks => {
+                // Salvar tela atual antes de ir para Benchmarks
+                if self.screen != AppScreen::Benchmarks {
+                    self.previous_screen = Some(self.screen.clone());
+                }
+                self.screen = AppScreen::Benchmarks;
             }
         }
     }
@@ -1192,6 +1522,30 @@ impl App {
             }
             AppEvent::SandboxComplete { success, output, error, attempts, execution_time_ms, code_preview, language } => {
                 self.sandbox.complete(success, output, error, attempts, execution_time_ms, code_preview, language);
+            }
+            AppEvent::BenchmarkStarted { bench_file, bench_name } => {
+                self.benchmarks.start_benchmark(&bench_file);
+                self.benchmarks.add_execution_log(LogLevel::Info, format!("🚀 Iniciando benchmark: {}", bench_name));
+            }
+            AppEvent::BenchmarkLog { message, level } => {
+                self.benchmarks.add_execution_log(level, message);
+            }
+            AppEvent::BenchmarkComplete { bench_file: _, bench_name, success, output, error, duration_secs } => {
+                let result = BenchmarkResult {
+                    name: bench_name.clone(),
+                    started_at: chrono::Local::now().to_rfc3339(),
+                    finished_at: chrono::Local::now().to_rfc3339(),
+                    duration_secs,
+                    output,
+                    success,
+                    error,
+                };
+                self.benchmarks.finish_benchmark(result);
+                let status = if success { "✅" } else { "❌" };
+                self.benchmarks.add_execution_log(
+                    if success { LogLevel::Success } else { LogLevel::Error },
+                    format!("{} Benchmark {} concluído em {:.2}s", status, bench_name, duration_secs)
+                );
             }
         }
     }

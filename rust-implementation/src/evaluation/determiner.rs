@@ -8,7 +8,6 @@
 
 use super::EvaluationType;
 use regex::Regex;
-use std::collections::HashSet;
 
 /// Resultado da análise de uma pergunta
 #[derive(Debug, Clone, Default)]
@@ -29,7 +28,7 @@ impl QuestionAnalysis {
     /// Converte para lista de tipos de avaliação
     pub fn to_evaluation_types(&self) -> Vec<EvaluationType> {
         let mut types = Vec::new();
-        
+
         // Ordem: Definitive -> Freshness -> Plurality/Completeness
         if self.needs_definitive {
             types.push(EvaluationType::Definitive);
@@ -43,7 +42,7 @@ impl QuestionAnalysis {
         } else if self.needs_plurality {
             types.push(EvaluationType::Plurality);
         }
-        
+
         types
     }
 }
@@ -191,7 +190,7 @@ fn needs_plurality_check(question: &str) -> bool {
 /// Verifica se precisa de avaliação de completeness
 fn needs_completeness_check(question: &str) -> bool {
     // Padrões que indicam elementos específicos a serem cobertos
-    
+
     // Comparações explícitas entre entidades nomeadas
     let comparison_patterns = [
         r"(?i)\bcompar[ei](?:ng|r|e)?\s+\w+\s+(?:and|e|y|und|et)\s+\w+",
@@ -218,7 +217,7 @@ fn needs_completeness_check(question: &str) -> bool {
             .iter()
             .filter(|w| w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
             .count();
-        
+
         if capitalized_count >= 3 {
             return true;
         }
