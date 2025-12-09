@@ -48,9 +48,6 @@ async-trait = "0.1"
 # UUID generation
 uuid = { version = "1.6", features = ["v4"] }
 
-# Configuration
-config = "0.13"
-
 # Random number generation
 rand = "0.8"
 
@@ -62,6 +59,12 @@ urlencoding = "2.1"
 
 # Futures utilities
 futures = "0.3"
+
+# Regex for text processing
+regex = "1.10"
+
+# Lazy static for static initialization
+once_cell = "1.19"
 
 [dev-dependencies]
 tokio-test = "0.4"

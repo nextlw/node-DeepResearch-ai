@@ -82,6 +82,17 @@ impl TokenTracker {
         );
     }
 
+    /// Registra uso de tokens de forma simplificada (sem step)
+    ///
+    /// # Argumentos
+    /// * `operation` - Nome da operação
+    /// * `prompt` - Tokens de entrada
+    /// * `completion` - Tokens de saída
+    pub fn add_tokens(&mut self, operation: &str, prompt: u64, completion: u64) {
+        let step = self.history.len();
+        self.track(step, operation, prompt, completion);
+    }
+
     /// Retorna tokens totais utilizados
     pub fn total_tokens(&self) -> u64 {
         self.prompt_tokens + self.completion_tokens
