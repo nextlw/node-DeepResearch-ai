@@ -230,6 +230,21 @@ pub mod tui;
 /// - Construtor de runtime Tokio customizado
 pub mod config;
 
+/// Ferramentas de processamento de respostas.
+///
+/// Módulo com ferramentas para processar, polir e combinar respostas:
+/// - [`ResponseFinalizer`]: Polir respostas como um "editor sênior"
+/// - [`ResponseReducer`]: Mesclar respostas de múltiplos agentes
+/// - [`ResearchPlanner`]: Dividir problemas em subproblemas ortogonais
+pub mod tools;
+
+/// Integrações com serviços externos.
+///
+/// Módulo com integrações para executar ações específicas:
+/// - [`PaytourTools`]: API Paytour para passeios turísticos
+/// - [`DigisacTools`]: API Digisac para mensagens WhatsApp
+pub mod integrations;
+
 // Re-exports principais
 pub use agent::DeepResearchAgent;
 pub use config::{
@@ -241,6 +256,8 @@ pub use evaluation::{EvaluationPipeline, EvaluationType};
 pub use performance::simd::cosine_similarity;
 pub use personas::PersonaOrchestrator;
 pub use types::*;
+pub use tools::{ResponseFinalizer, ResponseReducer, ResearchPlanner};
+pub use integrations::{PaytourTools, DigisacTools};
 
 /// Versão da biblioteca.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -261,6 +278,8 @@ pub mod prelude {
     pub use crate::performance::simd::{cosine_similarity, dedup_queries, find_similar};
     pub use crate::personas::{CognitivePersona, PersonaOrchestrator, QueryContext, WeightedQuery};
     pub use crate::types::*;
+    pub use crate::tools::{ResponseFinalizer, ResponseReducer, ResearchPlanner};
+    pub use crate::integrations::{PaytourTools, DigisacTools};
 }
 
 #[cfg(test)]
