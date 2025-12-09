@@ -2,9 +2,13 @@
 // SISTEMA DE AVALIAÇÃO MULTIDIMENSIONAL
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+mod determiner;
 mod pipeline;
+mod trace;
 
+pub use determiner::*;
 pub use pipeline::*;
+pub use trace::*;
 
 use std::time::Duration;
 
@@ -46,7 +50,7 @@ pub struct PromptPair {
 /// - Plurality: Se pediu N exemplos, tem N exemplos?
 /// - Completeness: Todos os aspectos da pergunta foram cobertos?
 /// - Strict: Avaliação brutal - tem insights reais e profundos?
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum EvaluationType {
     /// Verifica se a resposta é confiante e definitiva
     Definitive,
