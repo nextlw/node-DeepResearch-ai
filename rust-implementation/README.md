@@ -149,6 +149,7 @@ cargo run
 **Nota:** Você pode combinar features livremente, por exemplo:
 
 - `cargo build --release --features "clipboard,simd"`
+- `cargo build --release --features "clipboard,simd,tui"`
 - `cargo build --release --features "clipboard,postgres"`
 - `cargo build --release --features all` (equivalente a todas as features)
 
