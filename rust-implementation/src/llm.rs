@@ -160,6 +160,35 @@ pub trait LlmClient: Send + Sync {
         previous_attempts: &[(String, Option<String>)],
     ) -> Result<CodeGenResponse, LlmError>;
 
+    /// Gera código Python para resolver um problema
+    ///
+    /// Similar a `generate_code` mas especificamente para Python.
+    ///
+    /// # Arguments
+    /// * `problem` - Descrição do problema a resolver
+    /// * `available_vars` - Variáveis disponíveis no contexto
+    /// * `previous_attempts` - Tentativas anteriores (código, erro)
+    async fn generate_python_code(
+        &self,
+        problem: &str,
+        available_vars: &str,
+        previous_attempts: &[(String, Option<String>)],
+    ) -> Result<CodeGenResponse, LlmError>;
+
+    /// Escolhe a melhor linguagem de programação para um problema
+    ///
+    /// O LLM analisa o problema e decide se JavaScript ou Python é mais adequado.
+    ///
+    /// # Arguments
+    /// * `problem` - Descrição do problema
+    ///
+    /// # Returns
+    /// `SandboxLanguage::JavaScript` ou `SandboxLanguage::Python`
+    async fn choose_coding_language(
+        &self,
+        problem: &str,
+    ) -> Result<crate::agent::SandboxLanguage, LlmError>;
+
     /// Retorna tokens de prompt acumulados (implementação opcional)
     fn get_prompt_tokens(&self) -> u64 {
         0
@@ -343,6 +372,25 @@ impl LlmClient for MockLlmClient {
             think: "Mock code generation".into(),
         })
     }
+
+    async fn generate_python_code(
+        &self,
+        _problem: &str,
+        _available_vars: &str,
+        _previous_attempts: &[(String, Option<String>)],
+    ) -> Result<CodeGenResponse, LlmError> {
+        Ok(CodeGenResponse {
+            code: "print(42)".into(),
+            think: "Mock Python code generation".into(),
+        })
+    }
+
+    async fn choose_coding_language(
+        &self,
+        _problem: &str,
+    ) -> Result<crate::agent::SandboxLanguage, LlmError> {
+        Ok(crate::agent::SandboxLanguage::JavaScript)
+    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -390,7 +438,11 @@ impl OpenAiClient {
             embedding_model: "text-embedding-3-small".into(),
             api_base_url: "https://api.openai.com/v1".into(),
             default_temperature: 0.7,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120)) // 2 minutos de timeout
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             total_prompt_tokens: std::sync::atomic::AtomicU64::new(0),
             total_completion_tokens: std::sync::atomic::AtomicU64::new(0),
         }
@@ -414,7 +466,11 @@ impl OpenAiClient {
             embedding_model: config.embedding_model.clone(),
             api_base_url: config.api_url().to_string(),
             default_temperature: config.default_temperature,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120)) // 2 minutos de timeout
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             total_prompt_tokens: std::sync::atomic::AtomicU64::new(0),
             total_completion_tokens: std::sync::atomic::AtomicU64::new(0),
         }
@@ -562,6 +618,8 @@ struct ActionJson {
     answer: Option<String>,
     references: Option<Vec<ActionReference>>,
     code: Option<String>,
+    /// Linguagem para coding: "javascript", "python" ou None para auto
+    language: Option<String>,
     /// Quantidade de sessões para history
     count: Option<usize>,
     /// Filtro de texto para history
@@ -616,7 +674,8 @@ impl LlmClient for OpenAiClient {
             system_prompt.push_str("- answer: {\"action\": \"answer\", \"answer\": \"response text\", \"references\": [{\"url\": \"...\", \"title\": \"...\"}], \"think\": \"reasoning\"}\n");
         }
         if permissions.coding {
-            system_prompt.push_str("- coding: {\"action\": \"coding\", \"code\": \"code to execute\", \"think\": \"reasoning\"}\n");
+            system_prompt.push_str("- coding: {\"action\": \"coding\", \"code\": \"problem description for code generation\", \"language\": \"javascript|python|auto\" (optional), \"think\": \"reasoning\"}\n");
+            system_prompt.push_str("  Language selection: javascript (fast, JSON/string ops), python (data analysis, statistics, complex regex). Default: auto (LLM chooses best).\n");
         }
         if permissions.history {
             system_prompt.push_str("- history: {\"action\": \"history\", \"count\": 5, \"filter\": \"optional search term\", \"think\": \"reasoning\"}\n");
@@ -762,6 +821,7 @@ impl LlmClient for OpenAiClient {
             "coding" => Ok(AgentAction::Coding {
                 problem: action_json.code.unwrap_or_default(),
                 context_vars: None, // LLM não especifica context_vars, usa todo o knowledge
+                language: action_json.language, // LLM pode especificar "javascript", "python" ou deixar None para Auto
                 think: action_json.think,
             }),
             "history" => Ok(AgentAction::History {
@@ -1363,6 +1423,239 @@ Response:
         Ok(CodeGenResponse {
             code: code_gen_json.code,
             think: code_gen_json.think,
+        })
+    }
+
+    async fn generate_python_code(
+        &self,
+        problem: &str,
+        available_vars: &str,
+        previous_attempts: &[(String, Option<String>)],
+    ) -> Result<CodeGenResponse, LlmError> {
+        // Construir contexto de tentativas anteriores
+        let previous_context = if !previous_attempts.is_empty() {
+            let attempts_text: Vec<String> = previous_attempts
+                .iter()
+                .enumerate()
+                .map(|(i, (code, error))| {
+                    format!(
+                        "<bad-attempt-{}>\n{}\n{}</bad-attempt-{}>",
+                        i + 1,
+                        code,
+                        error
+                            .as_ref()
+                            .map(|e| format!("Error: {}", e))
+                            .unwrap_or_default(),
+                        i + 1
+                    )
+                })
+                .collect();
+            format!(
+                "\nPrevious attempts and their errors:\n{}\n",
+                attempts_text.join("\n")
+            )
+        } else {
+            String::new()
+        };
+
+        let system_prompt = format!(
+            r#"You are an expert Python programmer. Your task is to generate Python code to solve the given problem.
+
+<rules>
+1. Generate plain Python code that prints the final result using print()
+2. You can access these pre-defined variables directly (already loaded as Python objects):
+{}
+3. Available modules: json, re, math, collections (Counter, defaultdict)
+4. Do NOT use: os, sys, subprocess, open, exec, eval, import for dangerous modules
+5. Must end with a print() statement for the final result
+6. Keep code simple and efficient
+</rules>
+{}
+<example>
+Available variables:
+numbers (list) e.g. [1, 2, 3, 4, 5, 6]
+threshold (int) e.g. 4
+
+Problem: Sum all numbers above threshold
+
+Response:
+{{"think": "I need to filter numbers above threshold and sum them using list comprehension", "code": "result = sum(n for n in numbers if n > threshold)\nprint(result)"}}
+</example>"#,
+            available_vars, previous_context
+        );
+
+        let messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: system_prompt,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: format!("Problem: {}", problem),
+            },
+        ];
+
+        let request = ChatRequest {
+            model: self.model.clone(),
+            messages,
+            temperature: Some(0.2),
+            response_format: Some(serde_json::json!({"type": "json_object"})),
+        };
+
+        let response = self
+            .client
+            .post(self.endpoint("chat/completions"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+        if response.status() == 429 {
+            return Err(LlmError::RateLimitError);
+        }
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError(format!(
+                "OpenAI API error: {}",
+                error_text
+            )));
+        }
+
+        let chat_response: ChatResponse = response
+            .json()
+            .await
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        // Acumular tokens
+        self.total_prompt_tokens.fetch_add(
+            chat_response.usage.prompt_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.total_completion_tokens.fetch_add(
+            chat_response.usage.completion_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        log::debug!(
+            "🐍 generate_python_code tokens: {} | Acumulado: {}",
+            chat_response.usage.total_tokens,
+            self.get_total_tokens()
+        );
+
+        let content = chat_response
+            .choices
+            .first()
+            .ok_or_else(|| LlmError::ParseError("No choices in response".into()))?
+            .message
+            .content
+            .clone();
+
+        #[derive(Deserialize)]
+        struct CodeGenJson {
+            code: String,
+            think: String,
+        }
+
+        let code_gen_json: CodeGenJson = serde_json::from_str(&content)
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse Python code gen JSON: {}", e)))?;
+
+        Ok(CodeGenResponse {
+            code: code_gen_json.code,
+            think: code_gen_json.think,
+        })
+    }
+
+    async fn choose_coding_language(
+        &self,
+        problem: &str,
+    ) -> Result<crate::agent::SandboxLanguage, LlmError> {
+        let system_prompt = r#"You are a programming language expert. Given a problem description, decide whether JavaScript or Python is more suitable.
+
+Choose JavaScript for:
+- JSON manipulation and parsing
+- Simple string operations
+- Basic calculations
+- Quick data transformations
+
+Choose Python for:
+- Data analysis and statistics
+- Complex regex operations
+- Scientific calculations
+- Working with collections and aggregations
+- Text processing with complex patterns
+
+Respond with JSON: {"language": "javascript"} or {"language": "python"}"#;
+
+        let messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: system_prompt.to_string(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: format!("Problem: {}", problem),
+            },
+        ];
+
+        let request = ChatRequest {
+            model: self.model.clone(),
+            messages,
+            temperature: Some(0.1),
+            response_format: Some(serde_json::json!({"type": "json_object"})),
+        };
+
+        let response = self
+            .client
+            .post(self.endpoint("chat/completions"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+        if !response.status().is_success() {
+            // Default to JavaScript on error
+            return Ok(crate::agent::SandboxLanguage::JavaScript);
+        }
+
+        let chat_response: ChatResponse = response
+            .json()
+            .await
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        // Acumular tokens
+        self.total_prompt_tokens.fetch_add(
+            chat_response.usage.prompt_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.total_completion_tokens.fetch_add(
+            chat_response.usage.completion_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        let content = chat_response
+            .choices
+            .first()
+            .ok_or_else(|| LlmError::ParseError("No choices in response".into()))?
+            .message
+            .content
+            .clone();
+
+        #[derive(Deserialize)]
+        struct LanguageChoice {
+            language: String,
+        }
+
+        let choice: LanguageChoice = serde_json::from_str(&content)
+            .unwrap_or(LanguageChoice { language: "javascript".into() });
+
+        Ok(if choice.language.to_lowercase() == "python" {
+            crate::agent::SandboxLanguage::Python
+        } else {
+            crate::agent::SandboxLanguage::JavaScript
         })
     }
 

@@ -127,12 +127,13 @@ fn format_diary_for_analysis(diary: &[DiaryEntry], original_question: &str) -> S
                     reason
                 ));
             }
-            DiaryEntry::Coding { code, think } => {
+            DiaryEntry::Coding { code, language, think } => {
                 output.push_str(&format!(
-                    "At step {}, you took the **coding** action and executed code:\n\
+                    "At step {}, you took the **coding** action using {} and executed code:\n\
                     Code (truncated): {}...\n\
                     Think: {}\n\n",
                     step_num,
+                    language,
                     code.chars().take(100).collect::<String>(),
                     think
                 ));

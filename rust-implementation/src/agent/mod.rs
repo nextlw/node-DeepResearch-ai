@@ -35,7 +35,10 @@ pub use interaction::{
     UserResponse,
 };
 pub use permissions::*;
-pub use sandbox::{CodeSandbox, SandboxContext, SandboxError, SandboxResult};
+pub use sandbox::{
+    CodeSandbox, PythonSandbox, SandboxContext, SandboxError, SandboxLanguage, SandboxResult,
+    UnifiedSandbox,
+};
 pub use state::*;
 
 use crate::llm::LlmClient;
@@ -229,6 +232,47 @@ pub enum AgentProgress {
     ResumedAfterInput {
         /// ID da pergunta que foi respondida
         question_id: String,
+    },
+    /// Sandbox iniciou execução
+    SandboxStart {
+        /// Problema/tarefa sendo resolvido
+        problem: String,
+        /// Máximo de tentativas configurado
+        max_attempts: usize,
+        /// Timeout em ms
+        timeout_ms: u64,
+        /// Linguagem de programação (JavaScript, Python, Auto)
+        language: String,
+    },
+    /// Sandbox - tentativa de execução
+    SandboxAttempt {
+        /// Número da tentativa atual (1-based)
+        attempt: usize,
+        /// Máximo de tentativas
+        max_attempts: usize,
+        /// Código gerado (truncado para exibição)
+        code_preview: String,
+        /// Status: "generating", "executing", "success", "error"
+        status: String,
+        /// Mensagem de erro (se aplicável)
+        error: Option<String>,
+    },
+    /// Sandbox concluiu execução
+    SandboxComplete {
+        /// Se foi bem-sucedido
+        success: bool,
+        /// Output da execução (se sucesso)
+        output: Option<String>,
+        /// Erro (se falha)
+        error: Option<String>,
+        /// Número total de tentativas
+        attempts: usize,
+        /// Tempo total de execução em ms
+        execution_time_ms: u64,
+        /// Código final executado (truncado)
+        code_preview: String,
+        /// Linguagem de programação usada
+        language: String,
     },
 }
 
@@ -456,16 +500,17 @@ impl DeepResearchAgent {
                             question_type,
                             options,
                         } => {
-                            // Agente precisa de input do usuário - pausar
-                            log::info!("⏸️ Agente pausado aguardando input do usuário");
+                            // Agente precisa de input do usuário - entrar em estado de espera
+                            log::info!("⏸️ Agente entrando em estado de espera por input do usuário");
                             self.state = AgentState::InputRequired {
                                 question_id,
                                 question,
                                 question_type,
                                 options,
                             };
-                            // Sair do loop para permitir que a interface processe
-                            break;
+                            // CONTINUAR o loop - o próximo match de AgentState::InputRequired
+                            // vai aguardar a resposta via canal
+                            continue;
                         }
                     }
                 }
@@ -500,11 +545,46 @@ impl DeepResearchAgent {
                 }
 
                 // Estado de espera por input do usuário
-                AgentState::InputRequired { .. } => {
-                    // Sair do loop para permitir que a interface processe
-                    // A interface deve chamar process_user_response() e depois resume()
-                    log::debug!("Agente em estado InputRequired - aguardando interface");
-                    break;
+                AgentState::InputRequired { ref question_id, .. } => {
+                    // Aguardar resposta do usuário via canal
+                    log::debug!("Agente em estado InputRequired - aguardando resposta via canal");
+
+                    // Primeiro fazer polling para ver se já chegou algo
+                    self.interaction_hub.poll_responses();
+
+                    // Verificar se já temos resposta para esta pergunta
+                    if let Some(response) = self.interaction_hub.find_response_for(question_id) {
+                        log::info!("📥 Resposta encontrada: {}", response.content);
+                        self.process_user_response(response).await;
+                        continue;
+                    }
+
+                    // Esperar resposta com timeout de 60 segundos
+                    match self.interaction_hub.wait_for_response(question_id, Some(60)).await {
+                        Ok(response) => {
+                            log::info!("📥 Resposta recebida: {}", response.content);
+                            self.process_user_response(response).await;
+                            // Continuar o loop após processar resposta
+                            continue;
+                        }
+                        Err(InteractionError::Timeout) => {
+                            // Timeout - fazer polling novamente e continuar esperando
+                            log::debug!("Timeout aguardando resposta, continuando...");
+                            continue;
+                        }
+                        Err(InteractionError::ChannelClosed) => {
+                            // Canal fechado - interface provavelmente foi fechada
+                            log::warn!("Canal de resposta fechado - abortando");
+                            self.state = AgentState::Failed {
+                                reason: "Canal de comunicação com interface fechado".into(),
+                                partial_knowledge: self.context.knowledge.clone(),
+                            };
+                        }
+                        Err(e) => {
+                            log::error!("Erro aguardando resposta: {:?}", e);
+                            continue;
+                        }
+                    }
                 }
 
                 // Estados terminais - sair do loop
@@ -518,7 +598,10 @@ impl DeepResearchAgent {
 
     /// Executa um único passo do agente
     async fn execute_step(&mut self) -> StepResult {
-        // 0. Verificar se há análise do AgentAnalyzer pronta (non-blocking)
+        // 0a. Processar mensagens assíncronas do usuário (non-blocking)
+        self.poll_user_messages();
+
+        // 0b. Verificar se há análise do AgentAnalyzer pronta (non-blocking)
         if let Some(rx) = &mut self.analysis_rx {
             match rx.try_recv() {
                 Ok(analysis) => {
@@ -747,8 +830,8 @@ impl DeepResearchAgent {
                 }
                 self.execute_answer(final_answer, final_references, think).await
             }
-            AgentAction::Coding { problem, context_vars: _, think } => {
-                self.execute_coding(problem, think).await
+            AgentAction::Coding { problem, context_vars: _, language, think } => {
+                self.execute_coding(problem, language, think).await
             }
             AgentAction::History {
                 count,
@@ -1817,36 +1900,97 @@ Available actions:
     /// 1. Gerar código JavaScript via LLM para processar dados
     /// 2. Executar em ambiente isolado (sem acesso a filesystem/rede)
     /// 3. Retry inteligente se o código falhar (até 3 tentativas)
-    async fn execute_coding(&mut self, problem: String, think: String) -> StepResult {
+    async fn execute_coding(
+        &mut self,
+        problem: String,
+        language: Option<String>,
+        think: String,
+    ) -> StepResult {
         log::info!("🖥️ Executando código em sandbox...");
         log::debug!("📝 Problema: {}", problem);
+        log::debug!("🌐 Linguagem preferida: {:?}", language);
         log::debug!("💭 Raciocínio: {}", think);
 
         self.emit(AgentProgress::Action("coding".into()));
         self.emit(AgentProgress::Think(think.clone()));
+
+        // Truncar problema para preview
+        let problem_preview = if problem.len() > 100 {
+            format!("{}...", &problem[..100])
+        } else {
+            problem.clone()
+        };
+
+        // Determinar linguagem preferida
+        let preferred_language = match language.as_deref() {
+            Some("javascript") | Some("js") => SandboxLanguage::JavaScript,
+            Some("python") | Some("py") => SandboxLanguage::Python,
+            _ => SandboxLanguage::Auto, // LLM escolhe
+        };
+
         self.emit(AgentProgress::Info(format!(
-            "🖥️ Gerando e executando código para: {}",
-            if problem.len() > 80 {
-                format!("{}...", &problem[..80])
-            } else {
-                problem.clone()
-            }
+            "🖥️ Gerando e executando código ({}) para: {}",
+            preferred_language.display_name(),
+            problem_preview
         )));
 
-        // Criar sandbox com o contexto atual do knowledge
-        let sandbox = CodeSandbox::new(&self.context.knowledge, 5000);
+        // Emitir evento de início do sandbox
+        let max_attempts = 3usize;
+        let timeout_ms = 10000u64; // Maior timeout para Python
+        self.emit(AgentProgress::SandboxStart {
+            problem: problem_preview.clone(),
+            max_attempts,
+            timeout_ms,
+            language: preferred_language.display_name().to_string(),
+        });
+
+        // Emitir evento de tentativa inicial
+        self.emit(AgentProgress::SandboxAttempt {
+            attempt: 1,
+            max_attempts,
+            code_preview: "Gerando código via LLM...".to_string(),
+            status: "generating".to_string(),
+            error: None,
+        });
+
+        // Criar sandbox unificado (suporta JS e Python)
+        let sandbox = UnifiedSandbox::new(&self.context.knowledge, timeout_ms)
+            .await
+            .with_language(preferred_language);
 
         // Resolver o problema gerando e executando código
         match sandbox.solve(&*self.llm_client, &problem).await {
             Ok(result) => {
+                // Truncar código para preview
+                let code_preview = if result.code.len() > 200 {
+                    format!("{}...", &result.code[..200])
+                } else {
+                    result.code.clone()
+                };
+
                 if result.success {
-                    let output = result.output.unwrap_or_default();
+                    let output = result.output.clone().unwrap_or_default();
                     log::info!(
                         "✅ Código executado com sucesso em {} tentativa(s), {}ms",
                         result.attempts,
                         result.execution_time_ms
                     );
                     log::debug!("📤 Output: {}", output);
+
+                    // Emitir evento de conclusão bem-sucedida
+                    self.emit(AgentProgress::SandboxComplete {
+                        success: true,
+                        output: Some(if output.len() > 500 {
+                            format!("{}...", &output[..500])
+                        } else {
+                            output.clone()
+                        }),
+                        error: None,
+                        attempts: result.attempts,
+                        execution_time_ms: result.execution_time_ms,
+                        code_preview: code_preview.clone(),
+                        language: result.language.display_name().to_string(),
+                    });
 
                     self.emit(AgentProgress::Success(format!(
                         "✅ Código executado com sucesso ({} tentativas, {}ms)",
@@ -1861,22 +2005,35 @@ Available actions:
                         references: vec![],
                     });
                 } else {
-                    let error = result.error.unwrap_or_else(|| "Unknown error".into());
+                    let error = result.error.clone().unwrap_or_else(|| "Unknown error".into());
                     log::warn!(
                         "❌ Código falhou após {} tentativa(s): {}",
                         result.attempts,
                         error
                     );
 
+                    // Emitir evento de conclusão com falha
+                    self.emit(AgentProgress::SandboxComplete {
+                        success: false,
+                        output: None,
+                        error: Some(error.clone()),
+                        attempts: result.attempts,
+                        execution_time_ms: result.execution_time_ms,
+                        code_preview: code_preview.clone(),
+                        language: result.language.display_name().to_string(),
+                    });
+
                     self.emit(AgentProgress::Warning(format!(
-                        "❌ Código falhou após {} tentativas: {}",
+                        "❌ Código {} falhou após {} tentativas: {}",
+                        result.language.display_name(),
                         result.attempts, error
                     )));
 
                     // Adicionar erro ao knowledge para contexto futuro
+                    let lang_ext = result.language.extension();
                     self.context.knowledge.push(KnowledgeItem {
-                        question: format!("[Código Falhou] {}", problem),
-                        answer: format!("Erro: {}. Código tentado:\n```js\n{}\n```", error, result.code),
+                        question: format!("[Código {} Falhou] {}", result.language.display_name(), problem),
+                        answer: format!("Erro: {}. Código tentado:\n```{}\n{}\n```", error, lang_ext, result.code),
                         item_type: KnowledgeType::Error,
                         references: vec![],
                     });
@@ -1885,16 +2042,30 @@ Available actions:
                 // Registrar no diário
                 self.context.diary.push(DiaryEntry::Coding {
                     code: result.code,
+                    language: result.language.display_name().to_string(),
                     think,
                 });
             }
             Err(e) => {
                 log::error!("💥 Sandbox error: {}", e);
+
+                // Emitir evento de conclusão com erro fatal
+                self.emit(AgentProgress::SandboxComplete {
+                    success: false,
+                    output: None,
+                    error: Some(e.to_string()),
+                    attempts: 0,
+                    execution_time_ms: 0,
+                    code_preview: "// Erro fatal antes da execução".to_string(),
+                    language: preferred_language.display_name().to_string(),
+                });
+
                 self.emit(AgentProgress::Error(format!("💥 Sandbox error: {}", e)));
 
                 // Registrar erro no diário
                 self.context.diary.push(DiaryEntry::Coding {
                     code: format!("// Error: {}", e),
+                    language: preferred_language.display_name().to_string(),
                     think,
                 });
             }

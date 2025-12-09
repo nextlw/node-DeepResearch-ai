@@ -5,13 +5,16 @@
 //! - Criação e manipulação de ações
 //! - Contexto do agente
 //! - Diário de execução
+//! - Sistema de interação usuário-agente
+//! - Sandbox multilinguagem (JavaScript/Python)
 //!
 //! Executar: `cargo bench --bench agent_bench`
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use deep_research::agent::{
     ActionPermissions, AgentAction, AgentPrompt, AgentState, AnswerResult, DiaryEntry,
-    ResearchResult, TokenUsage,
+    InteractionHub, PendingQuestion, QuestionType, ResearchResult, SandboxContext,
+    SandboxLanguage, TokenUsage, UserResponse,
 };
 use deep_research::types::{KnowledgeItem, KnowledgeType, Reference, SerpQuery};
 
@@ -208,12 +211,51 @@ fn bench_agent_actions(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("create_coding", |bencher| {
+    group.bench_function("create_coding_js", |bencher| {
         bencher.iter(|| {
             black_box(AgentAction::Coding {
                 problem: "Processar array de dados JSON e dobrar cada valor numérico".to_string(),
                 context_vars: None,
+                language: Some("javascript".to_string()),
                 think: "Processing data with JavaScript.".to_string(),
+            })
+        })
+    });
+
+    group.bench_function("create_coding_python", |bencher| {
+        bencher.iter(|| {
+            black_box(AgentAction::Coding {
+                problem: "Calcular estatísticas descritivas: média, desvio padrão, percentis".to_string(),
+                context_vars: Some(vec!["data".to_string(), "values".to_string()]),
+                language: Some("python".to_string()),
+                think: "Using Python for statistical analysis.".to_string(),
+            })
+        })
+    });
+
+    group.bench_function("create_coding_auto", |bencher| {
+        bencher.iter(|| {
+            black_box(AgentAction::Coding {
+                problem: "Processar dados conforme necessário".to_string(),
+                context_vars: None,
+                language: None, // Auto - LLM escolhe
+                think: "Let LLM decide the best language.".to_string(),
+            })
+        })
+    });
+
+    group.bench_function("create_ask_user", |bencher| {
+        bencher.iter(|| {
+            black_box(AgentAction::AskUser {
+                question_type: QuestionType::Clarification,
+                question: "Você poderia esclarecer qual período de tempo você gostaria que eu analisasse?".to_string(),
+                options: Some(vec![
+                    "Últimos 7 dias".to_string(),
+                    "Último mês".to_string(),
+                    "Último ano".to_string(),
+                ]),
+                is_blocking: true,
+                think: "Need user input to proceed with analysis.".to_string(),
             })
         })
     });
@@ -478,6 +520,210 @@ fn bench_results(c: &mut Criterion) {
     group.finish();
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BENCHMARK: Sistema de Interação Usuário-Agente
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+fn bench_interaction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("interaction");
+
+    group.bench_function("create_pending_question_clarification", |bencher| {
+        bencher.iter(|| {
+            black_box(PendingQuestion::clarification(
+                "Qual período você gostaria de analisar?",
+                "Need to clarify time period",
+            ))
+        })
+    });
+
+    group.bench_function("create_pending_question_preference", |bencher| {
+        bencher.iter(|| {
+            black_box(PendingQuestion::preference(
+                "Qual formato de relatório você prefere?",
+                vec![
+                    "PDF".to_string(),
+                    "Excel".to_string(),
+                    "CSV".to_string(),
+                ],
+                "Need user preference for output format",
+            ))
+        })
+    });
+
+    group.bench_function("create_user_response_to_question", |bencher| {
+        bencher.iter(|| {
+            black_box(UserResponse::to_question(
+                "question-uuid-123",
+                "Gostaria de analisar os últimos 7 dias",
+            ))
+        })
+    });
+
+    group.bench_function("create_user_response_spontaneous", |bencher| {
+        bencher.iter(|| {
+            black_box(UserResponse::spontaneous(
+                "Também gostaria de saber sobre o crescimento mensal",
+            ))
+        })
+    });
+
+    group.bench_function("question_type_checks", |bencher| {
+        let types = vec![
+            QuestionType::Clarification,
+            QuestionType::Confirmation,
+            QuestionType::Preference,
+            QuestionType::Suggestion,
+        ];
+        bencher.iter(|| {
+            for qt in &types {
+                black_box(qt.is_blocking_by_default());
+            }
+        })
+    });
+
+    group.bench_function("interaction_hub_create", |bencher| {
+        bencher.iter(|| {
+            black_box(InteractionHub::new())
+        })
+    });
+
+    group.finish();
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BENCHMARK: Sandbox Multilinguagem
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+fn bench_sandbox(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sandbox");
+
+    group.bench_function("sandbox_language_checks", |bencher| {
+        let langs = [
+            SandboxLanguage::JavaScript,
+            SandboxLanguage::Python,
+            SandboxLanguage::Auto,
+        ];
+        bencher.iter(|| {
+            for lang in &langs {
+                black_box((
+                    lang.display_name(),
+                    lang.extension(),
+                ));
+            }
+        })
+    });
+
+    group.bench_function("sandbox_context_create_empty", |bencher| {
+        bencher.iter(|| {
+            black_box(SandboxContext::new())
+        })
+    });
+
+    group.bench_function("sandbox_context_from_knowledge", |bencher| {
+        let knowledge = vec![
+            KnowledgeItem {
+                question: "What is Rust?".to_string(),
+                answer: "Rust is a systems programming language...".to_string(),
+                item_type: KnowledgeType::Qa,
+                references: vec![],
+            },
+            KnowledgeItem {
+                question: "Sales data".to_string(),
+                answer: "[100, 200, 300, 400, 500]".to_string(),
+                item_type: KnowledgeType::UserProvided,
+                references: vec![],
+            },
+        ];
+
+        bencher.iter(|| {
+            black_box(SandboxContext::from_knowledge(&knowledge))
+        })
+    });
+
+    group.bench_function("sandbox_context_set_variable", |bencher| {
+        bencher.iter(|| {
+            let mut context = SandboxContext::new();
+            context.set_variable("test_var", "[1, 2, 3, 4, 5]");
+            black_box(context)
+        })
+    });
+
+    group.bench_function("sandbox_context_describe_for_llm", |bencher| {
+        let mut context = SandboxContext::new();
+        context.set_variable("numbers", "[1, 2, 3, 4, 5]");
+        context.set_variable("data", r#"{"key": "value"}"#);
+        context.set_variable("text", "Hello world");
+
+        bencher.iter(|| {
+            black_box(context.describe_for_llm())
+        })
+    });
+
+    group.finish();
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BENCHMARK: Estados de InputRequired
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+fn bench_input_required_state(c: &mut Criterion) {
+    let mut group = c.benchmark_group("input_required_state");
+
+    group.bench_function("create_input_required", |bencher| {
+        bencher.iter(|| {
+            black_box(AgentState::InputRequired {
+                question_id: "uuid-1234-5678".to_string(),
+                question: "Qual período você gostaria de analisar?".to_string(),
+                question_type: QuestionType::Clarification,
+                options: Some(vec![
+                    "Últimos 7 dias".to_string(),
+                    "Último mês".to_string(),
+                    "Último ano".to_string(),
+                ]),
+            })
+        })
+    });
+
+    let input_required = AgentState::InputRequired {
+        question_id: "test-id".to_string(),
+        question: "Test question".to_string(),
+        question_type: QuestionType::Confirmation,
+        options: None,
+    };
+
+    let processing = AgentState::Processing {
+        step: 5,
+        total_step: 10,
+        current_question: "Test".to_string(),
+        budget_used: 0.3,
+    };
+
+    group.bench_function("is_input_required", |bencher| {
+        bencher.iter(|| {
+            black_box((
+                input_required.is_input_required(),
+                processing.is_input_required(),
+            ))
+        })
+    });
+
+    group.bench_function("can_transition_from_input_required", |bencher| {
+        let completed = AgentState::Completed {
+            answer: "Answer".to_string(),
+            references: vec![],
+            trivial: false,
+        };
+        bencher.iter(|| {
+            black_box((
+                input_required.can_transition_to(&processing),
+                input_required.can_transition_to(&completed),
+            ))
+        })
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_agent_state,
@@ -488,6 +734,9 @@ criterion_group!(
     bench_diary_entry,
     bench_agent_prompt,
     bench_results,
+    bench_interaction,
+    bench_sandbox,
+    bench_input_required_state,
 );
 
 criterion_main!(benches);

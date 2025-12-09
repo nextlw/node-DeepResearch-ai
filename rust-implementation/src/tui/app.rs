@@ -129,6 +129,109 @@ pub struct AgentAnalyzerState {
     pub logs: Vec<LogEntry>,
 }
 
+/// Estado do Sandbox de execução de código
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SandboxState {
+    /// Se está ativo (execução em andamento)
+    pub is_active: bool,
+    /// Problema/tarefa sendo resolvido
+    pub problem: String,
+    /// Tentativa atual (1-based)
+    pub current_attempt: usize,
+    /// Máximo de tentativas
+    pub max_attempts: usize,
+    /// Status atual: "idle", "generating", "executing", "success", "error"
+    pub status: String,
+    /// Preview do código sendo executado
+    pub code_preview: String,
+    /// Output da execução (se sucesso)
+    pub output: Option<String>,
+    /// Erro da execução (se falha)
+    pub error: Option<String>,
+    /// Tempo de execução em ms
+    pub execution_time_ms: u64,
+    /// Timeout configurado em ms
+    pub timeout_ms: u64,
+    /// Timestamp de início
+    pub started_at: Option<String>,
+    /// Linguagem de programação (JavaScript, Python)
+    pub language: String,
+    /// Logs específicos do sandbox
+    pub logs: Vec<LogEntry>,
+}
+
+impl SandboxState {
+    /// Inicia uma nova execução de sandbox
+    pub fn start(&mut self, problem: String, max_attempts: usize, timeout_ms: u64, language: String) {
+        self.is_active = true;
+        self.problem = problem;
+        self.current_attempt = 0;
+        self.max_attempts = max_attempts;
+        self.status = "generating".to_string();
+        self.code_preview.clear();
+        self.output = None;
+        self.error = None;
+        self.execution_time_ms = 0;
+        self.timeout_ms = timeout_ms;
+        self.language = language.clone();
+        self.started_at = Some(chrono::Local::now().format("%H:%M:%S").to_string());
+        self.logs.clear();
+
+        let lang_emoji = if language == "Python" { "🐍" } else { "📜" };
+        self.logs.push(LogEntry::new(
+            LogLevel::Info,
+            format!("{} Sandbox {} iniciado: {}", lang_emoji, language, if self.problem.len() > 50 {
+                format!("{}...", &self.problem[..50])
+            } else {
+                self.problem.clone()
+            }),
+        ));
+    }
+
+    /// Atualiza uma tentativa
+    pub fn update_attempt(&mut self, attempt: usize, code_preview: String, status: String, error: Option<String>) {
+        self.current_attempt = attempt;
+        self.code_preview = code_preview;
+        self.status = status.clone();
+        if let Some(e) = &error {
+            self.logs.push(LogEntry::new(LogLevel::Warning, format!("❌ Tentativa {}: {}", attempt, e)));
+        } else if status == "executing" {
+            self.logs.push(LogEntry::new(LogLevel::Info, format!("🔄 Tentativa {}/{}: Executando {}...", attempt, self.max_attempts, self.language)));
+        }
+    }
+
+    /// Completa a execução
+    pub fn complete(&mut self, success: bool, output: Option<String>, error: Option<String>, attempts: usize, execution_time_ms: u64, code_preview: String, language: String) {
+        self.is_active = false;
+        self.current_attempt = attempts;
+        self.status = if success { "success".to_string() } else { "error".to_string() };
+        self.output = output.clone();
+        self.error = error.clone();
+        self.execution_time_ms = execution_time_ms;
+        self.code_preview = code_preview;
+        self.language = language.clone();
+
+        let lang_emoji = if language == "Python" { "🐍" } else { "📜" };
+        if success {
+            self.logs.push(LogEntry::new(
+                LogLevel::Success,
+                format!("✅ {} Sucesso em {} tentativa(s), {}ms", lang_emoji, attempts, execution_time_ms),
+            ));
+            if let Some(out) = &output {
+                let preview = if out.len() > 100 { format!("{}...", &out[..100]) } else { out.clone() };
+                self.logs.push(LogEntry::new(LogLevel::Info, format!("📤 Output: {}", preview)));
+            }
+        } else if let Some(e) = &error {
+            self.logs.push(LogEntry::new(LogLevel::Error, format!("❌ {} Falhou após {} tentativa(s): {}", lang_emoji, attempts, e)));
+        }
+    }
+
+    /// Reseta o estado
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Estado de uma tarefa paralela
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TaskStatus {
@@ -431,6 +534,47 @@ pub enum AppEvent {
         /// Conteúdo da resposta
         response: String,
     },
+    /// Sandbox iniciou execução de código
+    SandboxStart {
+        /// Problema/tarefa sendo resolvido
+        problem: String,
+        /// Máximo de tentativas configurado
+        max_attempts: usize,
+        /// Timeout em ms
+        timeout_ms: u64,
+        /// Linguagem de programação (JavaScript, Python, Auto)
+        language: String,
+    },
+    /// Sandbox - atualização de tentativa
+    SandboxAttempt {
+        /// Número da tentativa atual (1-based)
+        attempt: usize,
+        /// Máximo de tentativas
+        max_attempts: usize,
+        /// Preview do código sendo executado
+        code_preview: String,
+        /// Status: "generating", "executing", "success", "error"
+        status: String,
+        /// Mensagem de erro (se aplicável)
+        error: Option<String>,
+    },
+    /// Sandbox concluiu execução
+    SandboxComplete {
+        /// Se foi bem-sucedido
+        success: bool,
+        /// Output da execução (se sucesso)
+        output: Option<String>,
+        /// Erro (se falha)
+        error: Option<String>,
+        /// Número total de tentativas
+        attempts: usize,
+        /// Tempo total de execução em ms
+        execution_time_ms: u64,
+        /// Preview do código final
+        code_preview: String,
+        /// Linguagem de programação usada
+        language: String,
+    },
 }
 
 /// Estado da aplicação
@@ -511,8 +655,16 @@ pub struct App {
     pub completed_steps: Vec<CompletedStep>,
     /// Estado do AgentAnalyzer (análise de erros em background)
     pub agent_analyzer: AgentAnalyzerState,
+    /// Estado do Sandbox de execução de código
+    pub sandbox: SandboxState,
     /// Mensagem temporária do clipboard (feedback ao usuário)
     pub clipboard_message: Option<String>,
+    /// Se o campo de input está focado (durante pesquisa)
+    pub input_focused: bool,
+    /// Contador de mensagens pendentes na fila para o agente
+    pub pending_user_messages: usize,
+    /// Fila de mensagens do usuário para enviar ao agente
+    pub user_message_queue: VecDeque<String>,
 }
 
 /// Step completado para histórico
@@ -578,7 +730,11 @@ impl App {
             all_tasks: Vec::new(),
             completed_steps: Vec::new(),
             agent_analyzer: AgentAnalyzerState::default(),
+            sandbox: SandboxState::default(),
             clipboard_message: None,
+            input_focused: false,
+            pending_user_messages: 0,
+            user_message_queue: VecDeque::new(),
         };
         // Carregar sessões anteriores
         app.load_sessions();
@@ -821,6 +977,16 @@ impl App {
                 // A resposta será processada pelo agente via canal
                 let _ = question_id; // Usar se necessário para rastrear
             }
+            // Eventos de Sandbox
+            AppEvent::SandboxStart { problem, max_attempts, timeout_ms, language } => {
+                self.sandbox.start(problem, max_attempts, timeout_ms, language);
+            }
+            AppEvent::SandboxAttempt { attempt, max_attempts: _, code_preview, status, error } => {
+                self.sandbox.update_attempt(attempt, code_preview, status, error);
+            }
+            AppEvent::SandboxComplete { success, output, error, attempts, execution_time_ms, code_preview, language } => {
+                self.sandbox.complete(success, output, error, attempts, execution_time_ms, code_preview, language);
+            }
         }
     }
 
@@ -990,6 +1156,45 @@ impl App {
     /// Move cursor para fim
     pub fn cursor_end(&mut self) {
         self.cursor_pos = self.char_count();
+    }
+
+    /// Alterna o foco do input durante a pesquisa
+    pub fn toggle_input_focus(&mut self) {
+        self.input_focused = !self.input_focused;
+    }
+
+    /// Foca o campo de input
+    pub fn focus_input(&mut self) {
+        self.input_focused = true;
+    }
+
+    /// Desfoca o campo de input
+    pub fn unfocus_input(&mut self) {
+        self.input_focused = false;
+    }
+
+    /// Enfileira uma mensagem do usuário para enviar ao agente
+    pub fn queue_user_message(&mut self, message: String) {
+        if !message.trim().is_empty() {
+            self.user_message_queue.push_back(message.clone());
+            self.pending_user_messages = self.user_message_queue.len();
+            self.logs.push_back(LogEntry::new(
+                LogLevel::Info,
+                format!("📤 Mensagem enfileirada: {:.40}...", message),
+            ));
+        }
+    }
+
+    /// Retira a próxima mensagem da fila
+    pub fn dequeue_user_message(&mut self) -> Option<String> {
+        let msg = self.user_message_queue.pop_front();
+        self.pending_user_messages = self.user_message_queue.len();
+        msg
+    }
+
+    /// Verifica se há mensagens pendentes
+    pub fn has_pending_messages(&self) -> bool {
+        !self.user_message_queue.is_empty()
     }
 
     /// Navega para trás no histórico

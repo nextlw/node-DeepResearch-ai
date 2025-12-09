@@ -561,24 +561,68 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                             }
                         }
                         AppScreen::Research => {
-                            match key.code {
-                                KeyCode::Char('q') | KeyCode::Esc => {
-                                    app.should_quit = true;
-                                    break;
-                                }
-                                KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
-                                KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
-                                KeyCode::PageUp => {
-                                    for _ in 0..5 {
-                                        app.scroll_up();
+                            // Se o input está focado, processar digitação
+                            if app.input_focused {
+                                match key.code {
+                                    KeyCode::Tab | KeyCode::Esc => {
+                                        // Desfocar input
+                                        app.unfocus_input();
                                     }
-                                }
-                                KeyCode::PageDown => {
-                                    for _ in 0..5 {
-                                        app.scroll_down();
+                                    KeyCode::Enter => {
+                                        // Enviar mensagem para a fila do agente
+                                        if !app.input_text.is_empty() {
+                                            let message = app.input_text.clone();
+                                            app.queue_user_message(message.clone());
+
+                                            // Enviar via canal para o agente (async, não bloqueia)
+                                            if let Some(ref tx) = user_response_tx {
+                                                let user_resp = UserResponse::spontaneous(message);
+                                                let _ = tx.try_send(user_resp);
+                                            }
+
+                                            app.input_text.clear();
+                                            app.cursor_pos = 0;
+                                        }
                                     }
+                                    KeyCode::Char(c) => app.input_char(c),
+                                    KeyCode::Backspace => app.input_backspace(),
+                                    KeyCode::Delete => app.input_delete(),
+                                    KeyCode::Left => app.cursor_left(),
+                                    KeyCode::Right => app.cursor_right(),
+                                    KeyCode::Home => app.cursor_home(),
+                                    KeyCode::End => app.cursor_end(),
+                                    _ => {}
                                 }
-                                _ => {}
+                            } else {
+                                // Input não focado - navegação normal
+                                match key.code {
+                                    KeyCode::Char('q') => {
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Esc => {
+                                        // Esc sem input focado = sair
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Tab => {
+                                        // Focar no input
+                                        app.focus_input();
+                                    }
+                                    KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
+                                    KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
+                                    KeyCode::PageUp => {
+                                        for _ in 0..5 {
+                                            app.scroll_up();
+                                        }
+                                    }
+                                    KeyCode::PageDown => {
+                                        for _ in 0..5 {
+                                            app.scroll_down();
+                                        }
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                         AppScreen::Result => {
@@ -914,6 +958,67 @@ fn spawn_research_task(
                         LogLevel::Info,
                         format!("▶️ Retomando execução após resposta ({})", question_id)
                     ))
+                }
+                // Eventos de Sandbox (execução de código)
+                AgentProgress::SandboxStart { problem, max_attempts, timeout_ms, language } => {
+                    let _ = tx_clone.send(AppEvent::SandboxStart {
+                        problem: problem.clone(),
+                        max_attempts,
+                        timeout_ms,
+                        language: language.clone(),
+                    });
+                    let lang_emoji = if language == "Python" { "🐍" } else { "📜" };
+                    AppEvent::Log(LogEntry::new(
+                        LogLevel::Info,
+                        format!("{} Sandbox {} iniciado: {} (max {} tentativas, {}ms timeout)",
+                            lang_emoji, language,
+                            if problem.len() > 50 { format!("{}...", &problem[..50]) } else { problem },
+                            max_attempts, timeout_ms)
+                    ))
+                }
+                AgentProgress::SandboxAttempt { attempt, max_attempts, code_preview, status, error } => {
+                    let _ = tx_clone.send(AppEvent::SandboxAttempt {
+                        attempt,
+                        max_attempts,
+                        code_preview: code_preview.clone(),
+                        status: status.clone(),
+                        error: error.clone(),
+                    });
+                    let msg = if let Some(e) = error {
+                        format!("🔄 Sandbox tentativa {}/{}: {} - {}", attempt, max_attempts, status, e)
+                    } else {
+                        format!("🔄 Sandbox tentativa {}/{}: {}", attempt, max_attempts, status)
+                    };
+                    AppEvent::Log(LogEntry::new(LogLevel::Info, msg))
+                }
+                AgentProgress::SandboxComplete { success, output, error, attempts, execution_time_ms, code_preview, language } => {
+                    let _ = tx_clone.send(AppEvent::SandboxComplete {
+                        success,
+                        output: output.clone(),
+                        error: error.clone(),
+                        attempts,
+                        execution_time_ms,
+                        code_preview: code_preview.clone(),
+                        language: language.clone(),
+                    });
+                    let lang_emoji = if language == "Python" { "🐍" } else { "📜" };
+                    if success {
+                        let out_preview = output.as_ref()
+                            .map(|o| if o.len() > 80 { format!("{}...", &o[..80]) } else { o.clone() })
+                            .unwrap_or_default();
+                        AppEvent::Log(LogEntry::new(
+                            LogLevel::Success,
+                            format!("{} {} concluído: {} tentativas, {}ms → {}",
+                                lang_emoji, language, attempts, execution_time_ms, out_preview)
+                        ))
+                    } else {
+                        let err = error.unwrap_or_else(|| "Unknown error".into());
+                        AppEvent::Log(LogEntry::new(
+                            LogLevel::Error,
+                            format!("{} {} falhou após {} tentativas, {}ms: {}",
+                                lang_emoji, language, attempts, execution_time_ms, err)
+                        ))
+                    }
                 }
             };
             let _ = tx_clone.send(app_event);

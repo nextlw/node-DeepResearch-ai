@@ -1015,11 +1015,32 @@ ANSWER: Provide the final answer
 
 ### `[coding]` Executar Código
 
-Executa código em sandbox seguro (reservado).
+Executa código em sandbox seguro com escolha automática de linguagem.
 
+#### Linguagens Suportadas
+
+| Linguagem  | Engine           | Melhor para                                                          |
+| ---------- | ---------------- | -------------------------------------------------------------------- |
+| JavaScript | Boa (in-process) | JSON, strings, cálculos simples, transformações rápidas              |
+| Python     | Subprocess       | Análise de dados, estatísticas, regex complexo, cálculos científicos |
+| Auto       | LLM escolhe      | O modelo decide a melhor linguagem baseado no problema               |
+
+#### Formato da Ação
+
+```json
+{
+  "action": "coding",
+  "code": "Descrição do problema a resolver",
+  "language": "javascript|python|auto",
+  "think": "raciocínio do agente"
+}
 ```
-CODING: Execute code for data processing
-```
+
+#### Segurança
+
+- **JavaScript**: Executado via Boa Engine (isolado, sem acesso a filesystem/rede)
+- **Python**: Executado via subprocess com timeout rigoroso
+- Retry inteligente com feedback de erros para o LLM (até 3 tentativas)
 
 **Parâmetros:**
 
@@ -1089,12 +1110,288 @@ Eventos internos para atualização da UI.
 
 ### Estados do Agente
 
-| Estado       | Descrição                       |
-| ------------ | ------------------------------- |
-| `Processing` | Processando (step, budget_used) |
-| `BeastMode`  | Modo forçado (>85% budget)      |
-| `Completed`  | Concluído com sucesso           |
-| `Failed`     | Falha definitiva                |
+| Estado          | Descrição                              |
+| --------------- | -------------------------------------- |
+| `Processing`    | Processando (step, budget_used)        |
+| `InputRequired` | Aguardando input do usuário (blocking) |
+| `BeastMode`     | Modo forçado (>85% budget)             |
+| `Completed`     | Concluído com sucesso                  |
+| `Failed`        | Falha definitiva                       |
+
+---
+
+## 💬 Sistema de Interação Usuário-Agente
+
+O Deep Research implementa um sistema híbrido de interação entre o usuário e o agente, compatível com a OpenAI Responses API (`input_required` state).
+
+### Visão Geral
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DeepResearchAgent                            │
+│  ┌──────────────────┐    ┌──────────────────┐                  │
+│  │   AgentState     │    │  InteractionHub  │◄── user_input_rx │
+│  │  - Running       │    │  - pending_qs    │                  │
+│  │  - InputRequired │    │  - user_inputs   │                  │
+│  │  - Completed     │    │  - callbacks     │                  │
+│  └──────────────────┘    └──────────────────┘                  │
+│           │                      │                              │
+│           ▼                      ▼                              │
+│  ┌──────────────────────────────────────────┐                  │
+│  │          AgentAction::AskUser            │                  │
+│  │  - question_type: QuestionType           │                  │
+│  │  - question: String                      │                  │
+│  │  - options: Option<Vec<String>>          │                  │
+│  │  - is_blocking: bool                     │                  │
+│  └──────────────────────────────────────────┘                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+            ┌───────────────┐   ┌───────────────┐
+            │     TUI       │   │   Chatbot     │
+            │  (dev/test)   │   │  (produção)   │
+            │               │   │ digisac/suri  │
+            └───────────────┘   └───────────────┘
+```
+
+### Modos de Interação
+
+| Modo         | Comportamento                                         | Uso                               |
+| ------------ | ----------------------------------------------------- | --------------------------------- |
+| **Blocking** | Agente PAUSA e aguarda resposta                       | Clarificação, confirmação crítica |
+| **Async**    | Mensagens entram na fila, processadas no próximo step | Feedback, informações adicionais  |
+
+### Tipos de Pergunta (QuestionType)
+
+| Tipo            | Blocking | Descrição                               |
+| --------------- | -------- | --------------------------------------- |
+| `Clarification` | ✅ Sim   | Falta informação vital para continuar   |
+| `Confirmation`  | ✅ Sim   | Confirmação antes de ação importante    |
+| `Preference`    | ✅ Sim   | Escolha entre opções válidas            |
+| `Suggestion`    | ❌ Não   | Sugestão/feedback (processado no ciclo) |
+
+### Atalhos TUI - Interação Durante Pesquisa
+
+| Tecla   | Ação                                          |
+| ------- | --------------------------------------------- |
+| `Tab`   | Focar/desfocar campo de mensagem              |
+| `Enter` | Enviar mensagem para o agente (quando focado) |
+| `Esc`   | Desfocar input ou sair (quando não focado)    |
+
+### Layout da Tela de Pesquisa com Input
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 🔍 DEEP RESEARCH v0.1.0 │ Pesquisando...                        │
+│ Pergunta: [sua pergunta aqui...]                                │
+├───────────────────────────────────────┬─────────────────────────┤
+│ 💭 Raciocínio do Agente              │ 🎯 Ação Atual           │
+│                                       │    Step: 3              │
+│ Buscando informações sobre...         │    Ação: SEARCH         │
+├───────────────────────────────────────┼─────────────┬───────────┤
+│ 📋 Logs                              │ 📊 Stats    │ 👥 Personas│
+│ [17:30:01] ℹ️ Buscando...            │ URLs: 45    │ ● Agente  │
+├───────────────────────────────────────┴─────────────┴───────────┤
+│ ████████████████░░░░░░░░░░░░░░░░░░░░░░  40%  Step 4 SEARCH     │
+├─────────────────────────────────────────────────────────────────┤
+│ 💬 Enviar mensagem │ Tab: focar │ Enter: enviar                │◀ NOVO!
+│ [_____________________________________________________ ]       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Tela de Input Requerido (Blocking)
+
+Quando o agente precisa de uma resposta crítica, a tela muda para:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ ❓ PERGUNTA DO AGENTE                                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Tipo: clarification                                            │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │ Você poderia confirmar se deseja que eu faça uma        │   │
+│  │ busca via API especificamente no crate 'parrachos'      │   │
+│  │ dentro do diretório especificado?                       │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌─ Sua Resposta ─────────────────────────────────────────┐    │
+│  │ █                                                      │    │
+│  └────────────────────────────────────────────────────────┘    │
+│                                                                 │
+│  Enter: Enviar resposta  │  Esc: Cancelar                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Layout com Sandbox Ativo
+
+Quando o agente está executando código, um painel dedicado mostra o progresso:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 🔍 DEEP RESEARCH v0.1.0 │ Pesquisando...                        │
+├───────────────────────────────────┬─────────────────────────────┤
+│ 💭 Raciocínio do Agente          │ 🖥️ SANDBOX                  │
+│                                   │ ──────────────────────────  │
+│ Preciso processar os dados        │ 🐍 Python                   │
+│ encontrados para extrair          │ ⏳ GERANDO...               │
+│ informações estatísticas...       │    1/3 tentativas           │
+│                                   │    timeout: 10000ms         │
+│                                   │                             │
+│                                   │ 📝 Calcular média e desvio  │
+│                                   │    padrão dos valores...    │
+│                                   │                             │
+│                                   │ 💻 Código:                  │
+│                                   │ ┌───────────────────────┐   │
+│                                   │ │ import statistics     │   │
+│                                   │ │ values = [...]        │   │
+│                                   │ │ mean = statistics...  │   │
+│                                   │ └───────────────────────┘   │
+├───────────────────────────────────┴─────────────────────────────┤
+│ ████████████████░░░░░░░░░░░░░░░░░░░░░░  40%  Step 4 CODING     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Fluxo de Execução
+
+#### Pergunta Blocking (Clarificação)
+
+```
+1. LLM retorna AgentAction::AskUser { is_blocking: true, ... }
+2. Agente emite AgentProgress::AgentQuestion
+3. Agente muda estado para InputRequired
+4. TUI mostra tela de pergunta dedicada
+5. Usuário digita resposta e pressiona Enter
+6. Resposta enviada via canal para InteractionHub
+7. Agente processa e adiciona ao knowledge como UserProvided
+8. Agente retoma execução automaticamente
+```
+
+#### Input Async (Mensagem Espontânea)
+
+```
+1. Usuário pressiona Tab durante pesquisa (foca input)
+2. Digita mensagem e pressiona Enter
+3. Mensagem entra na fila user_message_queue
+4. Enviada via canal para o InteractionHub do agente
+5. poll_user_messages() processa no próximo step
+6. Adicionado ao knowledge como UserProvided
+7. LLM vê novo contexto e ajusta ações
+```
+
+### API: Compatibilidade OpenAI Responses
+
+O estado `InputRequired` mapeia diretamente para o conceito de `input_required` da OpenAI:
+
+```json
+{
+  "status": "input_required",
+  "pending_input": {
+    "type": "clarification",
+    "question": "Qual é a cidade de origem da sua viagem?",
+    "options": null
+  }
+}
+```
+
+### Módulos do Sistema de Interação
+
+| Módulo              | Arquivo                | Descrição                          |
+| ------------------- | ---------------------- | ---------------------------------- |
+| **InteractionHub**  | `agent/interaction.rs` | Hub central de comunicação         |
+| **PendingQuestion** | `agent/interaction.rs` | Estrutura de pergunta pendente     |
+| **UserResponse**    | `agent/interaction.rs` | Estrutura de resposta do usuário   |
+| **QuestionType**    | `agent/interaction.rs` | Enum de tipos de pergunta          |
+| **ChatbotAdapter**  | `agent/chatbot.rs`     | Trait para integração com chatbots |
+| **RichMessage**     | `agent/chatbot.rs`     | Mensagens formatadas com botões    |
+
+### Estruturas Principais
+
+#### PendingQuestion
+
+```rust
+pub struct PendingQuestion {
+    pub id: Uuid,                        // ID único da pergunta
+    pub question_type: QuestionType,     // Tipo (Clarification, Confirmation, etc.)
+    pub question: String,                // Texto da pergunta
+    pub options: Option<Vec<String>>,    // Opções (para Preference)
+    pub is_blocking: bool,               // Se deve pausar até resposta
+    pub created_at: DateTime<Utc>,       // Timestamp de criação
+}
+```
+
+#### UserResponse
+
+```rust
+pub struct UserResponse {
+    pub question_id: Option<Uuid>,       // ID da pergunta (None = espontânea)
+    pub content: String,                 // Conteúdo da resposta
+    pub timestamp: DateTime<Utc>,        // Timestamp
+    pub selected_option: Option<usize>,  // Índice da opção selecionada
+}
+```
+
+### Integração com Chatbots (Produção)
+
+A trait `ChatbotAdapter` permite integração com plataformas de chat:
+
+```rust
+#[async_trait]
+pub trait ChatbotAdapter: Send + Sync {
+    /// Envia mensagem para o usuário
+    async fn send_message(&self, message: &str) -> Result<(), ChatbotError>;
+
+    /// Envia pergunta e aguarda resposta (blocking)
+    async fn ask_user(&self, question: &PendingQuestion) -> Result<UserResponse, ChatbotError>;
+
+    /// Envia opções para o usuário escolher
+    async fn send_options(&self, question: &str, options: &[String]) -> Result<String, ChatbotError>;
+
+    /// Tenta receber mensagem sem bloquear
+    fn try_receive(&self) -> Result<Option<UserResponse>, ChatbotError>;
+
+    /// Recebe mensagem (blocking com timeout)
+    async fn receive_message(&self, timeout: Duration) -> Result<UserResponse, ChatbotError>;
+}
+```
+
+#### Plataformas Suportadas (Futuro)
+
+| Plataforma    | Status       | Descrição                      |
+| ------------- | ------------ | ------------------------------ |
+| **TUI**       | ✅ Pronto    | Interface terminal (dev/test)  |
+| **DigiSac**   | 🔜 Planejado | Integração via crate existente |
+| **Suri**      | 🔜 Planejado | API de mensagens (tlw_irus)    |
+| **Parrachos** | 🔜 Planejado | Webhook/callback para UI web   |
+
+### Exemplo de Uso Programático
+
+```rust
+use deep_research::agent::{DeepResearchAgent, UserResponse};
+
+// Criar agente com canais de interação
+let (agent, response_tx, question_rx) = DeepResearchAgent::new(llm, search, budget)
+    .with_interaction_channels(16);
+
+// Spawn task para processar perguntas
+tokio::spawn(async move {
+    while let Some(question) = question_rx.recv().await {
+        println!("Agente pergunta: {}", question.question);
+
+        // Obter resposta do usuário (ex: via stdin, chatbot, etc.)
+        let user_input = get_user_input().await;
+
+        // Enviar resposta de volta
+        let response = UserResponse::to_question(question.id.to_string(), user_input);
+        response_tx.send(response).await.unwrap();
+    }
+});
+
+// Executar pesquisa
+let result = agent.run("Minha pergunta complexa").await;
+```
 
 ### Telas da TUI
 

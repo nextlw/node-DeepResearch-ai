@@ -174,6 +174,7 @@ fn render_research_screen(frame: &mut Frame<'_>, app: &App) {
             Constraint::Length(8),  // Raciocínio e Ação (em cima)
             Constraint::Min(8),     // Logs e Stats (em baixo)
             Constraint::Length(3),  // Barra de progresso
+            Constraint::Length(3),  // Input do usuário (sempre visível)
         ])
         .split(frame.area());
 
@@ -181,6 +182,63 @@ fn render_research_screen(frame: &mut Frame<'_>, app: &App) {
     render_thinking_panel(frame, app, chunks[1]);
     render_main_content(frame, app, chunks[2]);
     render_progress(frame, app, chunks[3]);
+    render_user_input(frame, app, chunks[4]);
+}
+
+/// Renderiza o campo de input do usuário (sempre visível durante pesquisa)
+fn render_user_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    // Indicador de mensagens pendentes na fila
+    let queue_indicator = if app.pending_user_messages > 0 {
+        format!(" 📨 {} msg(s) na fila ", app.pending_user_messages)
+    } else {
+        String::new()
+    };
+
+    let title = format!(
+        " 💬 Enviar mensagem ao agente{} │ Enter: enviar │ Tab: focar ",
+        queue_indicator
+    );
+
+    // Texto com cursor
+    let chars: Vec<char> = app.input_text.chars().collect();
+    let cursor_pos = app.cursor_pos.min(chars.len());
+    let before: String = chars[..cursor_pos].iter().collect();
+    let after: String = chars[cursor_pos..].iter().collect();
+
+    let input_content = if app.input_text.is_empty() && !app.input_focused {
+        Line::from(vec![
+            Span::styled(
+                "Pressione Tab para digitar uma mensagem...",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::raw(before),
+            Span::styled(
+                if app.input_focused { "│" } else { "" },
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::RAPID_BLINK),
+            ),
+            Span::raw(after),
+        ])
+    };
+
+    let border_color = if app.input_focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+
+    let input = Paragraph::new(input_content)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color)),
+        )
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(input, area);
 }
 
 /// Renderiza o header
@@ -303,43 +361,87 @@ fn render_thinking_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// Renderiza o conteúdo principal (logs + analyzer + tasks + stats + personas)
 fn render_main_content(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    // Se AgentAnalyzer está ativo ou tem resultado, mostrar painel dedicado
+    // Determinar quais painéis especiais estão ativos
     let has_analyzer = app.agent_analyzer.is_active || app.agent_analyzer.last_improvement.is_some();
+    let has_sandbox = app.sandbox.is_active || app.sandbox.status == "success" || app.sandbox.status == "error";
 
-    if has_analyzer {
-        // Layout com AgentAnalyzer: logs (35%), analyzer (20%), tasks (15%), stats (15%), personas (15%)
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(35),
-                Constraint::Percentage(20),
-                Constraint::Percentage(15),
-                Constraint::Percentage(15),
-                Constraint::Percentage(15),
-            ])
-            .split(area);
+    match (has_analyzer, has_sandbox) {
+        // Ambos ativos: logs (30%), analyzer (18%), sandbox (18%), tasks (12%), stats (12%), personas (10%)
+        (true, true) => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(28),
+                    Constraint::Percentage(17),
+                    Constraint::Percentage(17),
+                    Constraint::Percentage(13),
+                    Constraint::Percentage(13),
+                    Constraint::Percentage(12),
+                ])
+                .split(area);
 
-        render_logs(frame, app, chunks[0]);
-        render_agent_analyzer(frame, &app.agent_analyzer, chunks[1]);
-        render_parallel_tasks(frame, app, chunks[2]);
-        render_stats(frame, app, chunks[3]);
-        render_personas(frame, app, chunks[4]);
-    } else {
+            render_logs(frame, app, chunks[0]);
+            render_agent_analyzer(frame, &app.agent_analyzer, chunks[1]);
+            render_sandbox(frame, &app.sandbox, chunks[2]);
+            render_parallel_tasks(frame, app, chunks[3]);
+            render_stats(frame, app, chunks[4]);
+            render_personas(frame, app, chunks[5]);
+        }
+        // Apenas AgentAnalyzer: logs (35%), analyzer (20%), tasks (15%), stats (15%), personas (15%)
+        (true, false) => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(35),
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(15),
+                    Constraint::Percentage(15),
+                    Constraint::Percentage(15),
+                ])
+                .split(area);
+
+            render_logs(frame, app, chunks[0]);
+            render_agent_analyzer(frame, &app.agent_analyzer, chunks[1]);
+            render_parallel_tasks(frame, app, chunks[2]);
+            render_stats(frame, app, chunks[3]);
+            render_personas(frame, app, chunks[4]);
+        }
+        // Apenas Sandbox: logs (35%), sandbox (20%), tasks (15%), stats (15%), personas (15%)
+        (false, true) => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(35),
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(15),
+                    Constraint::Percentage(15),
+                    Constraint::Percentage(15),
+                ])
+                .split(area);
+
+            render_logs(frame, app, chunks[0]);
+            render_sandbox(frame, &app.sandbox, chunks[1]);
+            render_parallel_tasks(frame, app, chunks[2]);
+            render_stats(frame, app, chunks[3]);
+            render_personas(frame, app, chunks[4]);
+        }
         // Layout padrão: logs (40%), tasks (20%), stats (20%), personas (20%)
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(40),
-                Constraint::Percentage(20),
-                Constraint::Percentage(20),
-                Constraint::Percentage(20),
-            ])
-            .split(area);
+        (false, false) => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(40),
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(20),
+                ])
+                .split(area);
 
-        render_logs(frame, app, chunks[0]);
-        render_parallel_tasks(frame, app, chunks[1]);
-        render_stats(frame, app, chunks[2]);
-        render_personas(frame, app, chunks[3]);
+            render_logs(frame, app, chunks[0]);
+            render_parallel_tasks(frame, app, chunks[1]);
+            render_stats(frame, app, chunks[2]);
+            render_personas(frame, app, chunks[3]);
+        }
     }
 }
 
@@ -475,6 +577,169 @@ fn render_agent_analyzer(frame: &mut Frame<'_>, analyzer: &AgentAnalyzerState, a
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color)),
         );
+
+    frame.render_widget(content, area);
+}
+
+/// Renderiza o painel do Sandbox (execução de código)
+fn render_sandbox(frame: &mut Frame<'_>, sandbox: &super::app::SandboxState, area: Rect) {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    // Determinar emoji da linguagem
+    let lang_emoji = if sandbox.language == "Python" { "🐍" } else { "📜" };
+    let lang_color = if sandbox.language == "Python" { Color::Yellow } else { Color::Cyan };
+
+    // Header com status
+    let (status_icon, status_text, status_color) = match sandbox.status.as_str() {
+        "generating" => ("⏳", "GERANDO...", Color::Yellow),
+        "executing" => ("🔄", "EXECUTANDO...", Color::Cyan),
+        "success" => ("✅", "SUCESSO", Color::Green),
+        "error" => ("❌", "FALHOU", Color::Red),
+        _ => ("⏸️", "IDLE", Color::DarkGray),
+    };
+
+    if sandbox.is_active || sandbox.status == "success" || sandbox.status == "error" {
+        // Linguagem no topo
+        if !sandbox.language.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{} ", lang_emoji), Style::default().fg(lang_color)),
+                Span::styled(
+                    sandbox.language.clone(),
+                    Style::default().fg(lang_color).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
+            Span::styled(
+                status_text,
+                Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+
+        // Tentativas
+        if sandbox.max_attempts > 0 {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   {}/{} tentativas", sandbox.current_attempt, sandbox.max_attempts),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+
+        // Tempo
+        if sandbox.execution_time_ms > 0 {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   {}ms", sandbox.execution_time_ms),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        } else if sandbox.is_active {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   timeout: {}ms", sandbox.timeout_ms),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+
+        // Problema truncado
+        if !sandbox.problem.is_empty() {
+            let problem_preview = if sandbox.problem.len() > 30 {
+                format!("{}...", &sandbox.problem[..27])
+            } else {
+                sandbox.problem.clone()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("📝 ", Style::default().fg(Color::White)),
+                Span::styled(problem_preview, Style::default().fg(Color::White)),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+
+        // Preview do código (truncado)
+        if !sandbox.code_preview.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("💻 Código:", Style::default().fg(Color::Cyan)),
+            ]));
+
+            // Mostrar primeiras linhas do código
+            let code_lines: Vec<&str> = sandbox.code_preview.lines().take(4).collect();
+            for code_line in code_lines {
+                let line_preview = if code_line.len() > 25 {
+                    format!("  {}...", &code_line[..22])
+                } else {
+                    format!("  {}", code_line)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(line_preview, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
+
+        // Output ou Erro
+        if let Some(output) = &sandbox.output {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("📤 Output:", Style::default().fg(Color::Green)),
+            ]));
+            let out_preview = if output.len() > 50 { format!("{}...", &output[..47]) } else { output.clone() };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {}", out_preview), Style::default().fg(Color::White)),
+            ]));
+        }
+
+        if let Some(error) = &sandbox.error {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("❌ Erro:", Style::default().fg(Color::Red)),
+            ]));
+            let err_preview = if error.len() > 50 { format!("{}...", &error[..47]) } else { error.clone() };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {}", err_preview), Style::default().fg(Color::Red)),
+            ]));
+        }
+    } else {
+        // Estado idle
+        lines.push(Line::from(vec![
+            Span::styled("⏸️ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("IDLE", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Aguardando execução",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "de código...",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
+
+    let border_color = match sandbox.status.as_str() {
+        "generating" | "executing" => Color::Yellow,
+        "success" => Color::Green,
+        "error" => Color::Red,
+        _ => Color::DarkGray,
+    };
+
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" 🖥️ Sandbox ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color)),
+        )
+        .wrap(Wrap { trim: true });
 
     frame.render_widget(content, area);
 }

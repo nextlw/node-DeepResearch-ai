@@ -86,7 +86,7 @@ pub enum AgentAction {
     Coding {
         /// Descrição do problema a resolver com código
         ///
-        /// O LLM vai gerar código JavaScript baseado nesta descrição
+        /// O LLM vai gerar código baseado nesta descrição
         /// e nas variáveis disponíveis no contexto.
         problem: String,
         /// Variáveis específicas do knowledge a disponibilizar (opcional)
@@ -94,6 +94,12 @@ pub enum AgentAction {
         /// Se None, todas as variáveis do knowledge serão disponibilizadas.
         /// Se Some, apenas as variáveis listadas serão incluídas no contexto.
         context_vars: Option<Vec<String>>,
+        /// Linguagem de programação preferida (opcional)
+        ///
+        /// - "javascript" - Usa Boa Engine (in-process)
+        /// - "python" - Usa subprocess Python
+        /// - "auto" ou None - LLM escolhe a melhor linguagem
+        language: Option<String>,
         /// Raciocínio do agente para esta ação
         think: String,
     },
@@ -265,8 +271,10 @@ pub enum DiaryEntry {
     /// Para ações que envolvem processamento de dados
     /// através de execução de código.
     Coding {
-        /// Código que foi executado (JavaScript).
+        /// Código que foi executado
         code: String,
+        /// Linguagem usada (JavaScript ou Python)
+        language: String,
         /// Raciocínio do agente para executar este código.
         think: String,
     },
@@ -343,8 +351,8 @@ impl DiaryEntry {
                     eval_type, reason
                 )
             }
-            DiaryEntry::Coding { think, .. } => {
-                format!("[CODING]\nThink: {}", think)
+            DiaryEntry::Coding { language, think, .. } => {
+                format!("[CODING:{}]\nThink: {}", language, think)
             }
             DiaryEntry::History {
                 sessions_loaded,

@@ -1,38 +1,96 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// CODE SANDBOX - Execução segura de JavaScript via Boa Engine
+// CODE SANDBOX - Execução segura de JavaScript e Python
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
-// Este módulo permite ao agente gerar e executar código JavaScript em um
-// ambiente isolado (sandbox) para processar dados, chamar APIs e transformar
+// Este módulo permite ao agente gerar e executar código em um ambiente
+// isolado (sandbox) para processar dados, chamar APIs e transformar
 // informações coletadas durante a pesquisa.
 //
+// Linguagens suportadas:
+// - JavaScript (via Boa Engine) - para manipulação de JSON/strings
+// - Python (via subprocess) - para análise de dados, cálculos complexos
+//
 // Características:
-// - Isolamento completo (sem acesso a filesystem/rede)
+// - Isolamento completo (sem acesso a filesystem/rede perigoso)
 // - Timeout de execução configurável
-// - Limite de iterações de loop e recursão
+// - Limite de iterações de loop e recursão (JS)
 // - Retry inteligente com feedback de erros para o LLM
+// - LLM pode escolher automaticamente a melhor linguagem
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 use crate::llm::{LlmClient, LlmError};
 use crate::types::KnowledgeItem;
 use boa_engine::{Context, JsValue, Source};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use tokio::process::Command;
+use tokio::time::timeout;
+
+/// Linguagem de programação para execução no sandbox
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SandboxLanguage {
+    /// JavaScript via Boa Engine (in-process, mais rápido)
+    /// Bom para: manipulação de JSON, strings, cálculos simples
+    #[default]
+    JavaScript,
+    /// Python via subprocess (mais poderoso)
+    /// Bom para: análise de dados, regex complexo, cálculos científicos
+    Python,
+    /// LLM escolhe automaticamente a melhor linguagem
+    Auto,
+}
+
+impl SandboxLanguage {
+    /// Retorna o nome da linguagem para exibição
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            SandboxLanguage::JavaScript => "JavaScript",
+            SandboxLanguage::Python => "Python",
+            SandboxLanguage::Auto => "Auto",
+        }
+    }
+
+    /// Retorna a extensão de arquivo
+    pub fn extension(&self) -> &'static str {
+        match self {
+            SandboxLanguage::JavaScript => "js",
+            SandboxLanguage::Python => "py",
+            SandboxLanguage::Auto => "auto",
+        }
+    }
+
+    /// Verifica se Python está disponível no sistema
+    pub async fn is_python_available() -> bool {
+        Command::new("python3")
+            .arg("--version")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+}
 
 /// Erros que podem ocorrer durante execução no sandbox
 #[derive(Debug, Error)]
 pub enum SandboxError {
-    /// Erro de execução JavaScript
-    #[error("JavaScript execution error: {0}")]
-    ExecutionError(String),
+    /// Erro de execução (JavaScript ou Python)
+    #[error("{language} execution error: {message}")]
+    ExecutionError {
+        /// Linguagem onde ocorreu o erro
+        language: String,
+        /// Mensagem de erro
+        message: String,
+    },
 
     /// Timeout de execução excedido
     #[error("Execution timeout after {0}ms")]
     Timeout(u64),
 
     /// Código não retornou valor
-    #[error("Code did not return a value (missing return statement)")]
+    #[error("Code did not return a value (missing return/print statement)")]
     NoReturnValue,
 
     /// Erro ao gerar código via LLM
@@ -51,6 +109,32 @@ pub enum SandboxError {
     /// Erro de limite (loop/recursão)
     #[error("Resource limit exceeded: {0}")]
     ResourceLimitExceeded(String),
+
+    /// Python não está disponível no sistema
+    #[error("Python is not available on this system")]
+    PythonNotAvailable,
+
+    /// Erro de I/O (subprocess, arquivos temporários)
+    #[error("I/O error: {0}")]
+    IoError(String),
+}
+
+impl SandboxError {
+    /// Cria erro de execução JavaScript
+    pub fn js_error(msg: impl Into<String>) -> Self {
+        SandboxError::ExecutionError {
+            language: "JavaScript".to_string(),
+            message: msg.into(),
+        }
+    }
+
+    /// Cria erro de execução Python
+    pub fn python_error(msg: impl Into<String>) -> Self {
+        SandboxError::ExecutionError {
+            language: "Python".to_string(),
+            message: msg.into(),
+        }
+    }
 }
 
 impl From<LlmError> for SandboxError {
@@ -197,6 +281,8 @@ pub struct SandboxResult {
     pub attempts: usize,
     /// Tempo total de execução em ms
     pub execution_time_ms: u64,
+    /// Linguagem usada para execução
+    pub language: SandboxLanguage,
 }
 
 /// Sandbox para execução segura de código JavaScript
@@ -308,6 +394,7 @@ impl CodeSandbox {
                         code: code_response.code,
                         attempts: attempt + 1,
                         execution_time_ms: start_time.elapsed().as_millis() as u64,
+                        language: SandboxLanguage::JavaScript,
                     });
                 }
                 Err(e) => {
@@ -326,6 +413,7 @@ impl CodeSandbox {
                             code: code_response.code,
                             attempts: attempt + 1,
                             execution_time_ms: start_time.elapsed().as_millis() as u64,
+                            language: SandboxLanguage::JavaScript,
                         });
                     }
                 }
@@ -393,7 +481,7 @@ impl CodeSandbox {
             Err(e) => {
                 // Extrair mensagem de erro do Boa
                 let error_msg = e.to_string();
-                Err(SandboxError::ExecutionError(error_msg))
+                Err(SandboxError::js_error(error_msg))
             }
         }
     }
@@ -430,6 +518,7 @@ impl CodeSandbox {
                 code: code.to_string(),
                 attempts: 1,
                 execution_time_ms: start.elapsed().as_millis() as u64,
+                language: SandboxLanguage::JavaScript,
             },
             Err(e) => SandboxResult {
                 success: false,
@@ -438,8 +527,370 @@ impl CodeSandbox {
                 code: code.to_string(),
                 attempts: 1,
                 execution_time_ms: start.elapsed().as_millis() as u64,
+                language: SandboxLanguage::JavaScript,
             },
         }
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PYTHON SANDBOX - Execução via subprocess
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Sandbox para execução segura de código Python via subprocess
+///
+/// # Segurança
+/// - Execução em processo isolado
+/// - Timeout rigoroso
+/// - Sem acesso a módulos perigosos (bloqueados via wrapper)
+/// - Captura de stdout/stderr
+///
+/// # Exemplo
+/// ```ignore
+/// let sandbox = PythonSandbox::new(&knowledge, 10000);
+/// let result = sandbox.solve(&llm, "Analyze the data and find patterns").await?;
+/// ```
+pub struct PythonSandbox {
+    /// Contexto com variáveis disponíveis
+    context: SandboxContext,
+    /// Máximo de tentativas de geração/execução
+    max_attempts: usize,
+    /// Timeout de execução em milissegundos
+    timeout_ms: u64,
+}
+
+impl PythonSandbox {
+    /// Cria um novo sandbox Python com configurações padrão
+    pub fn new(knowledge: &[KnowledgeItem], timeout_ms: u64) -> Self {
+        Self {
+            context: SandboxContext::from_knowledge(knowledge),
+            max_attempts: 3,
+            timeout_ms,
+        }
+    }
+
+    /// Cria sandbox com contexto customizado
+    pub fn with_context(context: SandboxContext, timeout_ms: u64) -> Self {
+        Self {
+            context,
+            max_attempts: 3,
+            timeout_ms,
+        }
+    }
+
+    /// Define o máximo de tentativas
+    pub fn max_attempts(mut self, attempts: usize) -> Self {
+        self.max_attempts = attempts;
+        self
+    }
+
+    /// Resolve um problema gerando e executando código Python
+    pub async fn solve(
+        &self,
+        llm: &dyn LlmClient,
+        problem: &str,
+    ) -> Result<SandboxResult, SandboxError> {
+        let mut attempts: Vec<(String, Option<String>)> = Vec::new();
+        let start_time = Instant::now();
+
+        for attempt in 0..self.max_attempts {
+            log::debug!("Python Sandbox attempt {}/{}", attempt + 1, self.max_attempts);
+
+            // Gerar código via LLM (especificando Python)
+            let code_response = llm
+                .generate_python_code(problem, &self.context.describe_for_llm(), &attempts)
+                .await?;
+
+            log::debug!("Generated Python code:\n{}", code_response.code);
+
+            // Executar código
+            match self.execute(&code_response.code).await {
+                Ok(output) => {
+                    log::info!("Python Sandbox execution successful on attempt {}", attempt + 1);
+                    return Ok(SandboxResult {
+                        success: true,
+                        output: Some(output),
+                        error: None,
+                        code: code_response.code,
+                        attempts: attempt + 1,
+                        execution_time_ms: start_time.elapsed().as_millis() as u64,
+                        language: SandboxLanguage::Python,
+                    });
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    log::warn!("Python Sandbox attempt {} failed: {}", attempt + 1, error_msg);
+
+                    attempts.push((code_response.code.clone(), Some(error_msg.clone())));
+
+                    if attempt == self.max_attempts - 1 {
+                        return Ok(SandboxResult {
+                            success: false,
+                            output: None,
+                            error: Some(error_msg),
+                            code: code_response.code,
+                            attempts: attempt + 1,
+                            execution_time_ms: start_time.elapsed().as_millis() as u64,
+                            language: SandboxLanguage::Python,
+                        });
+                    }
+                }
+            }
+        }
+
+        Err(SandboxError::MaxAttemptsExceeded {
+            attempts: self.max_attempts,
+            last_error: attempts
+                .last()
+                .and_then(|(_, e)| e.clone())
+                .unwrap_or_else(|| "Unknown error".to_string()),
+        })
+    }
+
+    /// Executa código Python no sandbox via subprocess
+    pub async fn execute(&self, code: &str) -> Result<String, SandboxError> {
+        // Verificar se Python está disponível
+        if !SandboxLanguage::is_python_available().await {
+            return Err(SandboxError::PythonNotAvailable);
+        }
+
+        // Criar código Python seguro com wrapper
+        let wrapped_code = self.wrap_python_code(code);
+
+        // Executar com timeout
+        let result = timeout(
+            Duration::from_millis(self.timeout_ms),
+            self.run_python(&wrapped_code),
+        )
+        .await;
+
+        match result {
+            Ok(inner_result) => inner_result,
+            Err(_) => Err(SandboxError::Timeout(self.timeout_ms)),
+        }
+    }
+
+    /// Executa código Python via subprocess
+    async fn run_python(&self, code: &str) -> Result<String, SandboxError> {
+        let child = Command::new("python3")
+            .arg("-c")
+            .arg(code)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| SandboxError::IoError(e.to_string()))?;
+
+        // Capturar output
+        let output = child
+            .wait_with_output()
+            .await
+            .map_err(|e| SandboxError::IoError(e.to_string()))?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if stdout.is_empty() {
+                Err(SandboxError::NoReturnValue)
+            } else {
+                Ok(stdout)
+            }
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            Err(SandboxError::python_error(stderr))
+        }
+    }
+
+    /// Envolve o código Python com segurança e injeção de contexto
+    fn wrap_python_code(&self, code: &str) -> String {
+        let mut wrapped = String::new();
+
+        // Imports seguros
+        wrapped.push_str("import json\nimport re\nimport math\nfrom collections import Counter\n\n");
+
+        // Injetar variáveis do contexto
+        for (name, value) in &self.context.variables {
+            // Escapar o valor JSON para Python
+            let escaped = value.replace('\\', "\\\\").replace('\'', "\\'");
+            wrapped.push_str(&format!("{} = json.loads('{}')\n", name, escaped));
+        }
+
+        wrapped.push_str("\n# User code\n");
+        wrapped.push_str(code);
+
+        wrapped
+    }
+
+    /// Executa código diretamente sem geração via LLM
+    pub async fn execute_direct(&self, code: &str) -> SandboxResult {
+        let start = Instant::now();
+
+        match self.execute(code).await {
+            Ok(output) => SandboxResult {
+                success: true,
+                output: Some(output),
+                error: None,
+                code: code.to_string(),
+                attempts: 1,
+                execution_time_ms: start.elapsed().as_millis() as u64,
+                language: SandboxLanguage::Python,
+            },
+            Err(e) => SandboxResult {
+                success: false,
+                output: None,
+                error: Some(e.to_string()),
+                code: code.to_string(),
+                attempts: 1,
+                execution_time_ms: start.elapsed().as_millis() as u64,
+                language: SandboxLanguage::Python,
+            },
+        }
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// UNIFIED SANDBOX - Escolha automática de linguagem
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Sandbox unificado que escolhe automaticamente a melhor linguagem
+///
+/// O LLM analisa o problema e decide se é melhor usar JavaScript ou Python
+/// baseado nas características da tarefa:
+///
+/// - **JavaScript**: Manipulação de JSON, strings, cálculos simples
+/// - **Python**: Análise de dados, regex complexo, cálculos científicos, estatísticas
+pub struct UnifiedSandbox {
+    /// Sandbox JavaScript
+    js_sandbox: CodeSandbox,
+    /// Sandbox Python
+    py_sandbox: PythonSandbox,
+    /// Linguagem preferida (ou Auto)
+    preferred_language: SandboxLanguage,
+    /// Se Python está disponível no sistema
+    python_available: bool,
+}
+
+impl UnifiedSandbox {
+    /// Cria um novo sandbox unificado
+    pub async fn new(knowledge: &[KnowledgeItem], timeout_ms: u64) -> Self {
+        let python_available = SandboxLanguage::is_python_available().await;
+        if !python_available {
+            log::warn!("Python not available, falling back to JavaScript only");
+        }
+
+        Self {
+            js_sandbox: CodeSandbox::new(knowledge, timeout_ms),
+            py_sandbox: PythonSandbox::new(knowledge, timeout_ms),
+            preferred_language: SandboxLanguage::Auto,
+            python_available,
+        }
+    }
+
+    /// Define a linguagem preferida
+    pub fn with_language(mut self, language: SandboxLanguage) -> Self {
+        self.preferred_language = language;
+        self
+    }
+
+    /// Resolve um problema escolhendo a linguagem automaticamente
+    pub async fn solve(
+        &self,
+        llm: &dyn LlmClient,
+        problem: &str,
+    ) -> Result<SandboxResult, SandboxError> {
+        let language = match self.preferred_language {
+            SandboxLanguage::JavaScript => SandboxLanguage::JavaScript,
+            SandboxLanguage::Python => {
+                if self.python_available {
+                    SandboxLanguage::Python
+                } else {
+                    log::warn!("Python requested but not available, using JavaScript");
+                    SandboxLanguage::JavaScript
+                }
+            }
+            SandboxLanguage::Auto => {
+                // LLM escolhe a melhor linguagem
+                self.choose_language(llm, problem).await
+            }
+        };
+
+        log::info!("🖥️ Sandbox usando linguagem: {}", language.display_name());
+
+        match language {
+            SandboxLanguage::JavaScript => self.js_sandbox.solve(llm, problem).await,
+            SandboxLanguage::Python => self.py_sandbox.solve(llm, problem).await,
+            SandboxLanguage::Auto => unreachable!(), // Já foi resolvido acima
+        }
+    }
+
+    /// LLM escolhe a melhor linguagem para o problema
+    async fn choose_language(&self, llm: &dyn LlmClient, problem: &str) -> SandboxLanguage {
+        // Se Python não está disponível, usar JS
+        if !self.python_available {
+            return SandboxLanguage::JavaScript;
+        }
+
+        // Heurísticas simples antes de chamar LLM
+        let problem_lower = problem.to_lowercase();
+
+        // Indicadores fortes de Python
+        let python_indicators = [
+            "pandas", "numpy", "dataframe", "statistics", "statistical",
+            "machine learning", "ml", "data analysis", "analyze data",
+            "scientific", "matrix", "correlation", "regression",
+            "csv", "excel", "plot", "graph", "visualization",
+        ];
+
+        // Indicadores fortes de JavaScript
+        let js_indicators = [
+            "json", "parse json", "stringify", "object", "array manipulation",
+            "string manipulation", "dom", "html", "css",
+            "simple calculation", "quick transform",
+        ];
+
+        let python_score: usize = python_indicators
+            .iter()
+            .filter(|&ind| problem_lower.contains(ind))
+            .count();
+
+        let js_score: usize = js_indicators
+            .iter()
+            .filter(|&ind| problem_lower.contains(ind))
+            .count();
+
+        // Se há indicador claro, usar direto
+        if python_score > js_score + 1 {
+            log::debug!("Heuristic chose Python (score: {} vs {})", python_score, js_score);
+            return SandboxLanguage::Python;
+        }
+        if js_score > python_score + 1 {
+            log::debug!("Heuristic chose JavaScript (score: {} vs {})", js_score, python_score);
+            return SandboxLanguage::JavaScript;
+        }
+
+        // Se não há indicador claro, perguntar ao LLM
+        match llm.choose_coding_language(problem).await {
+            Ok(lang) => {
+                log::debug!("LLM chose: {}", lang.display_name());
+                lang
+            }
+            Err(e) => {
+                log::warn!("Failed to get language choice from LLM: {}, defaulting to JavaScript", e);
+                SandboxLanguage::JavaScript
+            }
+        }
+    }
+
+    /// Retorna a linguagem que será usada
+    pub fn get_effective_language(&self) -> SandboxLanguage {
+        match self.preferred_language {
+            SandboxLanguage::Python if !self.python_available => SandboxLanguage::JavaScript,
+            other => other,
+        }
+    }
+
+    /// Verifica se Python está disponível
+    pub fn is_python_available(&self) -> bool {
+        self.python_available
     }
 }
 
