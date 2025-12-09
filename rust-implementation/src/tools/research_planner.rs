@@ -23,7 +23,6 @@
 //! - Validação de completude antes de finalizar
 
 use std::sync::Arc;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Datelike, Utc};
 
@@ -702,6 +701,7 @@ Now proceed with decomposing and assigning the research topic."#,
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use async_trait::async_trait;
 
     // Mock LLM client
     struct MockLlmClient;

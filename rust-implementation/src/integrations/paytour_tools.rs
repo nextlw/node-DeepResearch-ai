@@ -10,7 +10,6 @@
 //! - Verificar disponibilidade por data
 //! - Obter horários disponíveis
 
-use std::collections::HashMap;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
