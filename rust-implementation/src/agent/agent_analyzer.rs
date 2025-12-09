@@ -181,6 +181,32 @@ fn format_diary_for_analysis(diary: &[DiaryEntry], original_question: &str) -> S
                     step_num, action_type, response
                 ));
             }
+            DiaryEntry::PaytourQuery {
+                query_type,
+                think,
+                results_count,
+            } => {
+                output.push_str(&format!(
+                    "At step {}, you took the **paytour_query** action:\n\
+                    Query type: {}\n\
+                    Results found: {}\n\
+                    Think: {}\n\n",
+                    step_num, query_type, results_count, think
+                ));
+            }
+            DiaryEntry::DigisacAction {
+                action_type,
+                think,
+                success,
+            } => {
+                output.push_str(&format!(
+                    "At step {}, you took the **digisac_action** action:\n\
+                    Action type: {}\n\
+                    Success: {}\n\
+                    Think: {}\n\n",
+                    step_num, action_type, success, think
+                ));
+            }
         }
     }
 

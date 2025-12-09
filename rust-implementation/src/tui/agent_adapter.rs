@@ -52,6 +52,15 @@ impl AgentTuiAdapter {
             AgentAction::Coding { .. } => "💻 Codificando",
             AgentAction::History { .. } => "📜 Consultando histórico",
             AgentAction::AskUser { .. } => "❓ Perguntando ao usuário",
+            // Ações Paytour
+            AgentAction::PaytourListarPasseios { .. } => "🎫 Listando passeios (Paytour)",
+            AgentAction::PaytourDetalharPasseio { .. } => "🎫 Detalhando passeio (Paytour)",
+            AgentAction::PaytourVerificarDisponibilidade { .. } => "🎫 Verificando disponibilidade (Paytour)",
+            AgentAction::PaytourObterHorarios { .. } => "🎫 Obtendo horários (Paytour)",
+            // Ações Digisac
+            AgentAction::DigisacEnviarMensagem { .. } => "💬 Enviando mensagem (Digisac)",
+            AgentAction::DigisacListarWebhooks { .. } => "🔗 Listando webhooks (Digisac)",
+            AgentAction::DigisacCriarWebhook { .. } => "🔗 Criando webhook (Digisac)",
         };
         let _ = self.tx.send(AppEvent::SetAction(action_name.to_string()));
     }

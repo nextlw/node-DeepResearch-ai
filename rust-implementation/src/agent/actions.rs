@@ -4,6 +4,7 @@
 
 use crate::agent::interaction::QuestionType;
 use crate::types::{Reference, SerpQuery, Url};
+use serde_json;
 
 /// Cada ação carrega seus próprios dados - impossível ter ação "Search" sem queries
 ///
@@ -147,6 +148,95 @@ pub enum AgentAction {
         /// Raciocínio do agente para esta pergunta
         think: String,
     },
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // AÇÕES DE INTEGRAÇÃO PAYTOUR
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Listar passeios turísticos via Paytour
+    ///
+    /// Esta ação consulta a API Paytour para listar
+    /// passeios disponíveis com filtros opcionais.
+    PaytourListarPasseios {
+        /// Filtros opcionais para a busca (JSON)
+        filtros: Option<serde_json::Value>,
+        /// Raciocínio do agente para esta ação
+        think: String,
+    },
+
+    /// Detalhar um passeio específico via Paytour
+    ///
+    /// Esta ação obtém informações detalhadas de um passeio.
+    PaytourDetalharPasseio {
+        /// ID do passeio
+        id: u64,
+        /// Raciocínio do agente para esta ação
+        think: String,
+    },
+
+    /// Verificar disponibilidade de um passeio
+    ///
+    /// Esta ação verifica datas disponíveis para um passeio.
+    PaytourVerificarDisponibilidade {
+        /// ID do passeio
+        id: u64,
+        /// Mês (1-12)
+        mes: u8,
+        /// Ano
+        ano: u32,
+        /// Raciocínio do agente para esta ação
+        think: String,
+    },
+
+    /// Obter horários de um passeio
+    ///
+    /// Esta ação obtém horários disponíveis para uma data específica.
+    PaytourObterHorarios {
+        /// ID do passeio
+        id: u64,
+        /// Data no formato YYYY-MM-DD
+        dia: String,
+        /// Raciocínio do agente para esta ação
+        think: String,
+    },
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // AÇÕES DE INTEGRAÇÃO DIGISAC
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Enviar mensagem via Digisac (WhatsApp)
+    ///
+    /// Esta ação envia uma mensagem de texto para um contato.
+    DigisacEnviarMensagem {
+        /// ID do serviço (canal)
+        service_id: String,
+        /// ID do contato
+        contact_id: String,
+        /// Texto da mensagem
+        texto: String,
+        /// Raciocínio do agente para esta ação
+        think: String,
+    },
+
+    /// Listar webhooks configurados no Digisac
+    ///
+    /// Esta ação lista todos os webhooks configurados.
+    DigisacListarWebhooks {
+        /// Raciocínio do agente para esta ação
+        think: String,
+    },
+
+    /// Criar webhook no Digisac
+    ///
+    /// Esta ação cria um novo webhook para receber eventos.
+    DigisacCriarWebhook {
+        /// URL de destino do webhook
+        url: String,
+        /// Eventos a assinar
+        eventos: Vec<String>,
+        /// Raciocínio do agente para esta ação
+        think: String,
+    },
 }
 
 impl AgentAction {
@@ -160,6 +250,15 @@ impl AgentAction {
             AgentAction::Coding { .. } => "coding",
             AgentAction::History { .. } => "history",
             AgentAction::AskUser { .. } => "ask_user",
+            // Paytour actions
+            AgentAction::PaytourListarPasseios { .. } => "paytour_listar_passeios",
+            AgentAction::PaytourDetalharPasseio { .. } => "paytour_detalhar_passeio",
+            AgentAction::PaytourVerificarDisponibilidade { .. } => "paytour_verificar_disponibilidade",
+            AgentAction::PaytourObterHorarios { .. } => "paytour_obter_horarios",
+            // Digisac actions
+            AgentAction::DigisacEnviarMensagem { .. } => "digisac_enviar_mensagem",
+            AgentAction::DigisacListarWebhooks { .. } => "digisac_listar_webhooks",
+            AgentAction::DigisacCriarWebhook { .. } => "digisac_criar_webhook",
         }
     }
 
@@ -173,6 +272,15 @@ impl AgentAction {
             AgentAction::Coding { think, .. } => think,
             AgentAction::History { think, .. } => think,
             AgentAction::AskUser { think, .. } => think,
+            // Paytour actions
+            AgentAction::PaytourListarPasseios { think, .. } => think,
+            AgentAction::PaytourDetalharPasseio { think, .. } => think,
+            AgentAction::PaytourVerificarDisponibilidade { think, .. } => think,
+            AgentAction::PaytourObterHorarios { think, .. } => think,
+            // Digisac actions
+            AgentAction::DigisacEnviarMensagem { think, .. } => think,
+            AgentAction::DigisacListarWebhooks { think, .. } => think,
+            AgentAction::DigisacCriarWebhook { think, .. } => think,
         }
     }
 
@@ -205,6 +313,32 @@ impl AgentAction {
                 ..
             }
         )
+    }
+
+    /// Verifica se é uma ação de integração Paytour
+    pub fn is_paytour(&self) -> bool {
+        matches!(
+            self,
+            AgentAction::PaytourListarPasseios { .. }
+                | AgentAction::PaytourDetalharPasseio { .. }
+                | AgentAction::PaytourVerificarDisponibilidade { .. }
+                | AgentAction::PaytourObterHorarios { .. }
+        )
+    }
+
+    /// Verifica se é uma ação de integração Digisac
+    pub fn is_digisac(&self) -> bool {
+        matches!(
+            self,
+            AgentAction::DigisacEnviarMensagem { .. }
+                | AgentAction::DigisacListarWebhooks { .. }
+                | AgentAction::DigisacCriarWebhook { .. }
+        )
+    }
+
+    /// Verifica se é uma ação de integração externa
+    pub fn is_integration(&self) -> bool {
+        self.is_paytour() || self.is_digisac()
     }
 }
 
@@ -319,6 +453,34 @@ pub enum DiaryEntry {
         /// Se foi resposta espontânea (não solicitada)
         was_spontaneous: bool,
     },
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ENTRADAS DE INTEGRAÇÃO PAYTOUR
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Registro de consulta Paytour executada.
+    PaytourQuery {
+        /// Tipo de consulta (listar, detalhar, disponibilidade, horarios).
+        query_type: String,
+        /// Raciocínio do agente.
+        think: String,
+        /// Quantidade de resultados obtidos.
+        results_count: usize,
+    },
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ENTRADAS DE INTEGRAÇÃO DIGISAC
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Registro de ação Digisac executada.
+    DigisacAction {
+        /// Tipo de ação (enviar_mensagem, listar_webhooks, criar_webhook).
+        action_type: String,
+        /// Raciocínio do agente.
+        think: String,
+        /// Se a ação foi bem-sucedida.
+        success: bool,
+    },
 }
 
 impl DiaryEntry {
@@ -386,6 +548,22 @@ impl DiaryEntry {
                     "[USER_REPLY]"
                 };
                 format!("{} {}", prefix, response)
+            }
+            DiaryEntry::PaytourQuery { query_type, think, results_count } => {
+                format!(
+                    "[PAYTOUR] {} -> {} results\nThink: {}",
+                    query_type,
+                    results_count,
+                    think
+                )
+            }
+            DiaryEntry::DigisacAction { action_type, think, success } => {
+                format!(
+                    "[DIGISAC] {} -> {}\nThink: {}",
+                    action_type,
+                    if *success { "success" } else { "failed" },
+                    think
+                )
             }
         }
     }

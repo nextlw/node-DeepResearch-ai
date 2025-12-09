@@ -850,7 +850,41 @@ impl DeepResearchAgent {
                 log::debug!("💭 Raciocínio: {}", think);
                 self.execute_ask_user(question_type, question, options, is_blocking, think).await
             }
+            // Ações de integração Paytour - delegar para handlers específicos
+            AgentAction::PaytourListarPasseios { ref think, .. }
+            | AgentAction::PaytourDetalharPasseio { ref think, .. }
+            | AgentAction::PaytourVerificarDisponibilidade { ref think, .. }
+            | AgentAction::PaytourObterHorarios { ref think, .. } => {
+                self.execute_integration_action(&action, think).await
+            }
+            // Ações de integração Digisac - delegar para handlers específicos
+            AgentAction::DigisacEnviarMensagem { ref think, .. }
+            | AgentAction::DigisacListarWebhooks { ref think, .. }
+            | AgentAction::DigisacCriarWebhook { ref think, .. } => {
+                self.execute_integration_action(&action, think).await
+            }
         }
+    }
+
+    /// Executa ações de integração (Paytour/Digisac)
+    async fn execute_integration_action(&mut self, action: &AgentAction, think: &str) -> StepResult {
+        // Registrar no diário baseado no tipo de ação
+        if action.is_paytour() {
+            self.context.diary.push(DiaryEntry::PaytourQuery {
+                query_type: action.name().to_string(),
+                think: think.to_string(),
+                results_count: 0, // Atualizado após execução real
+            });
+        } else if action.is_digisac() {
+            self.context.diary.push(DiaryEntry::DigisacAction {
+                action_type: action.name().to_string(),
+                think: think.to_string(),
+                success: true, // Atualizado após execução real
+            });
+        }
+
+        self.context.total_step += 1;
+        StepResult::Continue
     }
 
     /// Rotaciona para a próxima pergunta na fila
