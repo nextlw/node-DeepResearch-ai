@@ -363,23 +363,18 @@ fn render_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
         if app.is_complete { "Concluído" } else { "Pesquisando..." }
     );
 
-    let question_display = if app.question.len() > 80 {
-        format!("{}...", &app.question[..77])
-    } else {
-        app.question.clone()
-    };
-
     let header_text = Text::from(vec![
         Line::from(vec![
             Span::styled(title, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(vec![
             Span::raw(" Pergunta: "),
-            Span::styled(question_display, Style::default().fg(Color::Yellow)),
+            Span::styled(&app.question, Style::default().fg(Color::Yellow)),
         ]),
     ]);
 
     let header = Paragraph::new(header_text)
+        .wrap(Wrap { trim: true })
         .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));
 
     frame.render_widget(header, area);
@@ -1304,12 +1299,14 @@ fn render_stats(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ]),
     ]);
 
-    let stats = Paragraph::new(stats_text).block(
-        Block::default()
-            .title(" 📊 Stats ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Magenta)),
-    );
+    let stats = Paragraph::new(stats_text)
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .title(" 📊 Stats ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Magenta)),
+        );
 
     frame.render_widget(stats, area);
 }
@@ -1317,6 +1314,15 @@ fn render_stats(frame: &mut Frame<'_>, app: &App, area: Rect) {
 /// Renderiza o painel de personas
 fn render_personas(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let mut lines = vec![Line::from("")];
+
+    // Calcular largura disponível para nomes
+    let border_width = 2;
+    let padding = 2;
+    let indicator_width = 4; // " ● "
+    let max_name_width = (area.width as usize)
+        .saturating_sub(border_width)
+        .saturating_sub(padding)
+        .saturating_sub(indicator_width);
 
     if app.personas.is_empty() {
         lines.push(Line::from(vec![Span::styled(
@@ -1332,10 +1338,17 @@ fn render_personas(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 Color::DarkGray
             };
 
+            // Truncar nome se necessário
+            let name_display = if name.chars().count() > max_name_width {
+                name.chars().take(max_name_width.saturating_sub(3)).collect::<String>() + "..."
+            } else {
+                name.clone()
+            };
+
             lines.push(Line::from(vec![
                 Span::styled(format!(" {} ", indicator), Style::default().fg(color)),
                 Span::styled(
-                    format!("{:<10}", name),
+                    name_display,
                     Style::default().fg(Color::White),
                 ),
             ]));
@@ -1350,12 +1363,14 @@ fn render_personas(frame: &mut Frame<'_>, app: &App, area: Rect) {
         }
     }
 
-    let personas = Paragraph::new(Text::from(lines)).block(
-        Block::default()
-            .title(" 👥 Personas ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
+    let personas = Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .title(" 👥 Personas ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
 
     frame.render_widget(personas, area);
 }
@@ -1363,6 +1378,14 @@ fn render_personas(frame: &mut Frame<'_>, app: &App, area: Rect) {
 /// Renderiza a barra de progresso
 fn render_progress(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let progress = app.progress();
+
+    // Calcular largura disponível para o label
+    let border_width = 2;
+    let padding = 4;
+    let max_label_width = (area.width as usize)
+        .saturating_sub(border_width)
+        .saturating_sub(padding);
+
     let label = if app.is_complete {
         if app.error.is_some() {
             "Erro!".to_string()
@@ -1370,7 +1393,13 @@ fn render_progress(frame: &mut Frame<'_>, app: &App, area: Rect) {
             "Concluído!".to_string()
         }
     } else {
-        format!("Step {} - {}", app.current_step, &app.current_action)
+        let base_label = format!("Step {} - {}", app.current_step, &app.current_action);
+        // Truncar label se necessário
+        if base_label.chars().count() > max_label_width {
+            base_label.chars().take(max_label_width.saturating_sub(3)).collect::<String>() + "..."
+        } else {
+            base_label
+        }
     };
 
     let color = if app.is_complete {
@@ -1687,13 +1716,13 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
         // Linha 1: Tokens e URLs
         Line::from(vec![
             Span::styled(" 🎫 ", Style::default().fg(Color::Magenta)),
-        Span::raw(format!("{} tokens", app.tokens_used)),
-        Span::raw("  │  "),
-        Span::styled("🔗 ", Style::default().fg(Color::Cyan)),
-        Span::raw(format!("{} URLs", app.visited_count)),
-        Span::raw("  │  "),
-        Span::styled("📊 ", Style::default().fg(Color::Green)),
-        Span::raw(format!("{} steps", app.current_step)),
+            Span::raw(format!("{} tokens", app.tokens_used)),
+            Span::raw("  │  "),
+            Span::styled("🔗 ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{} URLs", app.visited_count)),
+            Span::raw("  │  "),
+            Span::styled("📊 ", Style::default().fg(Color::Green)),
+            Span::raw(format!("{} steps", app.current_step)),
         ]),
         // Linha 2: Tempos detalhados
         Line::from(vec![
@@ -1715,13 +1744,14 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     ]);
 
     let stats = Paragraph::new(stats_text)
-    .alignment(Alignment::Center)
-    .block(
-        Block::default()
+        .wrap(Wrap { trim: true })
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
                 .title(" 📊 Estatísticas ")
-            .borders(Borders::ALL)
+                .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow)),
-    );
+        );
     frame.render_widget(stats, chunks[4]);
 
     // Campo de input para follow-up
@@ -1842,6 +1872,7 @@ fn render_benchmarks_screen(frame: &mut Frame<'_>, app: &App) {
             Style::default().fg(Color::DarkGray),
         ),
     ]))
+    .wrap(Wrap { trim: true })
     .block(
         Block::default()
             .borders(Borders::ALL)
@@ -1947,14 +1978,23 @@ fn render_benchmarks_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
 fn render_benchmark_result(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let benchmarks = &app.benchmarks;
 
-    // Dividir área entre descrição/resultado e logs
+    // Dividir área entre descrição/resultado e logs/resultados dinâmicos
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),   // Descrição e resultado
-            Constraint::Min(5),       // Logs
+            Constraint::Length(6),   // Descrição e resultado
+            Constraint::Min(5),      // Logs + Resultados dinâmicos
         ])
         .split(area);
+
+    // Dividir a área de logs entre logs (esquerda) e resultados dinâmicos (direita)
+    let logs_results_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(55),  // Logs de execução
+            Constraint::Percentage(45),  // Resultados dinâmicos
+        ])
+        .split(chunks[1]);
 
     // Descrição e resultado
     let mut result_lines = Vec::new();
@@ -2027,32 +2067,116 @@ fn render_benchmark_result(frame: &mut Frame<'_>, app: &App, area: Rect) {
         );
     frame.render_widget(result_widget, chunks[0]);
 
-    // Logs da execução
-    let visible_height = chunks[1].height.saturating_sub(2) as usize;
-    let log_items: Vec<ListItem<'_>> = benchmarks
-        .execution_logs
-        .iter()
-        .skip(benchmarks.log_scroll)
-        .take(visible_height)
-        .map(|entry| {
-            let style = match entry.level {
-                LogLevel::Info => Style::default().fg(Color::White),
-                LogLevel::Success => Style::default().fg(Color::Green),
-                LogLevel::Warning => Style::default().fg(Color::Yellow),
-                LogLevel::Error => Style::default().fg(Color::Red),
-                LogLevel::Debug => Style::default().fg(Color::DarkGray),
-            };
+    // Logs da execução com wrap de mensagens longas
+    let logs_area = logs_results_chunks[0];
+    let visible_height = logs_area.height.saturating_sub(2) as usize;
 
-            ListItem::new(Line::from(vec![
+    // Calcular larguras disponíveis para wrap
+    let timestamp_width = 10; // "[HH:MM:SS] "
+    let symbol_width = 4; // emoji + espaço
+    let border_width = 2; // bordas do Block
+    let padding = 2; // margem de segurança
+
+    // Largura disponível para a mensagem na primeira linha
+    let max_msg_width = (logs_area.width as usize)
+        .saturating_sub(border_width)
+        .saturating_sub(timestamp_width)
+        .saturating_sub(symbol_width)
+        .saturating_sub(padding);
+
+    // Largura para linhas de continuação (indentadas)
+    let indent_width = 7; // "     ↳ "
+    let continuation_width = (logs_area.width as usize)
+        .saturating_sub(border_width)
+        .saturating_sub(indent_width)
+        .saturating_sub(padding);
+
+    // Função auxiliar para truncar string respeitando limite de largura
+    fn truncate_msg(s: &str, max_width: usize) -> String {
+        if s.chars().count() <= max_width {
+            s.to_string()
+        } else {
+            s.chars().take(max_width.saturating_sub(3)).collect::<String>() + "..."
+        }
+    }
+
+    let mut log_items: Vec<ListItem<'_>> = Vec::new();
+    let mut line_count = 0;
+
+    for entry in benchmarks.execution_logs.iter().skip(benchmarks.log_scroll) {
+        if line_count >= visible_height {
+            break;
+        }
+
+        let style = match entry.level {
+            LogLevel::Info => Style::default().fg(Color::White),
+            LogLevel::Success => Style::default().fg(Color::Green),
+            LogLevel::Warning => Style::default().fg(Color::Yellow),
+            LogLevel::Error => Style::default().fg(Color::Red),
+            LogLevel::Debug => Style::default().fg(Color::DarkGray),
+        };
+
+        let msg = &entry.message;
+        let msg_char_count = msg.chars().count();
+
+        if msg_char_count <= max_msg_width {
+            // Mensagem cabe em uma linha
+            log_items.push(ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("[{}] ", entry.timestamp),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(format!("{} ", entry.level.symbol()), style),
-                Span::styled(entry.message.clone(), style),
-            ]))
-        })
-        .collect();
+                Span::styled(msg.clone(), style),
+            ])));
+            line_count += 1;
+        } else {
+            // Mensagem precisa de wrap - primeira linha com timestamp/símbolo
+            let first_chunk = truncate_msg(msg, max_msg_width);
+            log_items.push(ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("[{}] ", entry.timestamp),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(format!("{} ", entry.level.symbol()), style),
+                Span::styled(first_chunk, style),
+            ])));
+            line_count += 1;
+
+            // Linhas de continuação (indentadas)
+            let msg_chars: Vec<char> = msg.chars().collect();
+            let mut char_idx = max_msg_width.min(msg_chars.len());
+
+            while char_idx < msg_chars.len() && line_count < visible_height {
+                let remaining_chars: Vec<char> = msg_chars[char_idx..].iter().cloned().collect();
+                let chunk: String = remaining_chars
+                    .iter()
+                    .take(continuation_width.min(remaining_chars.len()))
+                    .collect();
+
+                // Truncar se necessário
+                let truncated_chunk = if chunk.chars().count() > continuation_width {
+                    truncate_msg(&chunk, continuation_width)
+                } else {
+                    chunk
+                };
+
+                log_items.push(ListItem::new(Line::from(vec![
+                    Span::styled("     ", Style::default()), // Indentação
+                    Span::styled("↳ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(truncated_chunk.clone(), style),
+                ])));
+
+                char_idx += truncated_chunk.chars().count();
+                line_count += 1;
+
+                // Se truncamos, parar para evitar loop infinito
+                if truncated_chunk.ends_with("...") {
+                    break;
+                }
+            }
+        }
+    }
 
     let scroll_info = if benchmarks.execution_logs.len() > visible_height {
         format!(
@@ -2071,7 +2195,159 @@ fn render_benchmark_result(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Blue)),
         );
-    frame.render_widget(logs, chunks[1]);
+    frame.render_widget(logs, logs_area);
+
+    // Renderizar resultados dinâmicos à direita
+    render_benchmark_dynamic_results(frame, app, logs_results_chunks[1]);
+}
+
+/// Renderiza os resultados dinâmicos do benchmark
+fn render_benchmark_dynamic_results(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    use crate::tui::app::FieldStatus;
+
+    let benchmarks = &app.benchmarks;
+    let results = &benchmarks.dynamic_results;
+
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    // Header com nome do benchmark
+    if !results.bench_name.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(" 📊 {} ", results.bench_name),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(""));
+    }
+
+    // Verificar se há campos definidos
+    if results.fields.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Aguardando resultados...",
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Os resultados aparecerão aqui",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "conforme o benchmark executa.",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    } else {
+        // Agrupar campos por grupo
+        let mut current_group: Option<String> = None;
+
+        for field in results.sorted_fields() {
+            // Verificar se mudou de grupo
+            if field.group != current_group {
+                if current_group.is_some() {
+                    lines.push(Line::from("")); // Separador entre grupos
+                }
+                if let Some(ref group) = field.group {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!(" ═══ {} ═══ ", group),
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                    lines.push(Line::from(""));
+                }
+                current_group = field.group.clone();
+            }
+
+            // Status icon
+            let (status_icon, status_style) = match field.status {
+                FieldStatus::Pending => ("⏳", Style::default().fg(Color::DarkGray)),
+                FieldStatus::Running => ("🔄", Style::default().fg(Color::Yellow)),
+                FieldStatus::Success => ("✅", Style::default().fg(Color::Green)),
+                FieldStatus::Failed => ("❌", Style::default().fg(Color::Red)),
+                FieldStatus::Info => ("ℹ️ ", Style::default().fg(Color::Cyan)),
+            };
+
+            // Ícone personalizado ou padrão
+            let icon = field.icon.as_deref().unwrap_or(status_icon);
+
+            // Label
+            let label_style = match field.status {
+                FieldStatus::Pending => Style::default().fg(Color::DarkGray),
+                FieldStatus::Running => Style::default().fg(Color::Yellow),
+                _ => Style::default().fg(Color::White),
+            };
+
+            // Valor
+            let value = field.value.as_deref().unwrap_or("...");
+            let value_style = match field.status {
+                FieldStatus::Pending => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                FieldStatus::Running => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                FieldStatus::Success => Style::default().fg(Color::Green),
+                FieldStatus::Failed => Style::default().fg(Color::Red),
+                FieldStatus::Info => Style::default().fg(Color::White),
+            };
+
+            // Calcular largura máxima para valor
+            let max_value_width = (area.width as usize).saturating_sub(20); // Reservar espaço para label e ícone
+            let display_value = if value.chars().count() > max_value_width {
+                format!("{}...", value.chars().take(max_value_width.saturating_sub(3)).collect::<String>())
+            } else {
+                value.to_string()
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", icon), status_style),
+                Span::styled(format!("{}: ", field.label), label_style),
+                Span::styled(display_value, value_style),
+            ]));
+        }
+
+        // Footer com info de completude
+        lines.push(Line::from(""));
+        if results.is_complete {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    " ✨ Resultados completos ",
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        } else if benchmarks.running.is_some() {
+            let completed = results.fields.iter().filter(|f| f.value.is_some()).count();
+            let total = results.fields.len();
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(" 🔄 {}/{} campos ", completed, total),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+        }
+
+        // Timestamp de última atualização
+        if let Some(ref last_update) = results.last_update {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(" 🕐 Atualizado: {} ", last_update),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+    }
+
+    let results_widget = Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .title(" 📈 Resultados Dinâmicos ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Magenta)),
+        );
+    frame.render_widget(results_widget, area);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2108,6 +2384,7 @@ fn render_config_screen(frame: &mut Frame<'_>, app: &App) {
             Style::default().fg(Color::DarkGray),
         ),
     ]))
+    .wrap(Wrap { trim: true })
     .block(
         Block::default()
             .borders(Borders::ALL)
@@ -2198,12 +2475,14 @@ fn render_runtime_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ]),
     ];
 
-    let content = Paragraph::new(lines).block(
-        Block::default()
-            .title(" 🖥️ Runtime ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow)),
-    );
+    let content = Paragraph::new(lines)
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .title(" 🖥️ Runtime ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        );
 
     frame.render_widget(content, area);
 }
@@ -2211,6 +2490,24 @@ fn render_runtime_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
 /// Renderiza configurações do LLM
 fn render_llm_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let config = &app.loaded_config;
+
+    // Calcular largura disponível para valores
+    let border_width = 2;
+    let padding = 2;
+    let label_width = 14; // " Provider:    "
+    let max_value_width = (area.width as usize)
+        .saturating_sub(border_width)
+        .saturating_sub(padding)
+        .saturating_sub(label_width);
+
+    // Função para truncar valores longos
+    let truncate_value = |s: &str| -> String {
+        if s.chars().count() > max_value_width {
+            s.chars().take(max_value_width.saturating_sub(3)).collect::<String>() + "..."
+        } else {
+            s.to_string()
+        }
+    };
 
     let mut lines = vec![
         Line::from(""),
@@ -2220,11 +2517,11 @@ fn render_llm_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Line::from(""),
         Line::from(vec![
             Span::styled(" Provider:    ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&config.llm_provider, Style::default().fg(Color::White)),
+            Span::styled(truncate_value(&config.llm_provider), Style::default().fg(Color::White)),
         ]),
         Line::from(vec![
             Span::styled(" Model:       ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&config.llm_model, Style::default().fg(Color::Cyan)),
+            Span::styled(truncate_value(&config.llm_model), Style::default().fg(Color::Cyan)),
         ]),
         Line::from(vec![
             Span::styled(" Temperature: ", Style::default().fg(Color::DarkGray)),
@@ -2236,7 +2533,7 @@ fn render_llm_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
     if let Some(ref url) = config.api_base_url {
         lines.push(Line::from(vec![
             Span::styled(" API Base:    ", Style::default().fg(Color::DarkGray)),
-            Span::styled(truncate(url, 20), Style::default().fg(Color::Yellow)),
+            Span::styled(truncate_value(url), Style::default().fg(Color::Yellow)),
         ]));
     }
 
@@ -2247,19 +2544,21 @@ fn render_llm_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled(" Provider:    ", Style::default().fg(Color::DarkGray)),
-        Span::styled(&config.embedding_provider, Style::default().fg(Color::White)),
+        Span::styled(truncate_value(&config.embedding_provider), Style::default().fg(Color::White)),
     ]));
     lines.push(Line::from(vec![
         Span::styled(" Model:       ", Style::default().fg(Color::DarkGray)),
-        Span::styled(&config.embedding_model, Style::default().fg(Color::Cyan)),
+        Span::styled(truncate_value(&config.embedding_model), Style::default().fg(Color::Cyan)),
     ]));
 
-    let content = Paragraph::new(lines).block(
-        Block::default()
-            .title(" 🧠 LLM ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Magenta)),
-    );
+    let content = Paragraph::new(lines)
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .title(" 🧠 LLM ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Magenta)),
+        );
 
     frame.render_widget(content, area);
 }
@@ -2309,12 +2608,14 @@ fn render_agent_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ]),
     ];
 
-    let content = Paragraph::new(lines).block(
-        Block::default()
-            .title(" 🤖 Agent ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Green)),
-    );
+    let content = Paragraph::new(lines)
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .title(" 🤖 Agent ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green)),
+        );
 
     frame.render_widget(content, area);
 }

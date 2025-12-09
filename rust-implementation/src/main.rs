@@ -163,6 +163,7 @@ enum LauncherOption {
     DirectSearch,
     CompareReaders,
     CompareLive,
+    RunBenchmarks,
     Help,
     Quit,
 }
@@ -174,6 +175,7 @@ impl LauncherOption {
             Self::DirectSearch,
             Self::CompareReaders,
             Self::CompareLive,
+            Self::RunBenchmarks,
             Self::Help,
             Self::Quit,
         ]
@@ -185,6 +187,7 @@ impl LauncherOption {
             Self::DirectSearch => "🔍 Pesquisa Direta (terminal)",
             Self::CompareReaders => "📊 Comparar Web Readers",
             Self::CompareLive => "⚡ Pesquisa com Comparação Live",
+            Self::RunBenchmarks => "🏎️  Executar Benchmarks",
             Self::Help => "❓ Ajuda (mostrar comandos)",
             Self::Quit => "❌ Sair",
         }
@@ -196,6 +199,7 @@ impl LauncherOption {
             Self::DirectSearch => "Executa pesquisa no terminal (modo clássico)",
             Self::CompareReaders => "Compara Jina Reader vs Rust+OpenAI em URLs específicas",
             Self::CompareLive => "Pesquisa com comparação de readers em tempo real",
+            Self::RunBenchmarks => "Executa todos os benchmarks de performance em sequência",
             Self::Help => "Mostra todos os comandos disponíveis",
             Self::Quit => "Encerra o programa",
         }
@@ -502,6 +506,7 @@ enum LauncherResult {
     RunDirect(String, Option<u64>),
     RunCompare(String),
     RunCompareLive(String),
+    RunBenchmarks,
     ShowHelp,
     Quit,
 }
@@ -582,6 +587,10 @@ fn run_launcher_menu() -> std::io::Result<LauncherResult> {
                                 state.input_mode = true;
                                 state.input_label = "Digite sua pergunta".to_string();
                             }
+                            LauncherOption::RunBenchmarks => {
+                                result = LauncherResult::RunBenchmarks;
+                                break;
+                            }
                             LauncherOption::Help => {
                                 result = LauncherResult::ShowHelp;
                                 break;
@@ -613,6 +622,9 @@ fn run_launcher_menu() -> std::io::Result<LauncherResult> {
                     }
                     KeyCode::Char('6') => {
                         state.selected = 5;
+                    }
+                    KeyCode::Char('7') => {
+                        state.selected = 6;
                     }
                     _ => {}
                 }
@@ -687,6 +699,9 @@ async fn async_main(args: Vec<String>, is_tui_mode: bool) -> anyhow::Result<()> 
                     std::process::exit(1);
                 }
                 return run_direct_mode(&question, None, true).await;
+            }
+            LauncherResult::RunBenchmarks => {
+                return run_all_benchmarks().await;
             }
             LauncherResult::ShowHelp => {
                 show_help(&args[0]);
@@ -1463,6 +1478,177 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Executa todos os benchmarks em sequência com logs em tempo real
+async fn run_all_benchmarks() -> anyhow::Result<()> {
+    use tokio::process::Command as TokioCommand;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    use std::path::PathBuf;
+
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!(" 🏎️  BENCHMARKS - Deep Research v{}", deep_research::VERSION);
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+
+    // Lista de benchmarks disponíveis (em ordem de execução)
+    let benchmarks = vec![
+        ("simd_bench", "SIMD - Similaridade Cosseno"),
+        ("personas_bench", "Personas - Expansão de Queries"),
+        ("search_bench", "Search - Cache e Buscas"),
+        ("evaluation_bench", "Evaluation - Avaliação de Respostas"),
+        ("agent_bench", "Agent - Gerenciamento de Estado"),
+        ("e2e_bench", "E2E - End-to-End Completo"),
+    ];
+
+    // Detectar diretório do projeto
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let bench_dir = if current_dir.join("Cargo.toml").exists() && current_dir.join("benches").exists() {
+        current_dir.clone()
+    } else if current_dir.join("rust-implementation").join("Cargo.toml").exists() {
+        current_dir.join("rust-implementation")
+    } else {
+        current_dir.clone()
+    };
+
+    println!("📂 Diretório: {}", bench_dir.display());
+    println!("📋 {} benchmarks para executar", benchmarks.len());
+    println!();
+
+    let total_start = std::time::Instant::now();
+    let mut results: Vec<(String, bool, f64)> = Vec::new();
+
+    for (i, (bench_file, bench_name)) in benchmarks.iter().enumerate() {
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!(" [{}/{}] 🧪 {}", i + 1, benchmarks.len(), bench_name);
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!();
+
+        let bench_start = std::time::Instant::now();
+
+        // Verificar se arquivo existe
+        let bench_path = bench_dir.join("benches").join(format!("{}.rs", bench_file));
+        if !bench_path.exists() {
+            println!("❌ Arquivo não encontrado: {}", bench_path.display());
+            results.push((bench_name.to_string(), false, 0.0));
+            println!();
+            continue;
+        }
+
+        println!("🚀 Executando: cargo bench --bench {}", bench_file);
+        println!();
+
+        // Executar cargo bench com stdout/stderr em modo piped
+        let mut cmd = TokioCommand::new("cargo");
+        cmd.arg("bench")
+            .arg("--bench")
+            .arg(bench_file)
+            .arg("--")
+            .arg("--nocapture")  // Força saída imediata
+            .current_dir(&bench_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        match cmd.spawn() {
+            Ok(mut child) => {
+                // Criar readers para stdout e stderr
+                let stdout = child.stdout.take().expect("Failed to capture stdout");
+                let stderr = child.stderr.take().expect("Failed to capture stderr");
+
+                let mut stdout_reader = BufReader::new(stdout).lines();
+                let mut stderr_reader = BufReader::new(stderr).lines();
+
+                // Ler stdout e stderr em paralelo
+                let stdout_handle = tokio::spawn(async move {
+                    let mut lines = Vec::new();
+                    while let Ok(Some(line)) = stdout_reader.next_line().await {
+                        println!("   {}", line);
+                        lines.push(line);
+                    }
+                    lines
+                });
+
+                let stderr_handle = tokio::spawn(async move {
+                    let mut lines = Vec::new();
+                    while let Ok(Some(line)) = stderr_reader.next_line().await {
+                        // Colorir erros em vermelho se possível
+                        if line.contains("error") || line.contains("Error") {
+                            println!("   ❌ {}", line);
+                        } else if line.contains("warning") || line.contains("Warning") {
+                            println!("   ⚠️  {}", line);
+                        } else {
+                            println!("   {}", line);
+                        }
+                        lines.push(line);
+                    }
+                    lines
+                });
+
+                // Aguardar processo terminar
+                let status = child.wait().await;
+
+                // Aguardar leitura completa
+                let _ = stdout_handle.await;
+                let _ = stderr_handle.await;
+
+                let duration = bench_start.elapsed().as_secs_f64();
+
+                match status {
+                    Ok(s) if s.success() => {
+                        println!();
+                        println!("   ✅ Concluído em {:.2}s", duration);
+                        results.push((bench_name.to_string(), true, duration));
+                    }
+                    Ok(_) => {
+                        println!();
+                        println!("   ❌ Falhou após {:.2}s", duration);
+                        results.push((bench_name.to_string(), false, duration));
+                    }
+                    Err(e) => {
+                        println!();
+                        println!("   ❌ Erro: {}", e);
+                        results.push((bench_name.to_string(), false, duration));
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ Erro ao iniciar cargo bench: {}", e);
+                results.push((bench_name.to_string(), false, 0.0));
+            }
+        }
+
+        println!();
+    }
+
+    // Resumo final
+    let total_duration = total_start.elapsed().as_secs_f64();
+    let success_count = results.iter().filter(|(_, success, _)| *success).count();
+    let fail_count = results.len() - success_count;
+
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!(" 📊 RESUMO DOS BENCHMARKS");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+    println!("   ⏱️  Tempo total: {:.2}s", total_duration);
+    println!("   ✅ Sucesso: {}", success_count);
+    println!("   ❌ Falha: {}", fail_count);
+    println!();
+
+    println!("   Detalhes:");
+    for (name, success, duration) in &results {
+        let status = if *success { "✅" } else { "❌" };
+        println!("     {} {} ({:.2}s)", status, name, duration);
+    }
+    println!();
+
+    if fail_count > 0 {
+        println!("⚠️  {} benchmark(s) falharam. Verifique os logs acima.", fail_count);
+    } else {
+        println!("🎉 Todos os benchmarks executados com sucesso!");
+    }
+
+    println!();
     Ok(())
 }
 

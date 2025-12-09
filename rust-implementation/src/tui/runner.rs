@@ -407,9 +407,365 @@ impl TuiLogger {
     }
 }
 
-/// Executa um benchmark em background e envia eventos para a TUI
+/// Cria o schema de campos dinâmicos para um benchmark específico
+fn create_benchmark_schema(bench_name: &str) -> Vec<super::app::BenchmarkDynamicField> {
+    use super::app::BenchmarkDynamicField;
+
+    match bench_name {
+        "Personas" => vec![
+            BenchmarkDynamicField::new("status", "Status", 0)
+                .with_icon("🎯")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("compiling", "Compilação", 1)
+                .with_icon("🔨")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("running", "Execução", 2)
+                .with_icon("🔄")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("warmup", "Warm-up", 10)
+                .with_icon("🔥")
+                .with_group("Benchmark"),
+            BenchmarkDynamicField::new("collecting", "Coleta", 11)
+                .with_icon("📊")
+                .with_group("Benchmark"),
+            BenchmarkDynamicField::new("analyzing", "Análise", 12)
+                .with_icon("🔬")
+                .with_group("Benchmark"),
+            BenchmarkDynamicField::new("time_mean", "Tempo Médio", 20)
+                .with_icon("⏱️")
+                .with_group("Resultados"),
+            BenchmarkDynamicField::new("time_std", "Desvio Padrão", 21)
+                .with_icon("📐")
+                .with_group("Resultados"),
+            BenchmarkDynamicField::new("throughput", "Throughput", 22)
+                .with_icon("🚀")
+                .with_group("Resultados"),
+        ],
+        "Search" => vec![
+            BenchmarkDynamicField::new("status", "Status", 0)
+                .with_icon("🎯")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("compiling", "Compilação", 1)
+                .with_icon("🔨")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("running", "Execução", 2)
+                .with_icon("🔄")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("warmup", "Warm-up", 10)
+                .with_icon("🔥")
+                .with_group("Benchmark"),
+            BenchmarkDynamicField::new("collecting", "Coleta", 11)
+                .with_icon("📊")
+                .with_group("Benchmark"),
+            BenchmarkDynamicField::new("time_mean", "Tempo Médio", 20)
+                .with_icon("⏱️")
+                .with_group("Resultados"),
+            BenchmarkDynamicField::new("cache_hits", "Cache Hits", 21)
+                .with_icon("💾")
+                .with_group("Resultados"),
+        ],
+        "Evaluation" => vec![
+            BenchmarkDynamicField::new("status", "Status", 0)
+                .with_icon("🎯")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("compiling", "Compilação", 1)
+                .with_icon("🔨")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("warmup", "Warm-up", 10)
+                .with_icon("🔥")
+                .with_group("Benchmark"),
+            BenchmarkDynamicField::new("time_mean", "Tempo Médio", 20)
+                .with_icon("⏱️")
+                .with_group("Resultados"),
+            BenchmarkDynamicField::new("accuracy", "Precisão", 21)
+                .with_icon("🎯")
+                .with_group("Resultados"),
+        ],
+        "Agent" => vec![
+            BenchmarkDynamicField::new("status", "Status", 0)
+                .with_icon("🎯")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("compiling", "Compilação", 1)
+                .with_icon("🔨")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("warmup", "Warm-up", 10)
+                .with_icon("🔥")
+                .with_group("Benchmark"),
+            BenchmarkDynamicField::new("time_mean", "Tempo Médio", 20)
+                .with_icon("⏱️")
+                .with_group("Resultados"),
+            BenchmarkDynamicField::new("memory", "Memória", 21)
+                .with_icon("💾")
+                .with_group("Resultados"),
+        ],
+        "E2E" => vec![
+            BenchmarkDynamicField::new("status", "Status", 0)
+                .with_icon("🎯")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("compiling", "Compilação", 1)
+                .with_icon("🔨")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("setup", "Setup", 2)
+                .with_icon("⚙️")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("warmup", "Warm-up", 10)
+                .with_icon("🔥")
+                .with_group("Benchmark"),
+            BenchmarkDynamicField::new("time_total", "Tempo Total", 20)
+                .with_icon("⏱️")
+                .with_group("Resultados"),
+            BenchmarkDynamicField::new("steps", "Steps Executados", 21)
+                .with_icon("📝")
+                .with_group("Resultados"),
+        ],
+        "SIMD" => vec![
+            BenchmarkDynamicField::new("status", "Status", 0)
+                .with_icon("🎯")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("compiling", "Compilação", 1)
+                .with_icon("🔨")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("warmup", "Warm-up", 10)
+                .with_icon("🔥")
+                .with_group("Benchmark"),
+            BenchmarkDynamicField::new("time_simd", "Tempo SIMD", 20)
+                .with_icon("⚡")
+                .with_group("Resultados"),
+            BenchmarkDynamicField::new("time_scalar", "Tempo Scalar", 21)
+                .with_icon("🔢")
+                .with_group("Resultados"),
+            BenchmarkDynamicField::new("speedup", "Speedup", 22)
+                .with_icon("🚀")
+                .with_group("Resultados"),
+        ],
+        _ => vec![
+            BenchmarkDynamicField::new("status", "Status", 0)
+                .with_icon("🎯")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("compiling", "Compilação", 1)
+                .with_icon("🔨")
+                .with_group("Geral"),
+            BenchmarkDynamicField::new("result", "Resultado", 10)
+                .with_icon("📊")
+                .with_group("Resultados"),
+        ],
+    }
+}
+
+/// Analisa uma linha de log e extrai resultados dinâmicos
+fn parse_benchmark_line(line: &str, bench_name: &str, tx: &Sender<AppEvent>) {
+    use super::app::{AppEvent, FieldStatus};
+
+    // Detectar compilação
+    if line.contains("Compiling") {
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "compiling".to_string(),
+            value: "Em andamento...".to_string(),
+            status: FieldStatus::Running,
+        });
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "status".to_string(),
+            value: "Compilando".to_string(),
+            status: FieldStatus::Running,
+        });
+    }
+
+    // Detectar fim de compilação
+    if line.contains("Finished") || line.contains("Compiled") {
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "compiling".to_string(),
+            value: "Concluída ✓".to_string(),
+            status: FieldStatus::Success,
+        });
+    }
+
+    // Detectar início de execução
+    if line.contains("Running") && line.contains("bench") {
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "running".to_string(),
+            value: "Executando...".to_string(),
+            status: FieldStatus::Running,
+        });
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "status".to_string(),
+            value: "Executando benchmark".to_string(),
+            status: FieldStatus::Running,
+        });
+    }
+
+    // Detectar warmup
+    if line.contains("Warming up") || line.contains("warm") {
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "warmup".to_string(),
+            value: "Aquecendo...".to_string(),
+            status: FieldStatus::Running,
+        });
+    }
+
+    // Detectar coleta de amostras
+    if line.contains("Collecting") && line.contains("sample") {
+        // Tentar extrair número de samples
+        let samples = if let Some(num) = line.split_whitespace()
+            .find(|s| s.parse::<u32>().is_ok())
+        {
+            format!("{} samples", num)
+        } else {
+            "Coletando...".to_string()
+        };
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "collecting".to_string(),
+            value: samples,
+            status: FieldStatus::Running,
+        });
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "warmup".to_string(),
+            value: "Concluído ✓".to_string(),
+            status: FieldStatus::Success,
+        });
+    }
+
+    // Detectar análise
+    if line.contains("Analyzing") {
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "analyzing".to_string(),
+            value: "Analisando...".to_string(),
+            status: FieldStatus::Running,
+        });
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "collecting".to_string(),
+            value: "Concluído ✓".to_string(),
+            status: FieldStatus::Success,
+        });
+    }
+
+    // Detectar resultados de tempo (padrão Criterion)
+    // Exemplo: "time:   [1.2345 ms 1.2456 ms 1.2567 ms]"
+    if line.contains("time:") && line.contains("[") {
+        // Extrair valores entre colchetes
+        if let Some(start) = line.find('[') {
+            if let Some(end) = line.find(']') {
+                let time_str = &line[start + 1..end];
+                let parts: Vec<&str> = time_str.split_whitespace().collect();
+
+                // Formato típico: "1.2345 ms 1.2456 ms 1.2567 ms" (low, mean, high)
+                if parts.len() >= 4 {
+                    let mean = format!("{} {}", parts[2], parts[3]); // meio
+                    let _ = tx.send(AppEvent::BenchmarkUpdateField {
+                        field_id: "time_mean".to_string(),
+                        value: mean,
+                        status: FieldStatus::Success,
+                    });
+                }
+            }
+        }
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "analyzing".to_string(),
+            value: "Concluído ✓".to_string(),
+            status: FieldStatus::Success,
+        });
+    }
+
+    // Detectar throughput
+    if line.contains("thrpt:") || line.contains("throughput") {
+        if let Some(start) = line.find('[') {
+            if let Some(end) = line.find(']') {
+                let thrpt_str = &line[start + 1..end];
+                let parts: Vec<&str> = thrpt_str.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let thrpt = format!("{} {}", parts[0], parts[1]);
+                    let _ = tx.send(AppEvent::BenchmarkUpdateField {
+                        field_id: "throughput".to_string(),
+                        value: thrpt,
+                        status: FieldStatus::Success,
+                    });
+                }
+            }
+        }
+    }
+
+    // Detectar erro
+    if line.contains("error") || line.contains("Error") || line.contains("FAILED") {
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "status".to_string(),
+            value: "Erro!".to_string(),
+            status: FieldStatus::Failed,
+        });
+    }
+
+    // Detectar sucesso final
+    if line.contains("test result: ok") || line.contains("benchmark complete") {
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "status".to_string(),
+            value: "Sucesso!".to_string(),
+            status: FieldStatus::Success,
+        });
+        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+            field_id: "running".to_string(),
+            value: "Concluído ✓".to_string(),
+            status: FieldStatus::Success,
+        });
+    }
+
+    // Tratamentos específicos por tipo de benchmark
+    match bench_name {
+        "SIMD" => {
+            // Detectar resultados específicos de SIMD
+            if line.contains("simd") && line.contains("time:") {
+                // Já tratado acima, mas podemos especializar
+            }
+            if line.contains("scalar") && line.contains("time:") {
+                if let Some(start) = line.find('[') {
+                    if let Some(end) = line.find(']') {
+                        let time_str = &line[start + 1..end];
+                        let parts: Vec<&str> = time_str.split_whitespace().collect();
+                        if parts.len() >= 4 {
+                            let mean = format!("{} {}", parts[2], parts[3]);
+                            let _ = tx.send(AppEvent::BenchmarkUpdateField {
+                                field_id: "time_scalar".to_string(),
+                                value: mean,
+                                status: FieldStatus::Success,
+                            });
+                        }
+                    }
+                }
+            }
+            if line.to_lowercase().contains("speedup") {
+                // Tentar extrair valor de speedup
+                for word in line.split_whitespace() {
+                    if word.contains("x") || word.parse::<f64>().is_ok() {
+                        let _ = tx.send(AppEvent::BenchmarkUpdateField {
+                            field_id: "speedup".to_string(),
+                            value: word.to_string(),
+                            status: FieldStatus::Success,
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Executa um benchmark em background e envia eventos para a TUI (com logs em tempo real)
 pub async fn execute_benchmark(bench_file: String, bench_name: String, tx: Sender<AppEvent>) {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
     let start_time = Instant::now();
+
+    // Enviar schema de campos esperados para este benchmark
+    let schema = create_benchmark_schema(&bench_name);
+    let _ = tx.send(AppEvent::BenchmarkSetSchema {
+        bench_name: bench_name.clone(),
+        fields: schema,
+    });
+
+    // Inicializar status como pendente
+    let _ = tx.send(AppEvent::BenchmarkUpdateField {
+        field_id: "status".to_string(),
+        value: "Iniciando...".to_string(),
+        status: super::app::FieldStatus::Running,
+    });
 
     // Encontrar diretório do projeto (benchmarks estão em rust-implementation/benches/)
     // O comando cargo bench precisa ser executado a partir do diretório rust-implementation
@@ -470,11 +826,13 @@ pub async fn execute_benchmark(bench_file: String, bench_name: String, tx: Sende
         level: super::app::LogLevel::Info,
     });
 
-    // Executar cargo bench de forma assíncrona
+    // Executar cargo bench de forma assíncrona com --nocapture para saída em tempo real
     let mut cmd = TokioCommand::new("cargo");
     cmd.arg("bench")
         .arg("--bench")
         .arg(&bench_file)
+        .arg("--")
+        .arg("--nocapture")  // Força saída imediata
         .current_dir(&bench_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -482,62 +840,101 @@ pub async fn execute_benchmark(bench_file: String, bench_name: String, tx: Sende
     match cmd.spawn() {
         Ok(mut child) => {
             let _ = tx.send(AppEvent::BenchmarkLog {
-                message: "⏳ Aguardando conclusão do benchmark...".to_string(),
+                message: "⏳ Executando benchmark (logs em tempo real)...".to_string(),
                 level: super::app::LogLevel::Info,
             });
 
-            // Aguardar conclusão
-            match child.wait().await {
-                Ok(status) => {
-                    let duration = start_time.elapsed();
-                    let duration_secs = duration.as_secs_f64();
+            // Criar readers para stdout e stderr
+            let stdout = child.stdout.take().expect("Failed to capture stdout");
+            let stderr = child.stderr.take().expect("Failed to capture stderr");
 
-                    // Capturar output
-                    let mut stdout = String::new();
-                    let mut stderr = String::new();
+            let mut stdout_reader = BufReader::new(stdout).lines();
+            let mut stderr_reader = BufReader::new(stderr).lines();
 
-                    if let Some(mut stdout_handle) = child.stdout.take() {
-                        use tokio::io::AsyncReadExt;
-                        let mut buf = Vec::new();
-                        if stdout_handle.read_to_end(&mut buf).await.is_ok() {
-                            stdout = String::from_utf8_lossy(&buf).to_string();
-                        }
+            // Clonar tx para as tasks de leitura
+            let tx_stdout = tx.clone();
+            let tx_stderr = tx.clone();
+
+            // Clonar bench_name para as tasks
+            let bench_name_stdout = bench_name.clone();
+            let bench_name_stderr = bench_name.clone();
+
+            // Coletar saída enquanto lê em tempo real
+            let stdout_handle = tokio::spawn(async move {
+                let mut lines = Vec::new();
+                while let Ok(Some(line)) = stdout_reader.next_line().await {
+                    if !line.trim().is_empty() {
+                        let level = if line.contains("error") || line.contains("Error") {
+                            super::app::LogLevel::Error
+                        } else if line.contains("warning") || line.contains("Warning") {
+                            super::app::LogLevel::Warning
+                        } else if line.contains("test result: ok") || line.contains("Benchmarking") || line.contains("time:") {
+                            super::app::LogLevel::Success
+                        } else {
+                            super::app::LogLevel::Info
+                        };
+
+                        let _ = tx_stdout.send(AppEvent::BenchmarkLog {
+                            message: line.clone(),
+                            level,
+                        });
+
+                        // Parsear linha para extrair resultados dinâmicos
+                        parse_benchmark_line(&line, &bench_name_stdout, &tx_stdout);
                     }
+                    lines.push(line);
+                }
+                lines
+            });
 
-                    if let Some(mut stderr_handle) = child.stderr.take() {
-                        use tokio::io::AsyncReadExt;
-                        let mut buf = Vec::new();
-                        if stderr_handle.read_to_end(&mut buf).await.is_ok() {
-                            stderr = String::from_utf8_lossy(&buf).to_string();
-                        }
+            let stderr_handle = tokio::spawn(async move {
+                let mut lines = Vec::new();
+                while let Ok(Some(line)) = stderr_reader.next_line().await {
+                    if !line.trim().is_empty() {
+                        let level = if line.contains("error") || line.contains("Error") {
+                            super::app::LogLevel::Error
+                        } else if line.contains("warning") || line.contains("Warning") {
+                            super::app::LogLevel::Warning
+                        } else if line.contains("Compiling") || line.contains("Finished") {
+                            super::app::LogLevel::Info
+                        } else {
+                            super::app::LogLevel::Debug
+                        };
+
+                        let _ = tx_stderr.send(AppEvent::BenchmarkLog {
+                            message: line.clone(),
+                            level,
+                        });
+
+                        // Parsear linha para extrair resultados dinâmicos
+                        parse_benchmark_line(&line, &bench_name_stderr, &tx_stderr);
                     }
+                    lines.push(line);
+                }
+                lines
+            });
 
-                    let success = status.success();
+            // Aguardar processo terminar
+            let status = child.wait().await;
+
+            // Aguardar leitura completa
+            let stdout_lines = stdout_handle.await.unwrap_or_default();
+            let stderr_lines = stderr_handle.await.unwrap_or_default();
+
+            let duration = start_time.elapsed();
+            let duration_secs = duration.as_secs_f64();
+
+            let stdout = stdout_lines.join("\n");
+            let stderr = stderr_lines.join("\n");
+
+            match status {
+                Ok(s) => {
+                    let success = s.success();
                     let output = if !stdout.is_empty() {
                         stdout
                     } else {
                         stderr.clone()
                     };
-
-                    // Enviar logs da saída
-                    for line in output.lines().take(50) {
-                        if !line.trim().is_empty() {
-                            let level = if line.contains("error") || line.contains("Error") {
-                                super::app::LogLevel::Error
-                            } else if line.contains("warning") || line.contains("Warning") {
-                                super::app::LogLevel::Warning
-                            } else if line.contains("test result: ok") || line.contains("Benchmarking") {
-                                super::app::LogLevel::Success
-                            } else {
-                                super::app::LogLevel::Info
-                            };
-
-                            let _ = tx.send(AppEvent::BenchmarkLog {
-                                message: line.to_string(),
-                                level,
-                            });
-                        }
-                    }
 
                     // Enviar resultado final
                     let error = if !success && !stderr.is_empty() {

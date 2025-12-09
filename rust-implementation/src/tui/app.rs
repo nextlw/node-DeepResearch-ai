@@ -201,6 +201,12 @@ pub struct BenchmarksState {
     pub execution_logs: VecDeque<LogEntry>,
     /// Scroll position nos logs
     pub log_scroll: usize,
+    /// Resultados dinâmicos do benchmark atual
+    #[serde(default)]
+    pub dynamic_results: BenchmarkDynamicResults,
+    /// Scroll position nos resultados dinâmicos
+    #[serde(default)]
+    pub results_scroll: usize,
 }
 
 /// Informação sobre um benchmark
@@ -233,6 +239,143 @@ pub struct BenchmarkResult {
     pub error: Option<String>,
 }
 
+/// Status de um campo de resultado dinâmico
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum FieldStatus {
+    /// Aguardando valor
+    Pending,
+    /// Processando/coletando dados
+    Running,
+    /// Valor obtido com sucesso
+    Success,
+    /// Falhou ao obter valor
+    Failed,
+    /// Valor é informativo (sem status de sucesso/falha)
+    Info,
+}
+
+impl Default for FieldStatus {
+    fn default() -> Self {
+        FieldStatus::Pending
+    }
+}
+
+/// Campo de resultado dinâmico do benchmark
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkDynamicField {
+    /// ID único do campo (para atualização)
+    pub id: String,
+    /// Label/nome do campo a ser exibido
+    pub label: String,
+    /// Valor atual (None se ainda não obtido)
+    pub value: Option<String>,
+    /// Status do campo
+    pub status: FieldStatus,
+    /// Ícone/emoji para o campo (opcional)
+    pub icon: Option<String>,
+    /// Ordem de exibição (menor = mais acima)
+    pub order: usize,
+    /// Grupo/categoria do campo (para agrupar visualmente)
+    pub group: Option<String>,
+}
+
+impl BenchmarkDynamicField {
+    /// Cria um novo campo pendente
+    pub fn new(id: impl Into<String>, label: impl Into<String>, order: usize) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            value: None,
+            status: FieldStatus::Pending,
+            icon: None,
+            order,
+            group: None,
+        }
+    }
+
+    /// Define um ícone para o campo
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    /// Define o grupo do campo
+    pub fn with_group(mut self, group: impl Into<String>) -> Self {
+        self.group = Some(group.into());
+        self
+    }
+}
+
+/// Resultados dinâmicos de um benchmark
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BenchmarkDynamicResults {
+    /// Nome do benchmark
+    pub bench_name: String,
+    /// Campos de resultado
+    pub fields: Vec<BenchmarkDynamicField>,
+    /// Se todos os campos foram preenchidos
+    pub is_complete: bool,
+    /// Timestamp de início
+    pub started_at: Option<String>,
+    /// Timestamp de última atualização
+    pub last_update: Option<String>,
+}
+
+impl BenchmarkDynamicResults {
+    /// Cria novos resultados dinâmicos
+    pub fn new(bench_name: impl Into<String>) -> Self {
+        Self {
+            bench_name: bench_name.into(),
+            fields: Vec::new(),
+            is_complete: false,
+            started_at: Some(chrono::Local::now().format("%H:%M:%S").to_string()),
+            last_update: None,
+        }
+    }
+
+    /// Define o schema de campos esperados
+    pub fn set_schema(&mut self, fields: Vec<BenchmarkDynamicField>) {
+        self.fields = fields;
+        self.is_complete = false;
+    }
+
+    /// Atualiza um campo específico
+    pub fn update_field(&mut self, field_id: &str, value: String, status: FieldStatus) {
+        if let Some(field) = self.fields.iter_mut().find(|f| f.id == field_id) {
+            field.value = Some(value);
+            field.status = status;
+            self.last_update = Some(chrono::Local::now().format("%H:%M:%S").to_string());
+        }
+        // Verificar se todos os campos foram preenchidos
+        self.is_complete = self.fields.iter().all(|f| {
+            f.value.is_some() && !matches!(f.status, FieldStatus::Pending | FieldStatus::Running)
+        });
+    }
+
+    /// Marca um campo como em execução
+    pub fn set_field_running(&mut self, field_id: &str) {
+        if let Some(field) = self.fields.iter_mut().find(|f| f.id == field_id) {
+            field.status = FieldStatus::Running;
+            self.last_update = Some(chrono::Local::now().format("%H:%M:%S").to_string());
+        }
+    }
+
+    /// Retorna os campos ordenados
+    pub fn sorted_fields(&self) -> Vec<&BenchmarkDynamicField> {
+        let mut fields: Vec<_> = self.fields.iter().collect();
+        fields.sort_by_key(|f| f.order);
+        fields
+    }
+
+    /// Limpa os resultados
+    pub fn clear(&mut self) {
+        self.fields.clear();
+        self.is_complete = false;
+        self.started_at = None;
+        self.last_update = None;
+    }
+}
+
 impl BenchmarksState {
     /// Cria novo estado de benchmarks
     pub fn new() -> Self {
@@ -243,6 +386,8 @@ impl BenchmarksState {
             last_result: None,
             execution_logs: VecDeque::new(),
             log_scroll: 0,
+            dynamic_results: BenchmarkDynamicResults::default(),
+            results_scroll: 0,
         };
         state.load_available_benchmarks();
         state
@@ -329,13 +474,43 @@ impl BenchmarksState {
     }
 
     /// Inicia execução de um benchmark
-    pub fn start_benchmark(&mut self, bench_file: &str) {
+    pub fn start_benchmark(&mut self, bench_file: &str, bench_name: &str) {
         self.running = Some(bench_file.to_string());
         self.execution_logs.clear();
         self.log_scroll = 0;
+        self.dynamic_results = BenchmarkDynamicResults::new(bench_name);
+        self.results_scroll = 0;
         self.execution_logs.push_back(LogEntry::info(
             format!("Iniciando benchmark: {}", bench_file)
         ));
+    }
+
+    /// Define o schema de resultados dinâmicos
+    pub fn set_results_schema(&mut self, fields: Vec<BenchmarkDynamicField>) {
+        self.dynamic_results.set_schema(fields);
+    }
+
+    /// Atualiza um campo de resultado dinâmico
+    pub fn update_result_field(&mut self, field_id: &str, value: String, status: FieldStatus) {
+        self.dynamic_results.update_field(field_id, value, status);
+    }
+
+    /// Marca um campo como em execução
+    pub fn set_result_field_running(&mut self, field_id: &str) {
+        self.dynamic_results.set_field_running(field_id);
+    }
+
+    /// Scroll up nos resultados dinâmicos
+    pub fn results_scroll_up(&mut self) {
+        self.results_scroll = self.results_scroll.saturating_sub(1);
+    }
+
+    /// Scroll down nos resultados dinâmicos
+    pub fn results_scroll_down(&mut self) {
+        let max_scroll = self.dynamic_results.fields.len().saturating_sub(5);
+        if self.results_scroll < max_scroll {
+            self.results_scroll += 1;
+        }
     }
 
     /// Finaliza execução de um benchmark com resultado
@@ -1008,6 +1183,27 @@ pub enum AppEvent {
         /// Duração em segundos
         duration_secs: f64,
     },
+    /// Define o schema de campos esperados para resultados dinâmicos
+    BenchmarkSetSchema {
+        /// Nome do benchmark
+        bench_name: String,
+        /// Campos esperados (JSON serializado)
+        fields: Vec<BenchmarkDynamicField>,
+    },
+    /// Atualiza um campo de resultado dinâmico
+    BenchmarkUpdateField {
+        /// ID do campo
+        field_id: String,
+        /// Valor do campo
+        value: String,
+        /// Status do campo
+        status: FieldStatus,
+    },
+    /// Marca um campo como em execução
+    BenchmarkFieldRunning {
+        /// ID do campo
+        field_id: String,
+    },
 }
 
 /// Estado da aplicação
@@ -1524,7 +1720,7 @@ impl App {
                 self.sandbox.complete(success, output, error, attempts, execution_time_ms, code_preview, language);
             }
             AppEvent::BenchmarkStarted { bench_file, bench_name } => {
-                self.benchmarks.start_benchmark(&bench_file);
+                self.benchmarks.start_benchmark(&bench_file, &bench_name);
                 self.benchmarks.add_execution_log(LogLevel::Info, format!("🚀 Iniciando benchmark: {}", bench_name));
             }
             AppEvent::BenchmarkLog { message, level } => {
@@ -1546,6 +1742,15 @@ impl App {
                     if success { LogLevel::Success } else { LogLevel::Error },
                     format!("{} Benchmark {} concluído em {:.2}s", status, bench_name, duration_secs)
                 );
+            }
+            AppEvent::BenchmarkSetSchema { bench_name: _, fields } => {
+                self.benchmarks.set_results_schema(fields);
+            }
+            AppEvent::BenchmarkUpdateField { field_id, value, status } => {
+                self.benchmarks.update_result_field(&field_id, value, status);
+            }
+            AppEvent::BenchmarkFieldRunning { field_id } => {
+                self.benchmarks.set_result_field_running(&field_id);
             }
         }
     }
