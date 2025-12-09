@@ -3,6 +3,8 @@
 //! Este módulo implementa a integração com a API Digisac para
 //! gerenciamento de mensagens via WhatsApp e outros canais.
 //!
+//! Utiliza o crate `digisac` do crates.io para comunicação com a API.
+//!
 //! ## Funcionalidades
 //!
 //! - Enviar mensagens
@@ -10,10 +12,13 @@
 //! - Criar webhooks
 //! - Gerenciar contatos
 
-use std::collections::HashMap;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use reqwest::Client;
+use digisac::{
+    client::{DigisacApi, DigisacClient, SendMessageRequest as DigisacSendMessageRequest, WebhookCreateRequest},
+    config::EnvManager,
+    error::DigisacError as CrateDigisacError,
+};
+use serde_json;
 
 use super::paytour_tools::AgentTool;
 
@@ -23,228 +28,49 @@ pub enum DigisacError {
     /// Erro de autenticação.
     #[error("Authentication failed: {0}")]
     AuthError(String),
-    
+
     /// Erro de rede.
     #[error("Network error: {0}")]
     NetworkError(String),
-    
+
     /// Erro de API.
     #[error("API error: {0}")]
     ApiError(String),
-    
+
     /// Recurso não encontrado.
     #[error("Resource not found: {0}")]
     NotFound(String),
-    
+
     /// Erro de configuração.
     #[error("Configuration error: {0}")]
     ConfigError(String),
-    
+
     /// Erro de validação.
     #[error("Validation error: {0}")]
     ValidationError(String),
 }
 
-/// Configuração do cliente Digisac.
-#[derive(Debug, Clone)]
-pub struct DigisacConfig {
-    /// URL base da API.
-    pub base_url: String,
-    
-    /// Token de API.
-    pub api_token: Option<String>,
-    
-    /// ID da conta.
-    pub account_id: Option<String>,
-    
-    /// Timeout em segundos.
-    pub timeout_secs: u64,
-}
-
-impl Default for DigisacConfig {
-    fn default() -> Self {
-        Self {
-            base_url: "https://api.digisac.me/v1".to_string(),
-            api_token: None,
-            account_id: None,
-            timeout_secs: 30,
+impl From<CrateDigisacError> for DigisacError {
+    fn from(err: CrateDigisacError) -> Self {
+        match err {
+            CrateDigisacError::ApiError { status, message } => {
+                if status == 401 {
+                    DigisacError::AuthError(message)
+                } else if status == 404 {
+                    DigisacError::NotFound(message)
+                } else if status == 422 {
+                    DigisacError::ValidationError(message)
+                } else {
+                    DigisacError::ApiError(format!("API error ({}): {}", status, message))
+                }
+            }
+            CrateDigisacError::NetworkError(e) => DigisacError::NetworkError(e.to_string()),
+            CrateDigisacError::ConfigError(msg) => DigisacError::ConfigError(msg),
+            CrateDigisacError::Unknown(msg) => DigisacError::ApiError(msg),
+            CrateDigisacError::AuthError => DigisacError::AuthError("Authentication failed".into()),
+            CrateDigisacError::ParseError(e) => DigisacError::ApiError(format!("Parse error: {}", e)),
         }
     }
-}
-
-/// Requisição para enviar mensagem.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SendMessageRequest {
-    /// ID do serviço (canal de comunicação).
-    pub service_id: String,
-    
-    /// ID do contato.
-    pub contact_id: String,
-    
-    /// Texto da mensagem.
-    pub text: String,
-    
-    /// Tipo de mensagem.
-    #[serde(default = "default_message_type")]
-    pub message_type: String,
-    
-    /// Mídia anexada (opcional).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub media: Option<MediaAttachment>,
-}
-
-fn default_message_type() -> String {
-    "text".to_string()
-}
-
-/// Anexo de mídia.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MediaAttachment {
-    /// Tipo de mídia (image, audio, video, document).
-    pub media_type: String,
-    
-    /// URL da mídia.
-    pub url: String,
-    
-    /// Nome do arquivo.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub filename: Option<String>,
-    
-    /// Legenda.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub caption: Option<String>,
-}
-
-/// Resposta de envio de mensagem.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessageResponse {
-    /// ID da mensagem.
-    pub id: String,
-    
-    /// Status da mensagem.
-    pub status: String,
-    
-    /// Timestamp de criação.
-    #[serde(default)]
-    pub created_at: Option<String>,
-    
-    /// ID do contato.
-    #[serde(default)]
-    pub contact_id: Option<String>,
-}
-
-/// Webhook configurado.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Webhook {
-    /// ID do webhook.
-    pub id: String,
-    
-    /// URL de destino.
-    pub url: String,
-    
-    /// Eventos assinados.
-    pub events: Vec<String>,
-    
-    /// Se está ativo.
-    #[serde(default = "default_true")]
-    pub active: bool,
-    
-    /// Data de criação.
-    #[serde(default)]
-    pub created_at: Option<String>,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-/// Requisição para criar webhook.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateWebhookRequest {
-    /// URL de destino.
-    pub url: String,
-    
-    /// Eventos a assinar.
-    pub events: Vec<String>,
-    
-    /// Se deve estar ativo.
-    #[serde(default = "default_true")]
-    pub active: bool,
-}
-
-/// Eventos disponíveis para webhook.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WebhookEvent {
-    /// Nova mensagem recebida.
-    MessageReceived,
-    /// Mensagem enviada.
-    MessageSent,
-    /// Status da mensagem atualizado.
-    MessageStatusUpdate,
-    /// Novo contato.
-    ContactCreated,
-    /// Contato atualizado.
-    ContactUpdated,
-    /// Ticket criado.
-    TicketCreated,
-    /// Ticket fechado.
-    TicketClosed,
-}
-
-impl WebhookEvent {
-    /// Retorna o nome do evento como string.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::MessageReceived => "message.received",
-            Self::MessageSent => "message.sent",
-            Self::MessageStatusUpdate => "message.status",
-            Self::ContactCreated => "contact.created",
-            Self::ContactUpdated => "contact.updated",
-            Self::TicketCreated => "ticket.created",
-            Self::TicketClosed => "ticket.closed",
-        }
-    }
-    
-    /// Cria evento a partir de string.
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "message.received" => Some(Self::MessageReceived),
-            "message.sent" => Some(Self::MessageSent),
-            "message.status" => Some(Self::MessageStatusUpdate),
-            "contact.created" => Some(Self::ContactCreated),
-            "contact.updated" => Some(Self::ContactUpdated),
-            "ticket.created" => Some(Self::TicketCreated),
-            "ticket.closed" => Some(Self::TicketClosed),
-            _ => None,
-        }
-    }
-}
-
-/// Contato do Digisac.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Contact {
-    /// ID do contato.
-    pub id: String,
-    
-    /// Nome do contato.
-    #[serde(default)]
-    pub name: String,
-    
-    /// Número de telefone.
-    #[serde(default)]
-    pub phone: Option<String>,
-    
-    /// Email.
-    #[serde(default)]
-    pub email: Option<String>,
-    
-    /// Tags/etiquetas.
-    #[serde(default)]
-    pub tags: Vec<String>,
-    
-    /// Campos customizados.
-    #[serde(default)]
-    pub custom_fields: HashMap<String, String>,
 }
 
 /// Cliente para integração com Digisac.
@@ -266,48 +92,32 @@ pub struct Contact {
 /// let webhooks = tools.listar_webhooks().await?;
 /// ```
 pub struct DigisacTools {
-    /// Cliente HTTP.
-    client: Client,
-    
-    /// Configuração.
-    config: DigisacConfig,
+    /// Cliente Digisac do crate.
+    client: DigisacClient,
 }
 
 impl DigisacTools {
     /// Cria um novo cliente Digisac.
     ///
-    /// Tenta carregar configuração do ambiente.
+    /// Tenta carregar configuração do ambiente usando `EnvManager` do crate.
     pub async fn new() -> Result<Self, DigisacError> {
-        let config = Self::load_config_from_env()?;
-        Self::with_config(config).await
+        let env = EnvManager::load().map_err(|e| DigisacError::ConfigError(e.to_string()))?;
+
+        let token = env.access_token.ok_or_else(|| {
+            DigisacError::ConfigError("DIGISAC_ACCESS_TOKEN não encontrado".into())
+        })?;
+
+        let client = DigisacClient::new(env.api_base_url, token);
+
+        Ok(Self { client })
     }
-    
+
     /// Cria um novo cliente Digisac com configuração customizada.
-    pub async fn with_config(config: DigisacConfig) -> Result<Self, DigisacError> {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(config.timeout_secs))
-            .build()
-            .map_err(|e| DigisacError::NetworkError(e.to_string()))?;
-        
-        Ok(Self { client, config })
+    pub async fn with_config(base_url: String, token: String) -> Result<Self, DigisacError> {
+        let client = DigisacClient::new(base_url, token);
+        Ok(Self { client })
     }
-    
-    /// Carrega configuração do ambiente.
-    fn load_config_from_env() -> Result<DigisacConfig, DigisacError> {
-        let base_url = std::env::var("DIGISAC_BASE_URL")
-            .unwrap_or_else(|_| "https://api.digisac.me/v1".to_string());
-        
-        let api_token = std::env::var("DIGISAC_API_TOKEN").ok();
-        let account_id = std::env::var("DIGISAC_ACCOUNT_ID").ok();
-        
-        Ok(DigisacConfig {
-            base_url,
-            api_token,
-            account_id,
-            timeout_secs: 30,
-        })
-    }
-    
+
     /// Envia uma mensagem de texto.
     ///
     /// # Argumentos
@@ -330,89 +140,60 @@ impl DigisacTools {
         if texto.len() > 4096 {
             return Err(DigisacError::ValidationError("Message text too long (max 4096 chars)".into()));
         }
-        
-        let url = format!("{}/messages", self.config.base_url);
-        
-        let body = SendMessageRequest {
-            service_id: service_id.to_string(),
-            contact_id: contact_id.to_string(),
-            text: texto.to_string(),
-            message_type: "text".to_string(),
-            media: None,
-        };
-        
-        let request = self
-            .add_auth_headers(self.client.post(&url))
-            .json(&body);
-        
-        let response = request
-            .send()
-            .await
-            .map_err(|e| DigisacError::NetworkError(e.to_string()))?;
-        
-        self.handle_response(response).await
+
+        let request = DigisacSendMessageRequest::builder()
+            .service_id(service_id.to_string())
+            .contact_id(contact_id.to_string())
+            .text(texto.to_string())
+            .build();
+
+        let response = self.client.send_message(&request).await?;
+
+        Ok(serde_json::to_value(response).map_err(|e| {
+            DigisacError::ApiError(format!("Failed to serialize response: {}", e))
+        })?)
     }
-    
+
     /// Envia uma mensagem com mídia.
     ///
     /// # Argumentos
     /// * `service_id` - ID do serviço (canal).
     /// * `contact_id` - ID do contato.
-    /// * `media_type` - Tipo de mídia (image, audio, video, document).
     /// * `media_url` - URL da mídia.
     /// * `caption` - Legenda opcional.
     pub async fn enviar_midia(
         &self,
         service_id: &str,
         contact_id: &str,
-        media_type: &str,
         media_url: &str,
         caption: Option<&str>,
     ) -> Result<serde_json::Value, DigisacError> {
-        let url = format!("{}/messages", self.config.base_url);
-        
-        let body = SendMessageRequest {
-            service_id: service_id.to_string(),
-            contact_id: contact_id.to_string(),
-            text: caption.unwrap_or("").to_string(),
-            message_type: media_type.to_string(),
-            media: Some(MediaAttachment {
-                media_type: media_type.to_string(),
-                url: media_url.to_string(),
-                filename: None,
-                caption: caption.map(|s| s.to_string()),
-            }),
-        };
-        
-        let request = self
-            .add_auth_headers(self.client.post(&url))
-            .json(&body);
-        
-        let response = request
-            .send()
-            .await
-            .map_err(|e| DigisacError::NetworkError(e.to_string()))?;
-        
-        self.handle_response(response).await
+        let request = DigisacSendMessageRequest::builder()
+            .service_id(service_id.to_string())
+            .contact_id(contact_id.to_string())
+            .text(caption.unwrap_or("").to_string())
+            .media_url(media_url.to_string())
+            .build();
+
+        let response = self.client.send_message(&request).await?;
+
+        Ok(serde_json::to_value(response).map_err(|e| {
+            DigisacError::ApiError(format!("Failed to serialize response: {}", e))
+        })?)
     }
-    
+
     /// Lista webhooks configurados.
     ///
     /// # Retorna
     /// JSON com a lista de webhooks.
     pub async fn listar_webhooks(&self) -> Result<serde_json::Value, DigisacError> {
-        let url = format!("{}/webhooks", self.config.base_url);
-        
-        let request = self.add_auth_headers(self.client.get(&url));
-        
-        let response = request
-            .send()
-            .await
-            .map_err(|e| DigisacError::NetworkError(e.to_string()))?;
-        
-        self.handle_response(response).await
+        let response = self.client.list_webhooks().await?;
+
+        Ok(serde_json::to_value(response).map_err(|e| {
+            DigisacError::ApiError(format!("Failed to serialize response: {}", e))
+        })?)
     }
-    
+
     /// Cria um novo webhook.
     ///
     /// # Argumentos
@@ -437,141 +218,61 @@ impl DigisacTools {
                 "At least one event must be specified".into()
             ));
         }
-        
-        let api_url = format!("{}/webhooks", self.config.base_url);
-        
-        let body = CreateWebhookRequest {
-            url: url.to_string(),
-            events: eventos,
-            active: true,
-        };
-        
-        let request = self
-            .add_auth_headers(self.client.post(&api_url))
-            .json(&body);
-        
-        let response = request
-            .send()
-            .await
-            .map_err(|e| DigisacError::NetworkError(e.to_string()))?;
-        
-        self.handle_response(response).await
+
+        let request = WebhookCreateRequest::builder()
+            .url(url.to_string())
+            .events(eventos)
+            .active(true)
+            .build();
+
+        let webhook = self.client.create_webhook(&request).await?;
+
+        Ok(serde_json::to_value(webhook).map_err(|e| {
+            DigisacError::ApiError(format!("Failed to serialize response: {}", e))
+        })?)
     }
-    
+
     /// Deleta um webhook.
     ///
     /// # Argumentos
     /// * `webhook_id` - ID do webhook a ser deletado.
     pub async fn deletar_webhook(&self, webhook_id: &str) -> Result<(), DigisacError> {
-        let url = format!("{}/webhooks/{}", self.config.base_url, webhook_id);
-        
-        let request = self.add_auth_headers(self.client.delete(&url));
-        
-        let response = request
-            .send()
-            .await
-            .map_err(|e| DigisacError::NetworkError(e.to_string()))?;
-        
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            let error = self.handle_response(response).await;
-            Err(error.unwrap_err())
-        }
+        self.client.delete_webhook(webhook_id).await?;
+        Ok(())
     }
-    
+
     /// Lista contatos.
     ///
     /// # Argumentos
     /// * `limit` - Limite de resultados.
     /// * `offset` - Offset para paginação.
+    ///
+    /// Nota: A API do crate digisac não suporta diretamente listar contatos.
+    /// Este método retorna um erro informando que a funcionalidade não está disponível.
     pub async fn listar_contatos(
         &self,
-        limit: Option<u32>,
-        offset: Option<u32>,
+        _limit: Option<u32>,
+        _offset: Option<u32>,
     ) -> Result<serde_json::Value, DigisacError> {
-        let url = format!("{}/contacts", self.config.base_url);
-        
-        let mut request = self.add_auth_headers(self.client.get(&url));
-        
-        if let Some(l) = limit {
-            request = request.query(&[("limit", l.to_string())]);
-        }
-        if let Some(o) = offset {
-            request = request.query(&[("offset", o.to_string())]);
-        }
-        
-        let response = request
-            .send()
-            .await
-            .map_err(|e| DigisacError::NetworkError(e.to_string()))?;
-        
-        self.handle_response(response).await
+        Err(DigisacError::ApiError(
+            "Listar contatos não está disponível na API atual do crate digisac".into()
+        ))
     }
-    
+
     /// Busca contato por telefone.
     ///
     /// # Argumentos
     /// * `phone` - Número de telefone (com DDI).
+    ///
+    /// Nota: A API do crate digisac não suporta diretamente buscar contatos.
+    /// Este método retorna um erro informando que a funcionalidade não está disponível.
     pub async fn buscar_contato_por_telefone(
         &self,
-        phone: &str,
+        _phone: &str,
     ) -> Result<serde_json::Value, DigisacError> {
-        let url = format!("{}/contacts", self.config.base_url);
-        
-        let request = self
-            .add_auth_headers(self.client.get(&url))
-            .query(&[("phone", phone)]);
-        
-        let response = request
-            .send()
-            .await
-            .map_err(|e| DigisacError::NetworkError(e.to_string()))?;
-        
-        self.handle_response(response).await
-    }
-    
-    /// Adiciona headers de autenticação ao request.
-    fn add_auth_headers(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        let mut req = request;
-        
-        if let Some(ref token) = self.config.api_token {
-            req = req.header("Authorization", format!("Bearer {}", token));
-        }
-        
-        if let Some(ref account_id) = self.config.account_id {
-            req = req.header("X-Account-ID", account_id);
-        }
-        
-        req.header("Content-Type", "application/json")
-    }
-    
-    /// Processa a resposta HTTP.
-    async fn handle_response(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<serde_json::Value, DigisacError> {
-        let status = response.status();
-        
-        if status.is_success() {
-            response
-                .json()
-                .await
-                .map_err(|e| DigisacError::ApiError(format!("Failed to parse response: {}", e)))
-        } else if status.as_u16() == 401 {
-            Err(DigisacError::AuthError("Invalid API token".into()))
-        } else if status.as_u16() == 404 {
-            Err(DigisacError::NotFound("Resource not found".into()))
-        } else if status.as_u16() == 422 {
-            let error_text = response.text().await.unwrap_or_default();
-            Err(DigisacError::ValidationError(error_text))
-        } else {
-            let error_text = response.text().await.unwrap_or_default();
-            Err(DigisacError::ApiError(format!(
-                "API error ({}): {}",
-                status, error_text
-            )))
-        }
+        Err(DigisacError::ApiError(
+            "Buscar contato por telefone não está disponível na API atual do crate digisac".into()
+        ))
     }
 }
 
@@ -580,17 +281,17 @@ impl AgentTool for DigisacTools {
     fn name(&self) -> &'static str {
         "digisac"
     }
-    
+
     fn description(&self) -> &'static str {
         "Ferramenta para enviar mensagens via WhatsApp e gerenciar webhooks usando Digisac. \
         Permite enviar mensagens de texto e mídia, listar e criar webhooks."
     }
-    
+
     async fn execute(&self, params: serde_json::Value) -> Result<serde_json::Value, String> {
         let action = params.get("action")
             .and_then(|v| v.as_str())
             .ok_or("Missing 'action' parameter")?;
-        
+
         match action {
             "enviar_mensagem" => {
                 let service_id = params.get("service_id")
@@ -602,7 +303,7 @@ impl AgentTool for DigisacTools {
                 let texto = params.get("texto")
                     .and_then(|v| v.as_str())
                     .ok_or("Missing 'texto' parameter")?;
-                
+
                 self.enviar_mensagem(service_id, contact_id, texto)
                     .await
                     .map_err(|e| e.to_string())
@@ -624,7 +325,7 @@ impl AgentTool for DigisacTools {
                             .collect()
                     })
                     .unwrap_or_default();
-                
+
                 self.criar_webhook(url, eventos)
                     .await
                     .map_err(|e| e.to_string())
@@ -632,7 +333,7 @@ impl AgentTool for DigisacTools {
             "listar_contatos" => {
                 let limit = params.get("limit").and_then(|v| v.as_u64()).map(|n| n as u32);
                 let offset = params.get("offset").and_then(|v| v.as_u64()).map(|n| n as u32);
-                
+
                 self.listar_contatos(limit, offset)
                     .await
                     .map_err(|e| e.to_string())
@@ -641,7 +342,7 @@ impl AgentTool for DigisacTools {
                 let phone = params.get("phone")
                     .and_then(|v| v.as_str())
                     .ok_or("Missing 'phone' parameter")?;
-                
+
                 self.buscar_contato_por_telefone(phone)
                     .await
                     .map_err(|e| e.to_string())
@@ -654,50 +355,11 @@ impl AgentTool for DigisacTools {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
-    fn test_config_default() {
-        let config = DigisacConfig::default();
-        assert!(config.base_url.contains("digisac"));
-        assert!(config.api_token.is_none());
-    }
-    
-    #[test]
-    fn test_webhook_event_conversion() {
-        assert_eq!(WebhookEvent::MessageReceived.as_str(), "message.received");
-        assert_eq!(
-            WebhookEvent::from_str("message.received"),
-            Some(WebhookEvent::MessageReceived)
-        );
-        assert_eq!(WebhookEvent::from_str("invalid"), None);
-    }
-    
-    #[test]
-    fn test_send_message_request_serialization() {
-        let request = SendMessageRequest {
-            service_id: "svc_123".into(),
-            contact_id: "cnt_456".into(),
-            text: "Hello".into(),
-            message_type: "text".into(),
-            media: None,
-        };
-        
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["service_id"], "svc_123");
-        assert_eq!(json["contact_id"], "cnt_456");
-    }
-    
-    #[test]
-    fn test_webhook_deserialization() {
-        let json = r#"{
-            "id": "wh_123",
-            "url": "https://example.com/webhook",
-            "events": ["message.received", "message.sent"]
-        }"#;
-        
-        let webhook: Webhook = serde_json::from_str(json).unwrap();
-        assert_eq!(webhook.id, "wh_123");
-        assert!(webhook.active); // default
-        assert_eq!(webhook.events.len(), 2);
+    fn test_error_conversion() {
+        let crate_error = CrateDigisacError::ConfigError("test".into());
+        let our_error: DigisacError = crate_error.into();
+        assert!(matches!(our_error, DigisacError::ConfigError(_)));
     }
 }

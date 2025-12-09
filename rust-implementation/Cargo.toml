@@ -102,6 +102,8 @@ qdrant-client = { version = "1.9", optional = true }
 
 # Lazy static for static initialization
 once_cell = "1.19"
+digisac = "0.1.0"
+paytour = "0.1.0"
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -143,6 +145,8 @@ simd = []  # Enable SIMD optimizations (requires nightly for some features)
 postgres = ["sqlx"]  # PostgreSQL para Railway
 qdrant = ["qdrant-client"]  # Qdrant para busca semântica
 clipboard = ["dep:arboard"]
+# Feature "all" habilita todas as features opcionais
+all = ["clipboard", "postgres", "qdrant", "simd"]
 
 [profile.release]
 lto = true

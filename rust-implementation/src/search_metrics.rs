@@ -29,10 +29,10 @@ const LATENCY_BUFFER_SIZE: usize = 1000;
 ///
 /// ```rust,ignore
 /// let metrics = SearchMetrics::new();
-/// 
+///
 /// // Registrar uma busca
 /// metrics.record_search(150, true, 10, 5000);
-/// 
+///
 /// // Ver percentis
 /// println!("p50: {}ms", metrics.latency_p50());
 /// println!("p95: {}ms", metrics.latency_p95());
@@ -323,7 +323,7 @@ impl Default for SearchMetrics {
 impl Clone for SearchMetrics {
     fn clone(&self) -> Self {
         let new = Self::new();
-        
+
         // Copiar valores atômicos
         new.total_searches.store(self.total_searches.load(Ordering::Relaxed), Ordering::Relaxed);
         new.successful_searches.store(self.successful_searches.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -511,7 +511,7 @@ impl MetricsCollector {
     /// Captura snapshot atual e adiciona ao histórico
     pub fn capture_snapshot(&self) -> MetricsSnapshot {
         let snapshot = self.metrics.snapshot();
-        
+
         if let Ok(mut history) = self.history.write() {
             if history.len() >= self.max_history {
                 history.pop_front();
@@ -604,7 +604,7 @@ mod tests {
     #[test]
     fn test_record_search() {
         let metrics = SearchMetrics::new();
-        
+
         metrics.record_search(100, true, 10, 5000);
         metrics.record_search(150, true, 8, 4000);
         metrics.record_search(200, false, 0, 0);
@@ -619,7 +619,7 @@ mod tests {
     #[test]
     fn test_success_rate() {
         let metrics = SearchMetrics::new();
-        
+
         metrics.record_search(100, true, 10, 5000);
         metrics.record_search(100, true, 10, 5000);
         metrics.record_search(100, false, 0, 0);
@@ -631,7 +631,7 @@ mod tests {
     #[test]
     fn test_cache_hit_rate() {
         let metrics = SearchMetrics::new();
-        
+
         metrics.record_cache_hit();
         metrics.record_cache_hit();
         metrics.record_cache_hit();
@@ -643,7 +643,7 @@ mod tests {
     #[test]
     fn test_avg_results_per_query() {
         let metrics = SearchMetrics::new();
-        
+
         metrics.record_search(100, true, 10, 5000);
         metrics.record_search(100, true, 20, 5000);
 
@@ -653,7 +653,7 @@ mod tests {
     #[test]
     fn test_latency_percentiles() {
         let metrics = SearchMetrics::new();
-        
+
         // Adicionar latências de 1 a 100
         for i in 1..=100 {
             metrics.record_search(i, true, 1, 100);
@@ -670,7 +670,7 @@ mod tests {
     #[test]
     fn test_latency_min_max() {
         let metrics = SearchMetrics::new();
-        
+
         metrics.record_search(50, true, 1, 100);
         metrics.record_search(100, true, 1, 100);
         metrics.record_search(200, true, 1, 100);
@@ -682,7 +682,7 @@ mod tests {
     #[test]
     fn test_bytes_per_second() {
         let metrics = SearchMetrics::new();
-        
+
         metrics.record_search(100, true, 10, 10000);
         metrics.add_execution_time(1000); // 1 segundo
 
@@ -693,12 +693,12 @@ mod tests {
     #[test]
     fn test_snapshot() {
         let metrics = SearchMetrics::new();
-        
+
         metrics.record_search(100, true, 10, 5000);
         metrics.record_cache_hit();
-        
+
         let snapshot = metrics.snapshot();
-        
+
         assert_eq!(snapshot.total_searches, 1);
         assert_eq!(snapshot.successful_searches, 1);
         assert_eq!(snapshot.cache_hits, 1);
@@ -707,12 +707,12 @@ mod tests {
     #[test]
     fn test_reset() {
         let metrics = SearchMetrics::new();
-        
+
         metrics.record_search(100, true, 10, 5000);
         metrics.record_cache_hit();
-        
+
         metrics.reset();
-        
+
         assert_eq!(metrics.total_searches(), 0);
         assert_eq!(metrics.cache_hit_rate(), 0.0);
     }
@@ -720,23 +720,23 @@ mod tests {
     #[test]
     fn test_collector() {
         let collector = MetricsCollector::new();
-        
+
         collector.record_search(100, true, 10, 5000);
         collector.record_search(150, true, 8, 4000);
-        
+
         assert_eq!(collector.metrics().total_searches(), 2);
     }
 
     #[test]
     fn test_collector_history() {
         let collector = MetricsCollector::new();
-        
+
         collector.record_search(100, true, 10, 5000);
-        let snap1 = collector.capture_snapshot();
-        
+        let _snap1 = collector.capture_snapshot();
+
         collector.record_search(150, true, 8, 4000);
-        let snap2 = collector.capture_snapshot();
-        
+        let _snap2 = collector.capture_snapshot();
+
         let history = collector.history();
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].total_searches, 1);
@@ -746,13 +746,13 @@ mod tests {
     #[test]
     fn test_snapshot_diff() {
         let metrics = SearchMetrics::new();
-        
+
         metrics.record_search(100, true, 10, 5000);
         let snap1 = metrics.snapshot();
-        
+
         metrics.record_search(150, true, 8, 4000);
         let snap2 = metrics.snapshot();
-        
+
         let diff = snap2.diff(&snap1);
         assert_eq!(diff.searches_diff, 1);
     }
@@ -762,7 +762,7 @@ mod tests {
         let timer = LatencyTimer::start();
         std::thread::sleep(std::time::Duration::from_millis(10));
         let latency = timer.stop();
-        
+
         // Deve ser pelo menos 10ms
         assert!(latency >= 10);
     }
@@ -770,9 +770,9 @@ mod tests {
     #[test]
     fn test_summary() {
         let metrics = SearchMetrics::new();
-        
+
         metrics.record_search(100, true, 10, 5000);
-        
+
         let summary = metrics.summary();
         assert!(summary.contains("SearchMetrics"));
         assert!(summary.contains("1 searches"));
@@ -782,9 +782,9 @@ mod tests {
     fn test_clone() {
         let metrics = SearchMetrics::new();
         metrics.record_search(100, true, 10, 5000);
-        
+
         let cloned = metrics.clone();
-        
+
         assert_eq!(cloned.total_searches(), 1);
         assert_eq!(cloned.total_bytes(), 5000);
     }
@@ -792,12 +792,12 @@ mod tests {
     #[test]
     fn test_buffer_circular() {
         let metrics = SearchMetrics::new();
-        
+
         // Adicionar mais do que o buffer suporta
         for i in 0..LATENCY_BUFFER_SIZE + 100 {
             metrics.record_search(i as u64, true, 1, 100);
         }
-        
+
         // Buffer deve manter apenas as últimas LATENCY_BUFFER_SIZE entradas
         // Verificar através do min (que seria 100 se o buffer circular funcionou)
         assert!(metrics.latency_min() >= 100);

@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn test_plurality_eigenvalues() {
         // Exemplo do TypeScript: matriz 4x4 tem múltiplos eigenvalues
-        let types = determine_required_evaluations("Calculate the eigenvalues of this 4x4 matrix");
+        let _types = determine_required_evaluations("Calculate the eigenvalues of this 4x4 matrix");
         // Não tem keywords explícitos, então pode não detectar
         // Isso é uma limitação do approach sem LLM
     }

@@ -135,14 +135,22 @@ cargo run
 
 ### Features de Compilação
 
-| Feature    | Comando                                                        | Descrição                                  |
-| ---------- | -------------------------------------------------------------- | ------------------------------------------ |
-| Padrão     | `cargo build --release`                                        | Backend sem TUI (produção)                 |
-| Clipboard  | `cargo build --release --features clipboard`                   | Habilita copiar para área de transferência |
-| PostgreSQL | `cargo build --release --features postgres`                    | Backend de histórico persistente           |
-| Qdrant     | `cargo build --release --features qdrant`                      | Busca vetorial semântica                   |
-| SIMD       | `cargo build --release --features simd`                        | Otimizações SIMD (nightly)                 |
-| Completo   | `cargo build --release --features "clipboard,postgres,qdrant"` | Todas as features de produção              |
+| Feature    | Comando                                                        | Descrição                                                 |
+| ---------- | -------------------------------------------------------------- | --------------------------------------------------------- |
+| Padrão     | `cargo build --release`                                        | Backend sem TUI (produção)                                |
+| Clipboard  | `cargo build --release --features clipboard`                   | Habilita copiar para área de transferência                |
+| PostgreSQL | `cargo build --release --features postgres`                    | Backend de histórico persistente                          |
+| Qdrant     | `cargo build --release --features qdrant`                      | Busca vetorial semântica                                  |
+| SIMD       | `cargo build --release --features simd`                        | Otimizações SIMD (nightly)                                |
+| Completo   | `cargo build --release --features "clipboard,postgres,qdrant"` | Todas as features de produção                             |
+| **All**    | `cargo build --release --features all`                         | **Todas as features (clipboard, postgres, qdrant, simd)** |
+| Custom     | `cargo build --release --features "clipboard,simd"`            | Combine features livremente                               |
+
+**Nota:** Você pode combinar features livremente, por exemplo:
+
+- `cargo build --release --features "clipboard,simd"`
+- `cargo build --release --features "clipboard,postgres"`
+- `cargo build --release --features all` (equivalente a todas as features)
 
 ### Atalhos TUI (Principais)
 
