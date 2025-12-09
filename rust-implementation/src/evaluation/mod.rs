@@ -2,9 +2,19 @@
 // SISTEMA DE AVALIAÇÃO MULTIDIMENSIONAL
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+mod determiner;
 mod pipeline;
+pub mod prompts;
+mod trace;
 
+pub use determiner::*;
 pub use pipeline::*;
+pub use prompts::{
+    get_completeness_prompt, get_definitive_prompt, get_freshness_prompt,
+    get_plurality_prompt, get_question_evaluation_prompt, get_reject_all_answers_prompt,
+    PromptBuilder, PromptPair, FRESHNESS_THRESHOLDS, PLURALITY_RULES,
+};
+pub use trace::*;
 
 use std::time::Duration;
 
@@ -19,24 +29,7 @@ pub struct EvaluationContext {
     pub knowledge_items: Vec<KnowledgeItem>,
 }
 
-/// Par de prompts para enviar ao LLM (sistema + usuário).
-///
-/// Em APIs de LLM como OpenAI, as mensagens são divididas em:
-/// - **System**: Define o comportamento e contexto do modelo
-/// - **User**: A pergunta ou tarefa específica
-///
-/// Este struct agrupa ambos para facilitar o gerenciamento.
-#[derive(Debug, Clone)]
-pub struct PromptPair {
-    /// Prompt de sistema que define o comportamento do LLM.
-    ///
-    /// Exemplo: "Você é um avaliador rigoroso de respostas..."
-    pub system: String,
-    /// Prompt do usuário com a tarefa específica.
-    ///
-    /// Exemplo: "Avalie se esta resposta está completa: ..."
-    pub user: String,
-}
+// PromptPair está definido em prompts.rs e re-exportado acima
 
 /// Tipos de avaliação - enum garante que não existem tipos "inventados"
 ///
@@ -46,7 +39,7 @@ pub struct PromptPair {
 /// - Plurality: Se pediu N exemplos, tem N exemplos?
 /// - Completeness: Todos os aspectos da pergunta foram cobertos?
 /// - Strict: Avaliação brutal - tem insights reais e profundos?
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum EvaluationType {
     /// Verifica se a resposta é confiante e definitiva
     Definitive,
@@ -103,7 +96,7 @@ impl EvaluationType {
                 eval_type: self,
                 max_retries: 3,
                 timeout: Duration::from_secs(45),
-                weight: 1.5,  // Mais importante
+                weight: 1.5, // Mais importante
             },
         }
     }
@@ -111,12 +104,12 @@ impl EvaluationType {
     /// Determina freshness threshold baseado no tópico
     pub fn freshness_threshold(&self, topic: &TopicCategory) -> Duration {
         match topic {
-            TopicCategory::Finance => Duration::from_secs(60 * 60 * 2),       // 2 horas
-            TopicCategory::News => Duration::from_secs(60 * 60 * 24),         // 1 dia
+            TopicCategory::Finance => Duration::from_secs(60 * 60 * 2), // 2 horas
+            TopicCategory::News => Duration::from_secs(60 * 60 * 24),   // 1 dia
             TopicCategory::Technology => Duration::from_secs(60 * 60 * 24 * 30), // 30 dias
-            TopicCategory::Science => Duration::from_secs(60 * 60 * 24 * 365),   // 1 ano
-            TopicCategory::History => Duration::MAX,                           // Sem limite
-            _ => Duration::from_secs(60 * 60 * 24 * 7),                        // 7 dias padrão
+            TopicCategory::Science => Duration::from_secs(60 * 60 * 24 * 365), // 1 ano
+            TopicCategory::History => Duration::MAX,                    // Sem limite
+            _ => Duration::from_secs(60 * 60 * 24 * 7),                 // 7 dias padrão
         }
     }
 }
@@ -304,11 +297,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_result() {
-        let success = EvaluationResult::success(
-            EvaluationType::Definitive,
-            "Good answer".into(),
-            0.9,
-        );
+        let success =
+            EvaluationResult::success(EvaluationType::Definitive, "Good answer".into(), 0.9);
         assert!(success.passed);
         assert_eq!(success.confidence, 0.9);
 

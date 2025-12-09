@@ -48,6 +48,56 @@ impl Default for Language {
     }
 }
 
+impl Language {
+    /// Cria Language a partir de string (ex: "pt", "pt-BR", "Portuguese")
+    pub fn from_str(s: &str) -> Self {
+        let s_lower = s.to_lowercase();
+        match s_lower.as_str() {
+            "pt" | "pt-br" | "portuguese" | "portugues" | "português" => Self::Portuguese,
+            "en" | "en-us" | "english" | "ingles" | "inglês" => Self::English,
+            "es" | "es-es" | "spanish" | "espanhol" | "español" => Self::Spanish,
+            "de" | "de-de" | "german" | "alemao" | "alemão" | "deutsch" => Self::German,
+            "fr" | "fr-fr" | "french" | "frances" | "français" => Self::French,
+            "it" | "it-it" | "italian" | "italiano" => Self::Italian,
+            "ja" | "japanese" | "japones" | "japonês" => Self::Japanese,
+            "zh" | "chinese" | "chines" | "chinês" => Self::Chinese,
+            "ko" | "korean" | "coreano" => Self::Korean,
+            _ => Self::English,
+        }
+    }
+
+    /// Retorna a instrução de idioma para o LLM
+    pub fn llm_instruction(&self) -> &'static str {
+        match self {
+            Self::Portuguese => "IMPORTANTE: Responda SEMPRE em Português do Brasil (PT-BR). NÃO use português de Portugal. Use expressões, vocabulário e gramática brasileira. Todas as respostas, análises e explicações devem ser em português brasileiro.",
+            Self::Spanish => "IMPORTANTE: Responda SIEMPRE en Español. Todas las respuestas, análisis y explicaciones deben ser en español.",
+            Self::German => "WICHTIG: Antworten Sie IMMER auf Deutsch. Alle Antworten, Analysen und Erklärungen müssen auf Deutsch sein.",
+            Self::French => "IMPORTANT: Répondez TOUJOURS en Français. Toutes les réponses, analyses et explications doivent être en français.",
+            Self::Italian => "IMPORTANTE: Rispondi SEMPRE in Italiano. Tutte le risposte, analisi e spiegazioni devono essere in italiano.",
+            Self::Japanese => "重要：常に日本語で回答してください。すべての回答、分析、説明は日本語である必要があります。",
+            Self::Chinese => "重要：请始终使用中文回答。所有回答、分析和解释都必须是中文。",
+            Self::Korean => "중요: 항상 한국어로 답변해 주세요. 모든 답변, 분석, 설명은 한국어로 작성되어야 합니다.",
+            _ => "", // English não precisa de instrução especial
+        }
+    }
+
+    /// Nome do idioma para exibição
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::Portuguese => "Português",
+            Self::Spanish => "Español",
+            Self::German => "Deutsch",
+            Self::French => "Français",
+            Self::Italian => "Italiano",
+            Self::Japanese => "日本語",
+            Self::Chinese => "中文",
+            Self::Korean => "한국어",
+            Self::Other => "Other",
+        }
+    }
+}
+
 /// Categorias de tópicos
 #[derive(Debug, Clone, PartialEq)]
 pub enum TopicCategory {
@@ -84,7 +134,7 @@ impl Default for TopicCategory {
 }
 
 /// Query de busca SERP
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SerpQuery {
     /// Texto da query
     pub q: String,
@@ -105,6 +155,10 @@ pub struct Reference {
     pub exact_quote: Option<String>,
     /// Score de relevância (0.0 - 1.0)
     pub relevance_score: Option<f32>,
+    /// Chunk da resposta que fez match com esta referência
+    pub answer_chunk: Option<String>,
+    /// Posição (start, end) do chunk na resposta original
+    pub answer_position: Option<(usize, usize)>,
 }
 
 impl Default for Reference {
@@ -114,6 +168,8 @@ impl Default for Reference {
             title: String::new(),
             exact_quote: None,
             relevance_score: None,
+            answer_chunk: None,
+            answer_position: None,
         }
     }
 }
@@ -146,6 +202,10 @@ pub enum KnowledgeType {
     Coding,
     /// Erro/falha
     Error,
+    /// Histórico de sessões anteriores
+    History,
+    /// Informação fornecida diretamente pelo usuário
+    UserProvided,
 }
 
 impl KnowledgeType {
@@ -158,6 +218,8 @@ impl KnowledgeType {
             Self::Url => "url",
             Self::Coding => "coding",
             Self::Error => "error",
+            Self::History => "history",
+            Self::UserProvided => "user-provided",
         }
     }
 }

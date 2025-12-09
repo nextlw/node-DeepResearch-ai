@@ -150,16 +150,24 @@ impl TokenTracker {
     }
 }
 
-/// Estatísticas detalhadas do tracker
+/// Estatísticas detalhadas do tracker de tokens.
 #[derive(Debug, Clone)]
 pub struct TrackerStats {
+    /// Total de tokens consumidos (prompt + completion)
     pub total_tokens: u64,
+    /// Tokens usados em prompts enviados
     pub prompt_tokens: u64,
+    /// Tokens usados nas respostas recebidas
     pub completion_tokens: u64,
+    /// Budget total de tokens configurado
     pub budget: u64,
+    /// Percentual do budget já utilizado (0.0 a 100.0)
     pub budget_used_percentage: f64,
+    /// Número total de passos executados
     pub total_steps: usize,
+    /// Média de tokens por passo
     pub avg_tokens_per_step: u64,
+    /// Tokens restantes no budget
     pub remaining_tokens: u64,
 }
 

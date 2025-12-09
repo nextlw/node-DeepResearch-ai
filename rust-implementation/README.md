@@ -1,0 +1,1825 @@
+# 🔬 Deep Research CLI
+
+> Agente de pesquisa profunda com IA - Implementação em Rust
+
+[![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://www.rust-lang.org/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+## 📋 Índice
+
+- [Instalação](#-instalação)
+- [Referência Rápida](#-referência-rápida)
+- [Comandos CLI](#-comandos-cli)
+- [Atalhos TUI](#-atalhos-tui)
+- [Navegação por Tabs](#-navegação-por-tabs)
+- [Interface TUI](#-interface-tui)
+  - [Guia de Análise](#tui-guide--guia-de-análise-da-interface)
+  - [Tela de Input](#-tela-1-input-entrada-de-pergunta)
+  - [Tela de Research](#-tela-2-research-pesquisa-em-andamento)
+  - [Tela de Result](#-tela-3-result-resultado-final)
+  - [Tela de Config](#-tela-4-config-configurações)
+  - [Tela de Erro](#-tela-de-erro)
+  - [Mapa de Cores](#-mapa-de-cores-da-interface)
+  - [Diagnóstico](#-diagnóstico-e-troubleshooting)
+- [Ações do Agente](#-ações-do-agente)
+- [Eventos](#-eventos)
+- [Configuração](#-configuração)
+- [Exemplos](#-exemplos)
+
+---
+
+## 🚀 Instalação
+
+```bash
+# Clonar e compilar
+cd rust-implementation
+cargo build --release
+
+# Executar
+./target/release/deep-research-cli "sua pergunta"
+```
+
+### Features Opcionais
+
+O projeto possui features opcionais que podem ser habilitadas conforme necessário:
+
+| Feature     | Descrição                                                   | Uso                   |
+| ----------- | ----------------------------------------------------------- | --------------------- |
+| `clipboard` | Suporte a copiar respostas para área de transferência (TUI) | Desenvolvimento local |
+| `postgres`  | Backend PostgreSQL para histórico persistente               | Produção (Railway)    |
+| `qdrant`    | Busca vetorial semântica com Qdrant                         | Produção              |
+| `simd`      | Otimizações SIMD (requer nightly)                           | Performance           |
+
+```bash
+# Produção (backend apenas, sem TUI)
+cargo build --release
+
+# Desenvolvimento com TUI (inclui clipboard)
+cargo build --release --features clipboard
+
+# Rodar TUI local com clipboard
+cargo run --features clipboard -- --tui
+
+# Produção completa (PostgreSQL + Qdrant)
+cargo build --release --features "postgres,qdrant"
+
+# Todas as features
+cargo build --release --features "clipboard,postgres,qdrant,simd"
+```
+
+### Variáveis de Ambiente Necessárias
+
+```bash
+# Criar arquivo .env na raiz do projeto
+OPENAI_API_KEY=sua-chave-openai
+JINA_API_KEY=sua-chave-jina
+```
+
+---
+
+## 📖 Referência Rápida
+
+### Menu de Inicialização
+
+Ao executar sem argumentos, um **menu interativo** é exibido:
+
+```bash
+cargo run
+# ou
+./target/release/deep-research-cli
+```
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║     🔬 DEEP RESEARCH CLI                                      ║
+║     Agente de Pesquisa Profunda com IA                        ║
+╚═══════════════════════════════════════════════════════════════╝
+
+▶ 🖥️  Interface TUI Interativa
+  🔍 Pesquisa Direta (terminal)
+  📊 Comparar Web Readers
+  ⚡ Pesquisa com Comparação Live
+  ❓ Ajuda (mostrar comandos)
+  ❌ Sair
+
+↑↓: Navegar │ Enter: Selecionar │ q: Sair
+```
+
+| Tecla   | Ação             |
+| ------- | ---------------- |
+| `↑` `↓` | Navegar opções   |
+| `1-6`   | Seleção direta   |
+| `Enter` | Selecionar opção |
+| `q`     | Sair             |
+
+### Todos os Comandos
+
+| Comando                                          | Descrição                                   |
+| ------------------------------------------------ | ------------------------------------------- |
+| `deep-research-cli "pergunta"`                   | Executa pesquisa direta no terminal         |
+| `deep-research-cli --tui`                        | Abre interface TUI vazia para digitar       |
+| `deep-research-cli --tui "pergunta"`             | Abre TUI com pergunta pré-definida          |
+| `deep-research-cli --budget <tokens> "pergunta"` | Define limite de tokens (padrão: 1.000.000) |
+| `deep-research-cli --compare "url1,url2"`        | Compara Jina Reader vs Rust+OpenAI          |
+| `deep-research-cli --compare-live "pergunta"`    | Pesquisa com comparação em tempo real       |
+
+### Flags Disponíveis
+
+| Flag             | Tipo     | Padrão    | Descrição                                             |
+| ---------------- | -------- | --------- | ----------------------------------------------------- |
+| `--tui`          | `bool`   | `false`   | Ativa modo interface interativa (TUI)                 |
+| `--budget`       | `u64`    | `1000000` | Budget máximo de tokens para a pesquisa               |
+| `--compare`      | `string` | -         | URLs separadas por vírgula para comparação standalone |
+| `--compare-live` | `bool`   | `false`   | Habilita comparação Jina vs Rust durante pesquisa     |
+
+### Features de Compilação
+
+| Feature    | Comando                                                        | Descrição                                  |
+| ---------- | -------------------------------------------------------------- | ------------------------------------------ |
+| Padrão     | `cargo build --release`                                        | Backend sem TUI (produção)                 |
+| Clipboard  | `cargo build --release --features clipboard`                   | Habilita copiar para área de transferência |
+| PostgreSQL | `cargo build --release --features postgres`                    | Backend de histórico persistente           |
+| Qdrant     | `cargo build --release --features qdrant`                      | Busca vetorial semântica                   |
+| SIMD       | `cargo build --release --features simd`                        | Otimizações SIMD (nightly)                 |
+| Completo   | `cargo build --release --features "clipboard,postgres,qdrant"` | Todas as features de produção              |
+
+### Atalhos TUI (Principais)
+
+| Tecla         | Ação                              |
+| ------------- | --------------------------------- |
+| `Tab`         | Alternar entre tabs / focar input |
+| `Enter`       | Enviar pergunta / follow-up       |
+| `q` / `Esc`   | Sair / voltar                     |
+| `c`           | Copiar resposta ¹                 |
+| `r`           | Ver logs da pesquisa              |
+| `↑↓` / `jk`   | Scroll na resposta                |
+| `PageUp/Down` | Scroll rápido                     |
+| `Home/End`    | Início/fim da resposta            |
+
+> ¹ Requer `--features clipboard`
+
+---
+
+## 💻 Comandos CLI
+
+### `[básico]` Modo Padrão
+
+Executa uma pesquisa direta via linha de comando.
+
+```bash
+deep-research-cli "Qual é a população do Brasil?"
+```
+
+### `[tui]` Modo Interface Interativa
+
+Abre a interface TUI (Terminal User Interface) para interação visual.
+
+```bash
+# Abrir TUI vazia (com campo de input)
+deep-research-cli --tui
+
+# Abrir TUI com pergunta pré-definida
+deep-research-cli --tui "Qual é a capital da França?"
+```
+
+### `[budget]` Controle de Tokens
+
+Define um limite de tokens para a pesquisa.
+
+```bash
+deep-research-cli --budget 500000 "pergunta complexa"
+```
+
+| Flag       | Tipo  | Padrão    | Descrição               |
+| ---------- | ----- | --------- | ----------------------- |
+| `--budget` | `u64` | 1.000.000 | Budget máximo de tokens |
+
+### `[compare]` Modo Comparação de Readers
+
+Compara performance entre Jina Reader e Rust+OpenAI para extração de conteúdo.
+
+```bash
+# Comparar URLs específicas
+deep-research-cli --compare "https://example.com,https://rust-lang.org"
+```
+
+### `[compare-live]` Comparação em Tempo Real
+
+Executa pesquisa com comparação Jina vs Rust local durante o processo.
+
+```bash
+deep-research-cli --compare-live "Qual é a linguagem de programação mais usada?"
+```
+
+---
+
+## ⌨️ Atalhos TUI
+
+### `[input]` Tela de Input
+
+| Tecla       | Ação                          |
+| ----------- | ----------------------------- |
+| `Enter`     | Iniciar pesquisa              |
+| `Esc`       | Sair da aplicação             |
+| `Tab`       | Alternar entre tabs           |
+| `1` / `2`   | Ir para tab específica        |
+| `Char`      | Digitar caractere             |
+| `Backspace` | Apagar caractere anterior     |
+| `Delete`    | Apagar caractere atual        |
+| `←` / `→`   | Mover cursor esquerda/direita |
+| `Home`      | Início da linha               |
+| `End`       | Fim da linha                  |
+| `↑`         | Histórico anterior            |
+| `↓`         | Histórico próximo             |
+
+### `[research]` Tela de Pesquisa
+
+| Tecla       | Ação                        |
+| ----------- | --------------------------- |
+| `q` / `Esc` | Sair da aplicação           |
+| `1` / `2`   | Ir para tab específica      |
+| `r`         | Ver resultado (se completo) |
+| `↑` / `k`   | Scroll para cima (logs)     |
+| `↓` / `j`   | Scroll para baixo (logs)    |
+| `PageUp`    | Scroll 5 linhas acima       |
+| `PageDown`  | Scroll 5 linhas abaixo      |
+| `🖱️ Scroll` | Scroll com roda do mouse    |
+
+### `[result]` Tela de Resultado
+
+| Tecla       | Ação                               |
+| ----------- | ---------------------------------- |
+| `Tab`       | Focar/desfocar input de follow-up  |
+| `Enter`     | Enviar follow-up (se focado)       |
+| `q` / `Esc` | Sair (ou desfocar input)           |
+| `1` / `2`   | Ir para tab específica             |
+| `r`         | Alternar para ver logs             |
+| `c`         | **Copiar resposta p/ clipboard** ¹ |
+| `↑` / `k`   | Scroll resposta para cima          |
+| `↓` / `j`   | Scroll resposta para baixo         |
+| `PageUp`    | Page up na resposta                |
+| `PageDown`  | Page down na resposta              |
+| `Home`      | Início da resposta                 |
+| `End`       | Fim da resposta                    |
+| `🖱️ Scroll` | Scroll com roda do mouse           |
+
+> ¹ Requer compilação com `--features clipboard`
+
+### `[config]` Tela de Configurações
+
+| Tecla       | Ação                     |
+| ----------- | ------------------------ |
+| `q` / `Esc` | Sair da aplicação        |
+| `Tab`       | Alternar entre tabs      |
+| `1`         | Voltar para tab Pesquisa |
+| `2`         | Tab Configurações        |
+| `Backspace` | Voltar para tab Pesquisa |
+
+---
+
+## 🗂️ Navegação por Tabs
+
+A TUI possui um sistema de navegação por abas (tabs) que permite alternar entre diferentes visões:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  🔍 Pesquisa  │  ⚙️ Configurações                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Tabs Disponíveis
+
+| Tab                  | Tecla | Descrição                                   |
+| -------------------- | ----- | ------------------------------------------- |
+| 🔍 **Pesquisa**      | `1`   | Navegação entre Input → Research → Result   |
+| ⚙️ **Configurações** | `2`   | Visualiza todas as configurações carregadas |
+
+### Comportamento das Tabs
+
+- **Tab Pesquisa** navega entre as 3 telas de fluxo:
+
+  - `Input` → `Research` → `Result`
+  - Tecla `r` alterna entre Result ↔ Research (ver logs)
+
+- **Tab Configurações** exibe:
+  - Configurações de Runtime (threads, webreader)
+  - Configurações do LLM (provider, modelo, temperatura)
+  - Configurações do Agente (budget, limites, steps)
+  - Status das API Keys (presença/ausência)
+
+### Follow-up na Tela de Resultado
+
+Após uma pesquisa ser concluída, você pode **continuar a conversa**:
+
+1. Pressione `Tab` para focar o campo de input
+2. Digite sua pergunta de follow-up
+3. Pressione `Enter` para iniciar nova pesquisa
+
+> 💡 A nova pesquisa inicia imediatamente, sem passar pela fila de processamento.
+
+---
+
+## 🖥️ Interface TUI
+
+A TUI (Terminal User Interface) oferece uma experiência visual rica para acompanhar a pesquisa em tempo real.
+
+### `[tui-guide]` 📖 Guia de Análise da Interface
+
+Esta seção explica como interpretar cada elemento visual da TUI.
+
+---
+
+## 🎨 Anatomia Completa das Telas
+
+### 📥 TELA 1: INPUT (Entrada de Pergunta)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│    ╔═══════════════════════════════════════════════════════════════╗       │
+│    ║   🔬 DEEP RESEARCH v0.1.0 - Pesquisa Inteligente com IA      ║  ←[A]  │
+│    ╚═══════════════════════════════════════════════════════════════╝       │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ┌─ Digite sua pergunta ───────────────────────────────────────────────────┐ │
+│ │                                                                         │ │
+│ │  │ Ex: Qual é a população do Brasil em 2024?                      ←[B]  │ │
+│ │  ↑                                                                      │ │
+│ │ [C] Cursor piscante                                                     │ │
+│ └─────────────────────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ┌─ 📜 Histórico (↑/↓ para navegar) ───────────────────────────────────────┐ │
+│ │                                                                         │ │
+│ │    8 Como funciona machine learning?                              ←[D]  │ │
+│ │    7 Qual é a capital da França?                                        │ │
+│ │  ▶ 6 O que é Rust?                                                ←[E]  │ │
+│ │    5 Explique computação quântica                                       │ │
+│ │                                                                         │ │
+│ └─────────────────────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────────────────────┤
+│         Enter Pesquisar   ↑↓ Histórico   Esc/q Sair                   ←[F]  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Legenda da Tela de Input:
+
+| Ref   | Elemento         | Descrição                                | Como Analisar                         |
+| ----- | ---------------- | ---------------------------------------- | ------------------------------------- |
+| `[A]` | Logo/Header      | Identifica a aplicação e versão          | Confirme versão correta               |
+| `[B]` | Placeholder      | Texto cinza de exemplo (some ao digitar) | Guia do formato esperado              |
+| `[C]` | Cursor           | Barra `│` amarela piscante               | Indica posição de digitação           |
+| `[D]` | Item Histórico   | Pergunta anterior numerada               | Número indica ordem (maior = recente) |
+| `[E]` | Item Selecionado | Marcado com `▶` e fundo cinza            | Enter para usar, Esc para cancelar    |
+| `[F]` | Barra de Ajuda   | Atalhos disponíveis                      | Referência rápida de comandos         |
+
+#### Estados do Input:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ ESTADO: Vazio (placeholder visível)                             │
+│ ┌───────────────────────────────────────────────────────────┐   │
+│ │ │ Ex: Qual é a população do Brasil em 2024?               │   │
+│ └───────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────┤
+│ ESTADO: Digitando (texto amarelo)                               │
+│ ┌───────────────────────────────────────────────────────────┐   │
+│ │ O que é inteligência│ artificial?                         │   │
+│ └───────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────┤
+│ ESTADO: Navegando Histórico (borda amarela, item destacado)     │
+│ ┌─ 📜 Histórico (Enter para usar, Esc para cancelar) ───────┐   │
+│ │  ▶ 3 O que é Rust?  ← SELECIONADO (fundo cinza)           │   │
+│ └───────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 🔍 TELA 2: RESEARCH (Pesquisa em Andamento)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ┌─────────────────────────────────────────────────────────────────────────┐ │
+│ │ 🔍 DEEP RESEARCH v0.1.0 │ Pesquisando...                          ←[A]  │ │
+│ │ Pergunta: Qual é a população do Brasil em 2024?                   ←[B]  │ │
+│ └─────────────────────────────────────────────────────────────────────────┘ │
+├──────────────────────────────────────────────┬──────────────────────────────┤
+│ ┌─ 💭 Raciocínio do Agente ────────────────┐ │ ┌─ 🎯 Ação Atual ──────────┐ │
+│ │                                          │ │ │                          │ │
+│ │ Preciso buscar dados demográficos        │ │ │  Step: 3            ←[D] │ │
+│ │ atualizados sobre a população            │ │ │                          │ │
+│ │ brasileira. Vou consultar fontes    ←[C] │ │ │  Ação:                   │ │
+│ │ oficiais como IBGE e Wikipedia...        │ │ │  SEARCH             ←[E] │ │
+│ │                                          │ │ │                          │ │
+│ └──────────────────────────────────────────┘ │ └──────────────────────────┘ │
+├────────────────────────────┬─────────────────┬──────────────────────────────┤
+│ ┌─ 📋 Logs [3/15] ───────┐ │ ┌─ 📊 Stats ──┐ │ ┌─ 👥 Personas ────────────┐ │
+│ │                        │ │ │             │ │ │                          │ │
+│ │ [17:30:01] ℹ️ Inician..│ │ │ Step:    3  │ │ │ ● Agente            ←[J] │ │
+│ │ [17:30:02] ✅ 72 URLs  │ │ │ URLs:   72  │ │ │   S:2 R:4 A:0            │ │
+│ │ [17:30:05] ℹ️ Lendo ..│←[F]│ Visit:   4←[G]│ │                          │ │
+│ │ [17:30:08] ✅ Wikipedia│ │ │ Tokens:1.2k │ │ │ ○ Analyst           ←[K] │ │
+│ │ [17:30:10] ⚠️ Timeout │ │ │ Tempo: 12s  │ │ │   S:0 R:0 A:0            │ │
+│ │ [17:30:12] ℹ️ Retry...│ │ │             │ │ │                          │ │
+│ │                        │ │ │ ═══Sistema══│ │ │                          │ │
+│ │           ↑↓ scroll    │ │ │ Threads: 8  │ │ │                          │ │
+│ │                        │ │ │ RAM: 45MB←[H]│ │ │ Legenda:                │ │
+│ │                        │ │ │             │ │ │ S=Search R=Read A=Answer │ │
+│ └────────────────────────┘ │ └─────────────┘ │ └──────────────────────────┘ │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ████████████████████████░░░░░░░░░░░░░░░░░░░  45%   Step 3 - SEARCH    ←[I]  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Legenda da Tela de Research:
+
+| Ref   | Elemento           | O Que Mostra                     | Como Interpretar                    |
+| ----- | ------------------ | -------------------------------- | ----------------------------------- |
+| `[A]` | Status Icon        | 🔍 Pesquisando / ✅ OK / ❌ Erro | Indica estado atual da operação     |
+| `[B]` | Pergunta           | Query sendo pesquisada           | Truncada se muito longa (>80 chars) |
+| `[C]` | Raciocínio         | Pensamento atual do agente       | Mostra lógica de decisão do AI      |
+| `[D]` | Step Counter       | Número do passo atual            | Aumenta a cada ação do agente       |
+| `[E]` | Ação Atual         | SEARCH/READ/REFLECT/ANSWER       | Indica operação em execução         |
+| `[F]` | Logs com Scroll    | Eventos em tempo real            | `[n/total]` = posição no scroll     |
+| `[G]` | URLs Visitadas     | Páginas já lidas                 | Visit < URLs = ainda tem trabalho   |
+| `[H]` | Métricas Sistema   | Threads e memória                | Monitore para detectar problemas    |
+| `[I]` | Barra de Progresso | % estimado de conclusão          | Baseado em steps (máx ~10)          |
+| `[J]` | Persona Ativa      | `●` verde = executando agora     | Mostra quem está trabalhando        |
+| `[K]` | Persona Inativa    | `○` cinza = aguardando           | Pode ser ativada em próximos steps  |
+
+#### Interpretando os Logs:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ÍCONES DE LOG E SEUS SIGNIFICADOS:                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  [17:30:01] ℹ️  Iniciando pesquisa...                           │
+│             ↑                                                   │
+│             └── INFO: Operação normal em andamento              │
+│                                                                 │
+│  [17:30:02] ✅ 72 URLs encontradas                              │
+│             ↑                                                   │
+│             └── SUCCESS: Operação concluída com êxito           │
+│                                                                 │
+│  [17:30:05] ⚠️  Rate limit, aguardando...                       │
+│             ↑                                                   │
+│             └── WARNING: Atenção necessária, mas recuperável    │
+│                                                                 │
+│  [17:30:08] ❌ Falha ao conectar com API                        │
+│             ↑                                                   │
+│             └── ERROR: Problema que pode afetar resultado       │
+│                                                                 │
+│  [17:30:10] 🔍 Debug: response_size=4521                        │
+│             ↑                                                   │
+│             └── DEBUG: Info técnica para diagnóstico            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Fluxo Visual de Ações:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CICLO DE VIDA DA PESQUISA                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   ┌──────────┐      ┌──────────┐      ┌──────────┐             │
+│   │  SEARCH  │ ───▶ │   READ   │ ───▶ │ REFLECT  │             │
+│   │ 🔍 Busca │      │ 📖 Lê    │      │ 🤔 Pensa │             │
+│   └────┬─────┘      └────┬─────┘      └────┬─────┘             │
+│        │                 │                 │                    │
+│        │    ┌────────────┴────────────┐    │                    │
+│        │    │                         │    │                    │
+│        ▼    ▼                         ▼    ▼                    │
+│   ┌─────────────────────────────────────────────┐              │
+│   │                  ANSWER                      │              │
+│   │              ✍️ Gera Resposta                │              │
+│   └─────────────────────────────────────────────┘              │
+│                          │                                      │
+│                          ▼                                      │
+│              ┌───────────────────────┐                         │
+│              │     AVALIAÇÃO         │                         │
+│              │  ✅ Aprovada → FIM    │                         │
+│              │  ❌ Reprovada → LOOP  │                         │
+│              └───────────────────────┘                         │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### ✅ TELA 3: RESULT (Resultado Final)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ┌─────────────────────────────────────────────────────────────────────────┐ │
+│ │ ✅ PESQUISA CONCLUÍDA  │  🆔 1fe4e43e                             ←[A]  │ │
+│ │ 💾 sessions/*_1fe4e43e.json  │  📄 logs/*_1fe4e43e.txt            ←[B]  │ │
+│ └─────────────────────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ┌─ 📝 Resposta [1/5] ───────────────────────────────────────────────────┐   │
+│ │                                                                       │   │
+│ │ A população do Brasil em 2024 é estimada em aproximadamente           │   │
+│ │ 215 milhões de habitantes, segundo dados do IBGE (Instituto     ←[C]  │   │
+│ │ Brasileiro de Geografia e Estatística).                               │   │
+│ │                                                                       │   │
+│ │ Principais características demográficas:                              │   │
+│ │ • Taxa de crescimento: 0,52% ao ano                                   │   │
+│ │ • Densidade demográfica: 25,2 hab/km²                                 │   │
+│ │ • Expectativa de vida: 76,8 anos                                      │   │
+│ │                                              [↑↓ PgUp/Dn para scroll] │   │
+│ └───────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ┌─ 📚 Referências (3) - copie para acessar ─────────────────────────────┐   │
+│ │  1. IBGE - Projeção da população - https://ibge.gov.br/...      ←[D]  │   │
+│ │  2. Wikipedia - Demografia do Brasil - https://pt.wikipedia...        │   │
+│ │  3. DataSUS - Indicadores - https://datasus.saude.gov.br/...          │   │
+│ └───────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ┌─ 🔗 URLs Visitadas (5) ───────────────────────────────────────────────┐   │
+│ │  1. https://www.ibge.gov.br/estatisticas/sociais/populacao...   ←[E]  │   │
+│ │  2. https://pt.wikipedia.org/wiki/Demografia_do_Brasil                │   │
+│ │  3. https://agenciadenoticias.ibge.gov.br/...                         │   │
+│ └───────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ┌─ 📊 Estatísticas ─────────────────────────────────────────────────────┐   │
+│ │  🎫 18.543 tokens  │  🔗 5 URLs  │  📊 4 steps                   ←[F]  │   │
+│ │  ⏱️ 45.2s total  │  🔍 8.1s busca  │  📖 25.3s leitura  │  🤖 11.8s   │   │
+│ └───────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│              ↑↓/PgUp/Dn Scroll   Enter Nova   q Sair                  ←[G]  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Legenda da Tela de Result:
+
+| Ref   | Elemento        | O Que Mostra                  | Como Usar                              |
+| ----- | --------------- | ----------------------------- | -------------------------------------- |
+| `[A]` | UUID da Sessão  | Identificador único (8 chars) | Use para encontrar arquivos salvos     |
+| `[B]` | Arquivos Salvos | Caminhos JSON e TXT           | Abra para análise detalhada            |
+| `[C]` | Resposta        | Texto completo com scroll     | ↑↓ PgUp/Dn para navegar                |
+| `[D]` | Referências     | Fontes usadas na resposta     | Copie URLs para verificar              |
+| `[E]` | URLs Visitadas  | Todas as páginas acessadas    | Pode incluir URLs que não viraram refs |
+| `[F]` | Estatísticas    | Métricas da pesquisa          | Analise para otimização                |
+| `[G]` | Ajuda           | Atalhos disponíveis           | Enter = nova pesquisa, q = sair        |
+
+#### Análise de Performance:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│               INTERPRETANDO ESTATÍSTICAS                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  🎫 TOKENS                                                      │
+│  ├─ < 10.000   → Pesquisa simples/trivial                       │
+│  ├─ 10-50.000  → Pesquisa normal                                │
+│  ├─ 50-100.000 → Pesquisa complexa                              │
+│  └─ > 100.000  → Pesquisa muito profunda (cuidado com custo!)   │
+│                                                                 │
+│  ⏱️ TEMPO TOTAL                                                 │
+│  ├─ < 30s      → Rápido (pergunta simples ou cache)             │
+│  ├─ 30s - 2min → Normal                                         │
+│  ├─ 2-5min     → Complexo (muitas URLs/iterações)               │
+│  └─ > 5min     → Muito complexo (considere simplificar query)   │
+│                                                                 │
+│  📊 DISTRIBUIÇÃO DE TEMPO (ideal)                               │
+│  ├─ 🔍 Busca:   ~15-20% do total                                │
+│  ├─ 📖 Leitura: ~50-60% do total                                │
+│  └─ 🤖 LLM:     ~25-30% do total                                │
+│                                                                 │
+│  ⚠️ SINAIS DE PROBLEMA                                          │
+│  ├─ Busca > 40%  → API lenta ou muitas queries                  │
+│  ├─ Leitura > 80% → URLs lentas ou conteúdo pesado              │
+│  └─ LLM > 50%    → Contexto muito grande                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### ⚙️ TELA 4: CONFIG (Configurações)
+
+A tela de configurações exibe todas as configurações carregadas do ambiente.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  🔍 Pesquisa  │  ⚙️ Configurações ◄                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│ ┌─ ⚙️ Runtime ───────────────────────────────────────────────────────────┐  │
+│ │  🧵 Worker Threads:    8                                          ←[A] │  │
+│ │  📖 Web Reader:        native                                          │  │
+│ │  🔑 OpenAI Key:        ✅ Presente                                ←[B] │  │
+│ │  🔑 Jina Key:          ✅ Presente                                     │  │
+│ └─────────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│ ┌─ 🤖 LLM ────────────────────────────────────────────────────────────────┐  │
+│ │  🏢 Provider:          openai                                     ←[C] │  │
+│ │  🧠 Model:             gpt-4.1-mini                                    │  │
+│ │  📐 Embedding:         text-embedding-3-small                     ←[D] │  │
+│ │  🌡️ Temperature:       0.7                                             │  │
+│ │  📊 Max Tokens:        16000                                           │  │
+│ └─────────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│ ┌─ 🕵️ Agent ───────────────────────────────────────────────────────────────┐  │
+│ │  📊 Min Steps:         3                                          ←[E] │  │
+│ │  🔢 Max Steps:         20                                              │  │
+│ │  💰 Max Budget:        1000000 tokens                                  │  │
+│ │  🔗 Max URLs/Step:     10                                              │  │
+│ │  📝 Max Queries/Step:  5                                               │  │
+│ │  ⏱️ Timeout/URL:       30s                                              │  │
+│ └─────────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│            Tab/1 Pesquisa   2 Config   Backspace Voltar   q Sair       ←[F] │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Legenda da Tela de Config:
+
+| Ref   | Elemento        | O Que Mostra                  | Como Analisar                    |
+| ----- | --------------- | ----------------------------- | -------------------------------- |
+| `[A]` | Worker Threads  | Número de threads paralelas   | Mais = mais rápido (até limite)  |
+| `[B]` | API Keys        | Status das chaves (✅/❌)     | ❌ = funcionalidade indisponível |
+| `[C]` | Provider/Model  | LLM configurado para uso      | Afeta qualidade e custo          |
+| `[D]` | Embedding Model | Modelo para embeddings        | Usado em busca semântica         |
+| `[E]` | Agent Limits    | Limites de operação do agente | Ajuste para controle de custo    |
+| `[F]` | Ajuda           | Atalhos de navegação          | Use números para trocar tabs     |
+
+---
+
+### 🚨 TELA DE ERRO
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ┌─────────────────────────────────────────────────────────────────────────┐ │
+│ │ ❌ DEEP RESEARCH v0.1.0 │ Erro                                          │ │
+│ │ Pergunta: [query truncada se necessário...]                             │ │
+│ └─────────────────────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   ╔═══════════════════════════════════════════════════════════════════╗    │
+│   ║                                                                   ║    │
+│   ║   ❌ ERRO: Rate limit exceeded - aguarde 60 segundos              ║    │
+│   ║                                                                   ║    │
+│   ║   Detalhes: API Jina retornou status 429                          ║    │
+│   ║                                                                   ║    │
+│   ╚═══════════════════════════════════════════════════════════════════╝    │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                         Enter Tentar Novamente   q Sair                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Erros Comuns e Soluções:
+
+| Erro                       | Causa                 | Solução                                |
+| -------------------------- | --------------------- | -------------------------------------- |
+| `Rate limit exceeded`      | Muitas requisições    | Aguarde 60s ou use `--budget` menor    |
+| `OPENAI_API_KEY not found` | Variável não definida | Configure `.env` ou `export`           |
+| `JINA_API_KEY not found`   | Variável não definida | Configure `.env` ou `export`           |
+| `Network error`            | Sem conexão internet  | Verifique conectividade                |
+| `Timeout`                  | URL demorou muito     | URL será marcada como "bad" e ignorada |
+| `Beast Mode activated`     | >85% do budget usado  | Agente forçará resposta com o que tem  |
+
+---
+
+### 🎨 Mapa de Cores da Interface
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    PALETA DE CORES                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ████  CYAN      → Headers, bordas principais, URLs             │
+│  ████  YELLOW    → Input focado, cursor, avisos                 │
+│  ████  GREEN     → Sucesso, persona ativa, progresso OK         │
+│  ████  RED       → Erros, falhas                                │
+│  ████  MAGENTA   → Estatísticas, tokens                         │
+│  ████  BLUE      → Logs panel, referências                      │
+│  ████  WHITE     → Texto principal, logs info                   │
+│  ████  DARKGRAY  → Placeholders, personas inativas              │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 📐 Proporções do Layout
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TELA DE PESQUISA                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  VERTICAL:                                                      │
+│  ┌──────────────────────────────────────┐                       │
+│  │ Header                    │ 4 linhas │                       │
+│  ├──────────────────────────────────────┤                       │
+│  │ Raciocínio + Ação         │ 8 linhas │                       │
+│  ├──────────────────────────────────────┤                       │
+│  │ Logs + Stats + Personas   │ Restante │ ← min 8 linhas        │
+│  ├──────────────────────────────────────┤                       │
+│  │ Barra de Progresso        │ 3 linhas │                       │
+│  └──────────────────────────────────────┘                       │
+│                                                                 │
+│  HORIZONTAL (área principal):                                   │
+│  ┌──────────────────┬──────────┬───────────┐                    │
+│  │  Logs            │  Stats   │  Personas │                    │
+│  │     55%          │   22%    │    23%    │                    │
+│  └──────────────────┴──────────┴───────────┘                    │
+│                                                                 │
+│  HORIZONTAL (topo):                                             │
+│  ┌────────────────────────────┬─────────────┐                   │
+│  │  Raciocínio                │  Ação Atual │                   │
+│  │       70%                  │     30%     │                   │
+│  └────────────────────────────┴─────────────┘                   │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 🔧 Diagnóstico e Troubleshooting
+
+#### Checklist de Análise:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              CHECKLIST DE DIAGNÓSTICO                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  □ 1. VERIFICAR LOGS                                            │
+│     └─ Há erros (❌) ou warnings (⚠️)?                          │
+│     └─ O agente está progredindo ou travou?                     │
+│                                                                 │
+│  □ 2. ANALISAR MÉTRICAS                                         │
+│     └─ Tokens estão aumentando normalmente?                     │
+│     └─ URLs visitadas vs encontradas - proporção saudável?      │
+│     └─ Memória RAM está estável?                                │
+│                                                                 │
+│  □ 3. OBSERVAR RACIOCÍNIO                                       │
+│     └─ O agente entendeu a pergunta?                            │
+│     └─ Está buscando informações relevantes?                    │
+│     └─ Está entrando em loop?                                   │
+│                                                                 │
+│  □ 4. VERIFICAR PROGRESSO                                       │
+│     └─ Barra de progresso avança?                               │
+│     └─ Steps incrementam?                                       │
+│     └─ Ação muda (não fica stuck em SEARCH)?                    │
+│                                                                 │
+│  □ 5. CHECAR ARQUIVOS SALVOS                                    │
+│     └─ JSON em sessions/ contém dados?                          │
+│     └─ TXT em logs/ mostra timeline completa?                   │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Padrões de Comportamento:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              PADRÕES NORMAIS vs PROBLEMAS                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ✅ NORMAL:                                                     │
+│  ├─ Step aumenta a cada 5-15 segundos                           │
+│  ├─ Alternância entre SEARCH → READ → REFLECT                   │
+│  ├─ URLs visitadas aumentam gradualmente                        │
+│  ├─ Tokens crescem de forma constante                           │
+│  └─ Logs mostram mix de ℹ️ e ✅                                 │
+│                                                                 │
+│  ⚠️ ATENÇÃO:                                                    │
+│  ├─ Mesmo step por > 30 segundos                                │
+│  ├─ Muitos ⚠️ seguidos (rate limits)                            │
+│  ├─ URLs visitadas = 0 após vários steps                        │
+│  ├─ Raciocínio repetitivo                                       │
+│  └─ Memoria RAM crescendo sem parar                             │
+│                                                                 │
+│  ❌ PROBLEMA:                                                    │
+│  ├─ Erros ❌ repetidos                                          │
+│  ├─ Step travado por > 60 segundos                              │
+│  ├─ "Beast Mode activated" muito cedo                           │
+│  ├─ Tokens > 80% do budget sem resposta                         │
+│  └─ ANSWER rejeitado múltiplas vezes                            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Como Ler os Arquivos de Sessão:
+
+```bash
+# Ver sessão mais recente (JSON formatado)
+cat sessions/$(ls -t sessions/ | head -1) | jq '.'
+
+# Filtrar apenas logs de erro
+cat sessions/*.json | jq '.logs[] | select(.level == "Error")'
+
+# Ver estatísticas de todas as sessões
+for f in sessions/*.json; do
+  echo "=== $f ==="
+  jq '{question: .question[:50], tokens: .stats.tokens_used, time: .timing.total_ms}' "$f"
+done
+
+# Logs TXT (mais legível)
+less logs/$(ls -t logs/ | head -1)
+```
+
+---
+
+### `[tui-layout]` Layout Visual Resumido
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│   🔬 DEEP RESEARCH v0.1.0 - Pesquisa Inteligente com IA        │
+│                   Pergunta: [query here]                        │
+├───────────────────────────────────────┬─────────────────────────┤
+│ 💭 Raciocínio do Agente              │ 🎯 Ação Atual           │
+│                                       │    Step: 3              │
+│ Buscando informações sobre...         │    Ação: SEARCH         │
+├───────────────────────────────────────┼─────────────┬───────────┤
+│ 📋 Logs                              │ 📊 Stats    │ 👥 Personas│
+│                                       │ URLs: 45    │ ● Agente  │
+│ [17:30:01] ℹ️ Buscando...            │ Visit: 4    │   S:2 R:3 │
+│ [17:30:02] ✅ 72 URLs encontradas    │ Tokens:1234 │           │
+│ [17:30:03] ℹ️ Lendo Wikipedia...     │ Tempo: 5.2s │           │
+├───────────────────────────────────────┴─────────────┴───────────┤
+│ ████████████████████░░░░░░░░░░░░░░░░░░░░░░  40%  Step 4 SEARCH │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### `[tui-screens]` Telas Implementadas
+
+| Tela       | Descrição                                                | Componentes                                      |
+| ---------- | -------------------------------------------------------- | ------------------------------------------------ |
+| `Input`    | Entrada de pergunta com histórico                        | Logo, campo de input, lista de histórico, ajuda  |
+| `Research` | Pesquisa em andamento com métricas em tempo real         | Header, raciocínio, logs, stats, personas, gauge |
+| `Result`   | Resultado final com resposta, referências e estatísticas | Header, resposta scrollável, refs, URLs, stats   |
+
+### `[tui-components]` Componentes da Interface
+
+#### Header (Todas as Telas)
+
+| Elemento    | Descrição                               |
+| ----------- | --------------------------------------- |
+| Logo        | `🔬 DEEP RESEARCH v0.1.0`               |
+| Status Icon | 🔍 Pesquisando / ✅ Concluído / ❌ Erro |
+| Pergunta    | Exibe a query atual (truncada)          |
+
+#### Tela de Input
+
+| Componente      | Funcionalidade                                |
+| --------------- | --------------------------------------------- |
+| Campo de Input  | Cursor UTF-8, placeholder, borda amarela      |
+| Cursor Animado  | `│` com RAPID_BLINK                           |
+| Lista Histórico | Últimas 8 perguntas, seleção com ▶, navegável |
+| Barra de Ajuda  | Atalhos: Enter, ↑↓, Esc                       |
+
+#### Tela de Pesquisa
+
+| Painel          | Conteúdo                                        |
+| --------------- | ----------------------------------------------- |
+| 💭 Raciocínio   | Pensamento atual do agente (70% largura)        |
+| 🎯 Ação Atual   | Step e ação sendo executada (30% largura)       |
+| 📋 Logs         | Lista de eventos com scroll (55% largura)       |
+| 📊 Stats        | Steps, URLs, tokens, tempo, sistema (22%)       |
+| 👥 Personas     | Stats por persona: S(buscas), R(leituras) (23%) |
+| Barra Progresso | Gauge 0-100% com status colorido                |
+
+#### Tela de Resultado
+
+| Seção             | Conteúdo                                           |
+| ----------------- | -------------------------------------------------- |
+| Header            | Status, UUID da sessão, caminhos dos arquivos      |
+| 📝 Resposta       | Texto completo com scroll vertical + **scrollbar** |
+| 📚 Referências    | Top 3 referências com URLs clicáveis               |
+| 🔗 URLs Visitadas | Top 3 URLs acessadas durante pesquisa              |
+| 📊 Estatísticas   | Tokens, URLs, steps, tempos detalhados             |
+
+**Novidades v0.1.x:**
+
+- 🖱️ **Mouse scroll** - Roda do mouse funciona em todas as telas
+- 📋 **Copiar resposta** - Tecla `c` copia para clipboard do sistema (requer `--features clipboard`)
+- 📜 **Scrollbar visual** - Indicador de posição na resposta
+
+### `[tui-state]` Estado da Aplicação (App)
+
+```rust
+pub struct App {
+    // Identificação
+    session_id: String,           // UUID único da sessão
+    started_at: String,           // Timestamp ISO 8601
+
+    // Tela e Input
+    screen: AppScreen,            // Input | Research | Result
+    input_text: String,           // Texto sendo digitado
+    cursor_pos: usize,            // Posição do cursor (UTF-8 safe)
+
+    // Pesquisa
+    question: String,             // Pergunta atual
+    current_step: usize,          // Step do agente
+    current_action: String,       // Ação sendo executada
+    current_think: String,        // Raciocínio do agente
+
+    // Dados Coletados
+    logs: VecDeque<LogEntry>,     // Logs da sessão (max 100)
+    url_count: usize,             // Total de URLs encontradas
+    visited_count: usize,         // URLs visitadas
+    visited_urls: Vec<String>,    // Lista de URLs visitadas
+    tokens_used: u64,             // Tokens consumidos
+
+    // Resultado
+    answer: Option<String>,       // Resposta final
+    references: Vec<String>,      // Referências
+    is_complete: bool,            // Pesquisa concluída
+    error: Option<String>,        // Mensagem de erro
+
+    // Tempos
+    start_time: Option<Instant>,  // Início da pesquisa
+    total_time_ms: u128,          // Tempo total
+    search_time_ms: u128,         // Tempo em buscas
+    read_time_ms: u128,           // Tempo em leituras
+    llm_time_ms: u128,            // Tempo em LLM
+
+    // UI State
+    log_scroll: usize,            // Scroll dos logs
+    result_scroll: usize,         // Scroll da resposta
+    history: Vec<String>,         // Histórico de perguntas
+    history_index: Option<usize>, // Índice no histórico
+    history_selected: Option<usize>, // Seleção visual
+
+    // Métricas e Personas
+    metrics: SystemMetrics,       // threads, memory_mb, cpu_percent
+    personas: HashMap<String, PersonaStats>,
+
+    // Tarefas Paralelas
+    active_batches: HashMap<String, ParallelBatch>,
+    completed_batches: Vec<ParallelBatch>,
+    all_tasks: Vec<ParallelTask>,
+
+    // Persistência
+    saved_sessions: Vec<ResearchSession>,
+}
+```
+
+### `[tui-metrics]` Métricas do Sistema
+
+| Métrica       | Tipo  | Descrição            |
+| ------------- | ----- | -------------------- |
+| `threads`     | usize | Threads ativas       |
+| `memory_mb`   | f64   | Uso de memória em MB |
+| `cpu_percent` | f32   | Uso de CPU (%)       |
+
+### `[tui-personas]` Estatísticas de Personas
+
+| Campo       | Tipo   | Descrição              |
+| ----------- | ------ | ---------------------- |
+| `name`      | String | Nome da persona        |
+| `searches`  | usize  | Buscas realizadas      |
+| `reads`     | usize  | Leituras realizadas    |
+| `answers`   | usize  | Respostas geradas      |
+| `tokens`    | u64    | Tokens consumidos      |
+| `is_active` | bool   | Se está ativa (● vs ○) |
+
+### `[tui-parallel]` Tarefas Paralelas
+
+#### TaskStatus
+
+| Status      | Símbolo | Descrição             |
+| ----------- | ------- | --------------------- |
+| `Pending`   | ⏳      | Aguardando início     |
+| `Running`   | 🔄      | Em execução           |
+| `Completed` | ✅      | Concluída com sucesso |
+| `Failed`    | ❌      | Falhou                |
+
+#### ParallelTask
+
+| Campo         | Tipo           | Descrição                |
+| ------------- | -------------- | ------------------------ |
+| `id`          | String         | ID único da tarefa       |
+| `batch_id`    | String         | ID do batch pai          |
+| `task_type`   | String         | Tipo (Read, Search)      |
+| `description` | String         | URL/descrição processada |
+| `data_info`   | String         | Dados alocados           |
+| `status`      | TaskStatus     | Status atual             |
+| `started_at`  | u128           | Timestamp início (ms)    |
+| `elapsed_ms`  | u128           | Tempo de execução        |
+| `thread_id`   | Option<String> | ID da thread             |
+
+#### ParallelBatch
+
+| Campo              | Tipo              | Descrição            |
+| ------------------ | ----------------- | -------------------- |
+| `id`               | String            | ID do batch          |
+| `batch_type`       | String            | Tipo do batch        |
+| `tasks`            | Vec<ParallelTask> | Tarefas no batch     |
+| `started_at`       | u128              | Timestamp início     |
+| `total_elapsed_ms` | u128              | Tempo total          |
+| `completed`        | usize             | Tarefas completadas  |
+| `failed`           | usize             | Tarefas que falharam |
+
+### `[tui-persistence]` Persistência de Sessões
+
+#### Arquivos Salvos
+
+| Tipo | Diretório   | Formato                      | Conteúdo                     |
+| ---- | ----------- | ---------------------------- | ---------------------------- |
+| JSON | `sessions/` | `YYYYMMDD_HHMMSS_UUID8.json` | Sessão completa serializada  |
+| TXT  | `logs/`     | `YYYYMMDD_HHMMSS_UUID8.txt`  | Logs formatados para leitura |
+
+#### ResearchSession (JSON)
+
+```json
+{
+  "id": "uuid-da-sessao",
+  "started_at": "2024-01-15T10:30:00Z",
+  "finished_at": "2024-01-15T10:31:45Z",
+  "question": "Qual é a população do Brasil?",
+  "answer": "A população do Brasil...",
+  "references": ["Título - URL", ...],
+  "visited_urls": ["https://...", ...],
+  "logs": [{"timestamp": "10:30:01", "level": "Info", "message": "..."}],
+  "personas": {"Agente": {"searches": 2, "reads": 5, ...}},
+  "timing": {"total_ms": 105000, "search_ms": 20000, ...},
+  "stats": {"steps": 5, "urls_found": 45, "tokens_used": 18000},
+  "success": true,
+  "error": null,
+  "parallel_batches": [...],
+  "all_tasks": [...]
+}
+```
+
+#### Formato TXT de Logs
+
+```
+═══════════════════════════════════════════════════════════════════
+ DEEP RESEARCH - Session abc12345
+═══════════════════════════════════════════════════════════════════
+
+📅 Início: 2024-01-15T10:30:00Z
+❓ Pergunta: Qual é a população do Brasil?
+📊 Steps: 5 | URLs: 4 | Tokens: 18000
+⏱️  Tempo: 105.0s total | 20.0s busca | 50.0s leitura | 35.0s LLM
+
+───────────────────────────────────────────────────────────────────
+ LOGS
+───────────────────────────────────────────────────────────────────
+
+[10:30:01] INFO Iniciando pesquisa...
+[10:30:05] OK   72 URLs encontradas
+[10:30:10] INFO Lendo Wikipedia...
+...
+
+───────────────────────────────────────────────────────────────────
+ URLs VISITADAS / REFERÊNCIAS / PERSONAS / TAREFAS PARALELAS
+───────────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════════
+ RESPOSTA FINAL
+═══════════════════════════════════════════════════════════════════
+
+A população do Brasil é de aproximadamente...
+```
+
+### `[tui-colors]` Esquema de Cores
+
+| Elemento          | Cor            | Uso                        |
+| ----------------- | -------------- | -------------------------- |
+| Header/Logo       | Cyan           | Título e bordas principais |
+| Input Border      | Yellow         | Campo de entrada focado    |
+| Cursor            | Yellow         | Cursor piscante            |
+| Logs Info         | White          | Mensagens informativas     |
+| Logs Success      | Green          | Operações bem sucedidas    |
+| Logs Warning      | Yellow         | Avisos                     |
+| Logs Error        | Red            | Erros                      |
+| Stats             | Magenta        | Painel de estatísticas     |
+| Personas Active   | Green          | Persona ativa (●)          |
+| Personas Inactive | DarkGray       | Persona inativa (○)        |
+| Progress Bar      | Cyan/Green/Red | Baseado no estado          |
+| References        | Blue           | Links de referência        |
+| URLs Visited      | Cyan           | URLs visitadas             |
+
+### `[tui-input]` Manipulação de Input UTF-8
+
+| Método            | Descrição                             |
+| ----------------- | ------------------------------------- |
+| `input_char(c)`   | Insere caractere na posição do cursor |
+| `input_backspace` | Remove caractere antes do cursor      |
+| `input_delete`    | Remove caractere na posição do cursor |
+| `cursor_left`     | Move cursor para esquerda             |
+| `cursor_right`    | Move cursor para direita              |
+| `cursor_home`     | Move cursor para início               |
+| `cursor_end`      | Move cursor para fim                  |
+| `history_up`      | Navega histórico anterior             |
+| `history_down`    | Navega histórico seguinte             |
+| `clear_input`     | Limpa todo o input                    |
+
+### `[tui-scroll]` Sistema de Scroll
+
+| Método               | Área     | Descrição             |
+| -------------------- | -------- | --------------------- |
+| `scroll_up`          | Logs     | Scroll 1 linha acima  |
+| `scroll_down`        | Logs     | Scroll 1 linha abaixo |
+| `result_scroll_up`   | Resposta | Scroll 1 linha acima  |
+| `result_scroll_down` | Resposta | Scroll 1 linha abaixo |
+| `result_page_up`     | Resposta | Page up (10 linhas)   |
+| `result_page_down`   | Resposta | Page down (10 linhas) |
+
+### `[tui-history]` Sistema de Histórico
+
+| Funcionalidade | Descrição                            |
+| -------------- | ------------------------------------ |
+| Auto-save      | Perguntas salvas ao iniciar pesquisa |
+| Navegação ↑/↓  | Navega pelo histórico no input       |
+| Seleção visual | Destaque com ▶ e fundo cinza         |
+| Carregamento   | Carrega de sessões JSON anteriores   |
+| Limite         | Últimas 50 sessões / 8 visíveis      |
+
+### `[tui-logger]` TuiLogger Wrapper
+
+Helper para enviar eventos formatados:
+
+```rust
+impl TuiLogger {
+    pub fn info(&self, msg: impl Into<String>);
+    pub fn success(&self, msg: impl Into<String>);
+    pub fn warning(&self, msg: impl Into<String>);
+    pub fn error(&self, msg: impl Into<String>);
+    pub fn set_step(&self, step: usize);
+    pub fn set_action(&self, action: impl Into<String>);
+    pub fn set_think(&self, think: impl Into<String>);
+    pub fn set_urls(&self, total: usize, visited: usize);
+    pub fn set_tokens(&self, tokens: u64);
+    pub fn complete(&self, answer: String, references: Vec<String>);
+}
+```
+
+---
+
+## 🤖 Ações do Agente
+
+O agente de pesquisa executa ações baseadas em uma máquina de estados.
+
+### `[search]` Buscar na Web
+
+Executa buscas paralelas usando a API Jina.
+
+```
+SEARCH: Search the web (only if current URLs are insufficient)
+```
+
+**Parâmetros:**
+
+- `queries`: Lista de `SerpQuery` (query, tbs, location)
+- `think`: Raciocínio do agente
+
+**Limites:**
+
+- Máximo 5 queries por step
+- Execução em paralelo
+
+### `[read]` Ler Conteúdo
+
+Extrai conteúdo de URLs (suporta múltiplos formatos).
+
+```
+READ: Read URLs from the available list
+```
+
+**Formatos Suportados:**
+| Tipo | Extensões |
+|------|-----------|
+| Web Pages | `.html`, `.htm` |
+| PDF | `.pdf` |
+| JSON | `.json` |
+| XML | `.xml` |
+| Texto | `.txt` |
+| Markdown | `.md` |
+
+**Parâmetros:**
+
+- `urls`: Lista de URLs para ler
+- `think`: Raciocínio do agente
+
+**Limites:**
+
+- Máximo 5 URLs por step
+- Execução em paralelo
+- URLs já visitadas são ignoradas
+
+### `[reflect]` Refletir/Gerar Sub-perguntas
+
+Gera novas perguntas para expandir a pesquisa.
+
+```
+REFLECT: Generate sub-questions (use sparingly)
+```
+
+**Parâmetros:**
+
+- `gap_questions`: Lista de novas perguntas
+- `think`: Raciocínio do agente
+
+### `[answer]` Responder
+
+Fornece a resposta final com referências.
+
+```
+ANSWER: Provide the final answer
+```
+
+**Parâmetros:**
+
+- `answer`: Texto da resposta
+- `references`: Lista de referências
+- `think`: Raciocínio do agente
+
+**Avaliações:**
+
+- Passa por pipeline de avaliação
+- Verifica qualidade e precisão
+- Pode ser rejeitada se insuficiente
+
+### `[coding]` Executar Código
+
+Executa código em sandbox seguro com escolha automática de linguagem.
+
+#### Linguagens Suportadas
+
+| Linguagem  | Engine           | Melhor para                                                          |
+| ---------- | ---------------- | -------------------------------------------------------------------- |
+| JavaScript | Boa (in-process) | JSON, strings, cálculos simples, transformações rápidas              |
+| Python     | Subprocess       | Análise de dados, estatísticas, regex complexo, cálculos científicos |
+| Auto       | LLM escolhe      | O modelo decide a melhor linguagem baseado no problema               |
+
+#### Formato da Ação
+
+```json
+{
+  "action": "coding",
+  "code": "Descrição do problema a resolver",
+  "language": "javascript|python|auto",
+  "think": "raciocínio do agente"
+}
+```
+
+#### Segurança
+
+- **JavaScript**: Executado via Boa Engine (isolado, sem acesso a filesystem/rede)
+- **Python**: Executado via subprocess com timeout rigoroso
+- Retry inteligente com feedback de erros para o LLM (até 3 tentativas)
+
+**Parâmetros:**
+
+- `code`: Código para executar
+- `think`: Raciocínio do agente
+
+---
+
+## 📡 Eventos
+
+### `[agent-progress]` Eventos de Progresso do Agente
+
+Enviados via callback durante execução.
+
+| Evento               | Descrição           | Dados                                             |
+| -------------------- | ------------------- | ------------------------------------------------- |
+| `Info(String)`       | Log informativo     | Mensagem                                          |
+| `Success(String)`    | Log de sucesso      | Mensagem                                          |
+| `Warning(String)`    | Log de aviso        | Mensagem                                          |
+| `Error(String)`      | Log de erro         | Mensagem                                          |
+| `Step(usize)`        | Atualiza step atual | Número do step                                    |
+| `Action(String)`     | Atualiza ação atual | Nome da ação                                      |
+| `Think(String)`      | Raciocínio atual    | Texto do raciocínio                               |
+| `Urls(usize, usize)` | Contagem de URLs    | (total, visitadas)                                |
+| `Tokens(u64)`        | Tokens usados       | Quantidade                                        |
+| `Persona`            | Stats de persona    | name, searches, reads, answers, tokens, is_active |
+| `VisitedUrl(String)` | URL visitada        | URL                                               |
+
+### `[app-event]` Eventos da Interface TUI
+
+Eventos internos para atualização da UI.
+
+| Evento                         | Descrição                |
+| ------------------------------ | ------------------------ |
+| `Log(LogEntry)`                | Novo log                 |
+| `SetStep(usize)`               | Define step              |
+| `SetAction(String)`            | Define ação              |
+| `SetThink(String)`             | Define raciocínio        |
+| `SetUrlCount(usize)`           | Define total URLs        |
+| `SetVisitedCount(usize)`       | Define URLs visitadas    |
+| `SetTokens(u64)`               | Define tokens            |
+| `SetAnswer(String)`            | Define resposta          |
+| `SetReferences(Vec<String>)`   | Define referências       |
+| `UpdateMetrics(SystemMetrics)` | Métricas do sistema      |
+| `UpdatePersona(PersonaStats)`  | Stats de persona         |
+| `SetTimes{...}`                | Tempos detalhados        |
+| `Complete`                     | Pesquisa concluída       |
+| `Error(String)`                | Erro fatal               |
+| `AddVisitedUrl(String)`        | Adiciona URL visitada    |
+| `StartBatch{...}`              | Inicia batch de tarefas  |
+| `UpdateTask(ParallelTask)`     | Atualiza tarefa paralela |
+| `EndBatch{...}`                | Finaliza batch           |
+
+### `[log-level]` Níveis de Log
+
+| Nível     | Símbolo | Uso                   |
+| --------- | ------- | --------------------- |
+| `Info`    | ℹ️      | Informação geral      |
+| `Success` | ✅      | Operação bem sucedida |
+| `Warning` | ⚠️      | Aviso                 |
+| `Error`   | ❌      | Erro                  |
+| `Debug`   | 🔍      | Debug                 |
+
+---
+
+## ⚙️ Configuração
+
+### Estados do Agente
+
+| Estado          | Descrição                              |
+| --------------- | -------------------------------------- |
+| `Processing`    | Processando (step, budget_used)        |
+| `InputRequired` | Aguardando input do usuário (blocking) |
+| `BeastMode`     | Modo forçado (>85% budget)             |
+| `Completed`     | Concluído com sucesso                  |
+| `Failed`        | Falha definitiva                       |
+
+---
+
+## 💬 Sistema de Interação Usuário-Agente
+
+O Deep Research implementa um sistema híbrido de interação entre o usuário e o agente, compatível com a OpenAI Responses API (`input_required` state).
+
+### Visão Geral
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DeepResearchAgent                            │
+│  ┌──────────────────┐    ┌──────────────────┐                  │
+│  │   AgentState     │    │  InteractionHub  │◄── user_input_rx │
+│  │  - Running       │    │  - pending_qs    │                  │
+│  │  - InputRequired │    │  - user_inputs   │                  │
+│  │  - Completed     │    │  - callbacks     │                  │
+│  └──────────────────┘    └──────────────────┘                  │
+│           │                      │                              │
+│           ▼                      ▼                              │
+│  ┌──────────────────────────────────────────┐                  │
+│  │          AgentAction::AskUser            │                  │
+│  │  - question_type: QuestionType           │                  │
+│  │  - question: String                      │                  │
+│  │  - options: Option<Vec<String>>          │                  │
+│  │  - is_blocking: bool                     │                  │
+│  └──────────────────────────────────────────┘                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+            ┌───────────────┐   ┌───────────────┐
+            │     TUI       │   │   Chatbot     │
+            │  (dev/test)   │   │  (produção)   │
+            │               │   │ digisac/suri  │
+            └───────────────┘   └───────────────┘
+```
+
+### Modos de Interação
+
+| Modo         | Comportamento                                         | Uso                               |
+| ------------ | ----------------------------------------------------- | --------------------------------- |
+| **Blocking** | Agente PAUSA e aguarda resposta                       | Clarificação, confirmação crítica |
+| **Async**    | Mensagens entram na fila, processadas no próximo step | Feedback, informações adicionais  |
+
+### Tipos de Pergunta (QuestionType)
+
+| Tipo            | Blocking | Descrição                               |
+| --------------- | -------- | --------------------------------------- |
+| `Clarification` | ✅ Sim   | Falta informação vital para continuar   |
+| `Confirmation`  | ✅ Sim   | Confirmação antes de ação importante    |
+| `Preference`    | ✅ Sim   | Escolha entre opções válidas            |
+| `Suggestion`    | ❌ Não   | Sugestão/feedback (processado no ciclo) |
+
+### Atalhos TUI - Interação Durante Pesquisa
+
+| Tecla   | Ação                                          |
+| ------- | --------------------------------------------- |
+| `Tab`   | Focar/desfocar campo de mensagem              |
+| `Enter` | Enviar mensagem para o agente (quando focado) |
+| `Esc`   | Desfocar input ou sair (quando não focado)    |
+
+### Layout da Tela de Pesquisa com Input
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 🔍 DEEP RESEARCH v0.1.0 │ Pesquisando...                        │
+│ Pergunta: [sua pergunta aqui...]                                │
+├───────────────────────────────────────┬─────────────────────────┤
+│ 💭 Raciocínio do Agente              │ 🎯 Ação Atual           │
+│                                       │    Step: 3              │
+│ Buscando informações sobre...         │    Ação: SEARCH         │
+├───────────────────────────────────────┼─────────────┬───────────┤
+│ 📋 Logs                              │ 📊 Stats    │ 👥 Personas│
+│ [17:30:01] ℹ️ Buscando...            │ URLs: 45    │ ● Agente  │
+├───────────────────────────────────────┴─────────────┴───────────┤
+│ ████████████████░░░░░░░░░░░░░░░░░░░░░░  40%  Step 4 SEARCH     │
+├─────────────────────────────────────────────────────────────────┤
+│ 💬 Enviar mensagem │ Tab: focar │ Enter: enviar                │◀ NOVO!
+│ [_____________________________________________________ ]       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Tela de Input Requerido (Blocking)
+
+Quando o agente precisa de uma resposta crítica, a tela muda para:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ ❓ PERGUNTA DO AGENTE                                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Tipo: clarification                                            │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │ Você poderia confirmar se deseja que eu faça uma        │   │
+│  │ busca via API especificamente no crate 'parrachos'      │   │
+│  │ dentro do diretório especificado?                       │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌─ Sua Resposta ─────────────────────────────────────────┐    │
+│  │ █                                                      │    │
+│  └────────────────────────────────────────────────────────┘    │
+│                                                                 │
+│  Enter: Enviar resposta  │  Esc: Cancelar                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Layout com Sandbox Ativo
+
+Quando o agente está executando código, um painel dedicado mostra o progresso:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 🔍 DEEP RESEARCH v0.1.0 │ Pesquisando...                        │
+├───────────────────────────────────┬─────────────────────────────┤
+│ 💭 Raciocínio do Agente          │ 🖥️ SANDBOX                  │
+│                                   │ ──────────────────────────  │
+│ Preciso processar os dados        │ 🐍 Python                   │
+│ encontrados para extrair          │ ⏳ GERANDO...               │
+│ informações estatísticas...       │    1/3 tentativas           │
+│                                   │    timeout: 10000ms         │
+│                                   │                             │
+│                                   │ 📝 Calcular média e desvio  │
+│                                   │    padrão dos valores...    │
+│                                   │                             │
+│                                   │ 💻 Código:                  │
+│                                   │ ┌───────────────────────┐   │
+│                                   │ │ import statistics     │   │
+│                                   │ │ values = [...]        │   │
+│                                   │ │ mean = statistics...  │   │
+│                                   │ └───────────────────────┘   │
+├───────────────────────────────────┴─────────────────────────────┤
+│ ████████████████░░░░░░░░░░░░░░░░░░░░░░  40%  Step 4 CODING     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Fluxo de Execução
+
+#### Pergunta Blocking (Clarificação)
+
+```
+1. LLM retorna AgentAction::AskUser { is_blocking: true, ... }
+2. Agente emite AgentProgress::AgentQuestion
+3. Agente muda estado para InputRequired
+4. TUI mostra tela de pergunta dedicada
+5. Usuário digita resposta e pressiona Enter
+6. Resposta enviada via canal para InteractionHub
+7. Agente processa e adiciona ao knowledge como UserProvided
+8. Agente retoma execução automaticamente
+```
+
+#### Input Async (Mensagem Espontânea)
+
+```
+1. Usuário pressiona Tab durante pesquisa (foca input)
+2. Digita mensagem e pressiona Enter
+3. Mensagem entra na fila user_message_queue
+4. Enviada via canal para o InteractionHub do agente
+5. poll_user_messages() processa no próximo step
+6. Adicionado ao knowledge como UserProvided
+7. LLM vê novo contexto e ajusta ações
+```
+
+### API: Compatibilidade OpenAI Responses
+
+O estado `InputRequired` mapeia diretamente para o conceito de `input_required` da OpenAI:
+
+```json
+{
+  "status": "input_required",
+  "pending_input": {
+    "type": "clarification",
+    "question": "Qual é a cidade de origem da sua viagem?",
+    "options": null
+  }
+}
+```
+
+### Módulos do Sistema de Interação
+
+| Módulo              | Arquivo                | Descrição                          |
+| ------------------- | ---------------------- | ---------------------------------- |
+| **InteractionHub**  | `agent/interaction.rs` | Hub central de comunicação         |
+| **PendingQuestion** | `agent/interaction.rs` | Estrutura de pergunta pendente     |
+| **UserResponse**    | `agent/interaction.rs` | Estrutura de resposta do usuário   |
+| **QuestionType**    | `agent/interaction.rs` | Enum de tipos de pergunta          |
+| **ChatbotAdapter**  | `agent/chatbot.rs`     | Trait para integração com chatbots |
+| **RichMessage**     | `agent/chatbot.rs`     | Mensagens formatadas com botões    |
+
+### Estruturas Principais
+
+#### PendingQuestion
+
+```rust
+pub struct PendingQuestion {
+    pub id: Uuid,                        // ID único da pergunta
+    pub question_type: QuestionType,     // Tipo (Clarification, Confirmation, etc.)
+    pub question: String,                // Texto da pergunta
+    pub options: Option<Vec<String>>,    // Opções (para Preference)
+    pub is_blocking: bool,               // Se deve pausar até resposta
+    pub created_at: DateTime<Utc>,       // Timestamp de criação
+}
+```
+
+#### UserResponse
+
+```rust
+pub struct UserResponse {
+    pub question_id: Option<Uuid>,       // ID da pergunta (None = espontânea)
+    pub content: String,                 // Conteúdo da resposta
+    pub timestamp: DateTime<Utc>,        // Timestamp
+    pub selected_option: Option<usize>,  // Índice da opção selecionada
+}
+```
+
+### Integração com Chatbots (Produção)
+
+A trait `ChatbotAdapter` permite integração com plataformas de chat:
+
+```rust
+#[async_trait]
+pub trait ChatbotAdapter: Send + Sync {
+    /// Envia mensagem para o usuário
+    async fn send_message(&self, message: &str) -> Result<(), ChatbotError>;
+
+    /// Envia pergunta e aguarda resposta (blocking)
+    async fn ask_user(&self, question: &PendingQuestion) -> Result<UserResponse, ChatbotError>;
+
+    /// Envia opções para o usuário escolher
+    async fn send_options(&self, question: &str, options: &[String]) -> Result<String, ChatbotError>;
+
+    /// Tenta receber mensagem sem bloquear
+    fn try_receive(&self) -> Result<Option<UserResponse>, ChatbotError>;
+
+    /// Recebe mensagem (blocking com timeout)
+    async fn receive_message(&self, timeout: Duration) -> Result<UserResponse, ChatbotError>;
+}
+```
+
+#### Plataformas Suportadas (Futuro)
+
+| Plataforma    | Status       | Descrição                      |
+| ------------- | ------------ | ------------------------------ |
+| **TUI**       | ✅ Pronto    | Interface terminal (dev/test)  |
+| **DigiSac**   | 🔜 Planejado | Integração via crate existente |
+| **Suri**      | 🔜 Planejado | API de mensagens (tlw_irus)    |
+| **Parrachos** | 🔜 Planejado | Webhook/callback para UI web   |
+
+### Exemplo de Uso Programático
+
+```rust
+use deep_research::agent::{DeepResearchAgent, UserResponse};
+
+// Criar agente com canais de interação
+let (agent, response_tx, question_rx) = DeepResearchAgent::new(llm, search, budget)
+    .with_interaction_channels(16);
+
+// Spawn task para processar perguntas
+tokio::spawn(async move {
+    while let Some(question) = question_rx.recv().await {
+        println!("Agente pergunta: {}", question.question);
+
+        // Obter resposta do usuário (ex: via stdin, chatbot, etc.)
+        let user_input = get_user_input().await;
+
+        // Enviar resposta de volta
+        let response = UserResponse::to_question(question.id.to_string(), user_input);
+        response_tx.send(response).await.unwrap();
+    }
+});
+
+// Executar pesquisa
+let result = agent.run("Minha pergunta complexa").await;
+```
+
+### Telas da TUI
+
+| Tela       | Descrição             |
+| ---------- | --------------------- |
+| `Input`    | Entrada de pergunta   |
+| `Research` | Pesquisa em andamento |
+| `Result`   | Resultado final       |
+
+### Constantes
+
+```rust
+const MAX_URLS_PER_STEP: usize = 5;       // URLs por step
+const MAX_REFLECT_PER_STEP: usize = 5;    // Perguntas por reflexão
+const BEAST_MODE_THRESHOLD: f64 = 0.85;   // 85% do budget
+```
+
+---
+
+## 📚 Exemplos
+
+### Pesquisa Simples
+
+```bash
+deep-research-cli "Qual é a capital da França?"
+```
+
+### Pesquisa com Budget Limitado
+
+```bash
+deep-research-cli --budget 100000 "Explique mecânica quântica"
+```
+
+### Interface Interativa
+
+```bash
+deep-research-cli --tui
+# Digite sua pergunta e pressione Enter
+```
+
+### Comparar Métodos de Leitura
+
+```bash
+# Comparar extração de conteúdo
+deep-research-cli --compare "https://rust-lang.org,https://docs.rs"
+
+# Comparar durante pesquisa
+deep-research-cli --compare-live "O que é Rust?"
+```
+
+---
+
+## 📊 Saída do Resultado
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ RESULTADO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ Pesquisa concluída com sucesso!
+
+Resposta:
+[texto da resposta...]
+
+Referências:
+  1. Título - URL
+  2. ...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ESTATÍSTICAS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⏱️  Tempo total: 12.34s
+    - Busca:   2000ms
+    - Leitura: 5000ms
+    - LLM:     5000ms
+
+🎫 Tokens utilizados:
+    - Prompt:     15000
+    - Completion: 3000
+    - Total:      18000
+
+🔗 URLs visitadas: 5
+```
+
+---
+
+## 🔗 Sistema de Referências Semânticas
+
+O sistema de referências foi completamente redesenhado para fornecer citações precisas usando embeddings e similaridade cosseno.
+
+### Como Funciona
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              PIPELINE DE REFERÊNCIAS SEMÂNTICAS                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. CHUNKING DA RESPOSTA                                        │
+│     └─ chunk_text(answer) → chunks[] + positions[]              │
+│                                                                 │
+│  2. CHUNKING DO CONTEÚDO WEB                                    │
+│     └─ Para cada URL visitada: chunk_text(content)              │
+│                                                                 │
+│  3. EMBEDDINGS BATCH                                            │
+│     └─ llm.embed_batch([answer_chunks + web_chunks])            │
+│                                                                 │
+│  4. COSINE SIMILARITY (SIMD AVX2)                               │
+│     └─ simd::cosine_similarity(answer_emb, web_emb)             │
+│                                                                 │
+│  5. FILTRAGEM                                                   │
+│     └─ score >= 0.65, max 10 refs, dedup por URL/chunk          │
+│                                                                 │
+│  6. INSERÇÃO DE MARCADORES                                      │
+│     └─ "texto[^1] mais texto[^2]..."                            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Módulos Envolvidos
+
+| Módulo        | Arquivo               | Função                                                      |
+| ------------- | --------------------- | ----------------------------------------------------------- |
+| **segment**   | `utils/segment.rs`    | Chunking de texto (newline, punctuation, characters, regex) |
+| **build_ref** | `utils/build_ref.rs`  | ReferenceBuilder com embeddings e cosine similarity         |
+| **simd**      | `performance/simd.rs` | Cosine similarity otimizado com AVX2                        |
+| **llm**       | `llm.rs`              | Geração de embeddings via OpenAI                            |
+
+### Configuração
+
+```rust
+ReferenceBuilderConfig {
+    min_chunk_length: 80,      // Mínimo de caracteres por chunk
+    max_references: 10,         // Máximo de referências
+    min_relevance_score: 0.65,  // Score mínimo de similaridade
+    only_hostnames: vec![],     // Filtro de hostnames (opcional)
+}
+```
+
+### Estratégias de Chunking
+
+| Tipo             | Descrição                   | Uso                |
+| ---------------- | --------------------------- | ------------------ |
+| `Newline`        | Split por `\n`              | Parágrafos, listas |
+| `Punctuation`    | Split por `.!?。！？`       | Sentenças          |
+| `Characters(n)`  | Split por N caracteres      | Textos longos      |
+| `Regex(pattern)` | Split por regex customizado | Casos especiais    |
+
+### Fallback Jaccard
+
+Quando embeddings falham (rate limit, erro de API), o sistema usa Jaccard similarity:
+
+```rust
+fn jaccard_similarity(a: &str, b: &str) -> f32 {
+    let words_a: HashSet<&str> = a.split_whitespace().collect();
+    let words_b: HashSet<&str> = b.split_whitespace().collect();
+    intersection / union
+}
+```
+
+---
+
+## 🗂️ Estrutura de Arquivos
+
+```
+rust-implementation/
+├── src/
+│   ├── main.rs          # CLI e TUI entry point
+│   ├── lib.rs           # Biblioteca principal
+│   ├── agent/           # Máquina de estados
+│   │   ├── mod.rs       # Agente principal
+│   │   ├── actions.rs   # Ações do agente
+│   │   ├── context.rs   # Contexto de pesquisa
+│   │   ├── state.rs     # Estados
+│   │   └── permissions.rs
+│   ├── search.rs        # Cliente de busca (Jina)
+│   ├── llm.rs           # Cliente LLM (OpenAI)
+│   ├── tui/             # Interface TUI
+│   │   ├── app.rs       # Estado da aplicação
+│   │   ├── ui.rs        # Renderização
+│   │   └── runner.rs    # Loop principal
+│   ├── evaluation/      # Avaliação de respostas
+│   ├── personas/        # Personas cognitivas
+│   ├── performance/     # Otimizações SIMD
+│   │   ├── mod.rs
+│   │   └── simd.rs      # AVX2 cosine similarity
+│   └── utils/           # Utilitários
+│       ├── mod.rs
+│       ├── segment.rs   # Chunking de texto
+│       ├── build_ref.rs # Referências semânticas
+│       ├── file_reader.rs # Leitura de arquivos/PDFs
+│       ├── text.rs      # Processamento de texto
+│       ├── timing.rs    # Métricas de tempo
+│       └── token_tracker.rs # Controle de tokens
+├── sessions/            # Sessões salvas (JSON)
+├── logs/                # Logs de sessões (TXT)
+├── benches/             # Benchmarks Criterion
+└── Cargo.toml
+```
+
+---
+
+## 📝 Licença
+
+MIT License - Veja [LICENSE](LICENSE) para detalhes.

@@ -5,12 +5,11 @@
 use chrono::Datelike;
 use rand::seq::SliceRandom;
 
-use crate::types::{SerpQuery, TopicCategory};
 use super::{
-    CognitivePersona, QueryContext,
-    extract_main_topic, negate_assumption,
-    translate_to_german, translate_to_japanese, translate_to_italian, translate_to_french,
+    extract_main_topic, negate_assumption, translate_to_french, translate_to_german,
+    translate_to_italian, translate_to_japanese, CognitivePersona, QueryContext,
 };
+use crate::types::{SerpQuery, TopicCategory};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 1. EXPERT SKEPTIC
@@ -26,7 +25,9 @@ use super::{
 pub struct ExpertSkeptic;
 
 impl CognitivePersona for ExpertSkeptic {
-    fn name(&self) -> &'static str { "Expert Skeptic" }
+    fn name(&self) -> &'static str {
+        "Expert Skeptic"
+    }
 
     fn focus(&self) -> &'static str {
         "edge cases, limitations, counter-evidence, potential failures"
@@ -62,7 +63,9 @@ impl CognitivePersona for ExpertSkeptic {
 pub struct DetailAnalyst;
 
 impl CognitivePersona for DetailAnalyst {
-    fn name(&self) -> &'static str { "Detail Analyst" }
+    fn name(&self) -> &'static str {
+        "Detail Analyst"
+    }
 
     fn focus(&self) -> &'static str {
         "precise specifications, technical details, exact parameters"
@@ -93,7 +96,9 @@ impl CognitivePersona for DetailAnalyst {
 pub struct HistoricalResearcher;
 
 impl CognitivePersona for HistoricalResearcher {
-    fn name(&self) -> &'static str { "Historical Researcher" }
+    fn name(&self) -> &'static str {
+        "Historical Researcher"
+    }
 
     fn focus(&self) -> &'static str {
         "evolution over time, previous iterations, historical context"
@@ -105,7 +110,7 @@ impl CognitivePersona for HistoricalResearcher {
 
         SerpQuery {
             q: format!("{} history evolution {} changes", topic, year - 5),
-            tbs: Some("qdr:y".into()),  // Último ano
+            tbs: Some("qdr:y".into()), // Último ano
             location: None,
         }
     }
@@ -125,7 +130,9 @@ impl CognitivePersona for HistoricalResearcher {
 pub struct ComparativeThinker;
 
 impl CognitivePersona for ComparativeThinker {
-    fn name(&self) -> &'static str { "Comparative Thinker" }
+    fn name(&self) -> &'static str {
+        "Comparative Thinker"
+    }
 
     fn focus(&self) -> &'static str {
         "alternatives, competitors, contrasts, trade-offs"
@@ -156,7 +163,9 @@ impl CognitivePersona for ComparativeThinker {
 pub struct TemporalContext;
 
 impl CognitivePersona for TemporalContext {
-    fn name(&self) -> &'static str { "Temporal Context" }
+    fn name(&self) -> &'static str {
+        "Temporal Context"
+    }
 
     fn focus(&self) -> &'static str {
         "time-sensitive queries, recency, current state"
@@ -169,13 +178,13 @@ impl CognitivePersona for TemporalContext {
 
         SerpQuery {
             q: format!("{} {} {}", topic, year, month),
-            tbs: Some("qdr:m".into()),  // Último mês
+            tbs: Some("qdr:m".into()), // Último mês
             location: None,
         }
     }
 
     fn weight(&self) -> f32 {
-        1.2  // Peso maior para informações recentes
+        1.2 // Peso maior para informações recentes
     }
 }
 
@@ -193,7 +202,9 @@ impl CognitivePersona for TemporalContext {
 pub struct Globalizer;
 
 impl CognitivePersona for Globalizer {
-    fn name(&self) -> &'static str { "Globalizer" }
+    fn name(&self) -> &'static str {
+        "Globalizer"
+    }
 
     fn focus(&self) -> &'static str {
         "authoritative language/region for the subject matter"
@@ -208,27 +219,17 @@ impl CognitivePersona for Globalizer {
                 "Toyota" | "Honda" | "Nissan" | "Mazda" | "Subaru" => {
                     (translate_to_japanese(original), Some("Japan"))
                 }
-                _ => (original.to_string(), None)
+                _ => (original.to_string(), None),
             },
-            TopicCategory::Technology => {
-                (original.to_string(), Some("San Francisco"))
-            },
+            TopicCategory::Technology => (original.to_string(), Some("San Francisco")),
             TopicCategory::Cuisine(cuisine) => match cuisine.as_str() {
-                "Italian" | "Pizza" | "Pasta" => {
-                    (translate_to_italian(original), Some("Italy"))
-                }
-                "French" | "Croissant" | "Wine" => {
-                    (translate_to_french(original), Some("France"))
-                }
-                "Japanese" | "Sushi" | "Ramen" => {
-                    (translate_to_japanese(original), Some("Japan"))
-                }
-                _ => (original.to_string(), None)
+                "Italian" | "Pizza" | "Pasta" => (translate_to_italian(original), Some("Italy")),
+                "French" | "Croissant" | "Wine" => (translate_to_french(original), Some("France")),
+                "Japanese" | "Sushi" | "Ramen" => (translate_to_japanese(original), Some("Japan")),
+                _ => (original.to_string(), None),
             },
-            TopicCategory::Finance => {
-                (original.to_string(), Some("New York"))
-            },
-            _ => (original.to_string(), None)
+            TopicCategory::Finance => (original.to_string(), Some("New York")),
+            _ => (original.to_string(), None),
         };
 
         SerpQuery {
@@ -253,7 +254,9 @@ impl CognitivePersona for Globalizer {
 pub struct RealitySkepticalist;
 
 impl CognitivePersona for RealitySkepticalist {
-    fn name(&self) -> &'static str { "Reality Skepticalist" }
+    fn name(&self) -> &'static str {
+        "Reality Skepticalist"
+    }
 
     fn focus(&self) -> &'static str {
         "contradicting evidence, disprove assumptions, contrary perspectives"
@@ -281,6 +284,7 @@ mod tests {
 
     fn default_context() -> QueryContext {
         QueryContext {
+            execution_id: uuid::Uuid::new_v4(),
             original_query: "test query".into(),
             user_intent: String::new(),
             soundbites: vec![],
@@ -299,11 +303,11 @@ mod tests {
         assert!(query.q.contains("rust programming"));
         // Deve conter um termo cético
         assert!(
-            query.q.contains("problems") ||
-            query.q.contains("issues") ||
-            query.q.contains("failures") ||
-            query.q.contains("limitations") ||
-            query.q.contains("drawbacks")
+            query.q.contains("problems")
+                || query.q.contains("issues")
+                || query.q.contains("failures")
+                || query.q.contains("limitations")
+                || query.q.contains("drawbacks")
         );
     }
 
@@ -367,6 +371,8 @@ mod tests {
         let ctx = default_context();
         let query = persona.expand_query("best programming language", &ctx);
 
-        assert!(query.q.contains("worst") || query.q.contains("debunked") || query.q.contains("wrong"));
+        assert!(
+            query.q.contains("worst") || query.q.contains("debunked") || query.q.contains("wrong")
+        );
     }
 }
