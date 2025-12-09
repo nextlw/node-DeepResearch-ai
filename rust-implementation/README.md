@@ -21,6 +21,7 @@
   - [Tela de Erro](#-tela-de-erro)
   - [Mapa de Cores](#-mapa-de-cores-da-interface)
   - [Diagnóstico](#-diagnóstico-e-troubleshooting)
+  - [Comandos de Desenvolvimento](#comandos-de-desenvolvimento)
 - [Ações do Agente](#-ações-do-agente)
 - [Eventos](#-eventos)
 - [Configuração](#-configuração)
@@ -823,6 +824,47 @@ done
 # Logs TXT (mais legível)
 less logs/$(ls -t logs/ | head -1)
 ```
+
+#### Comandos de Desenvolvimento
+
+##### Listar Dead Code Warnings
+
+Comandos úteis para identificar código não utilizado durante o desenvolvimento:
+
+```bash
+# Listar todos os warnings (incluindo dead code)
+cargo check --lib 2>&1 | grep "warning:"
+
+# Listar apenas dead code warnings específicos
+# Campos não usados
+cargo check --lib 2>&1 | grep "never read"
+
+# Variáveis não usadas
+cargo check --lib 2>&1 | grep "never used"
+
+# Structs/funções não construídas
+cargo check --lib 2>&1 | grep "never constructed"
+
+# Imports não usados
+cargo check --lib 2>&1 | grep "unused import"
+
+# Listar todos os dead code warnings de uma vez
+cargo check --lib 2>&1 | grep -E "(never used|never read|never constructed|unused import|dead_code)"
+
+# Ver warnings com contexto (arquivo e linha)
+cargo check --lib 2>&1 | grep -A 3 "warning:.*never"
+
+# Contar quantos warnings de dead code existem
+cargo check --lib 2>&1 | grep -c "never"
+
+# Ver todos os warnings formatados
+cargo check --lib 2>&1 | grep -B 1 -A 2 "warning:"
+
+# Salvar warnings em arquivo
+cargo check --lib 2>&1 | grep "warning:" > dead_code_warnings.txt
+```
+
+**Nota:** Esses comandos são úteis para manter o código limpo e identificar código que pode ser removido ou precisa ser usado.
 
 ---
 
