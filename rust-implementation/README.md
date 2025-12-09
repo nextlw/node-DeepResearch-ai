@@ -10,11 +10,13 @@
 - [Instalação](#-instalação)
 - [Comandos CLI](#-comandos-cli)
 - [Atalhos TUI](#-atalhos-tui)
+- [Navegação por Tabs](#-navegação-por-tabs)
 - [Interface TUI](#-interface-tui)
   - [Guia de Análise](#tui-guide--guia-de-análise-da-interface)
   - [Tela de Input](#-tela-1-input-entrada-de-pergunta)
   - [Tela de Research](#-tela-2-research-pesquisa-em-andamento)
   - [Tela de Result](#-tela-3-result-resultado-final)
+  - [Tela de Config](#-tela-4-config-configurações)
   - [Tela de Erro](#-tela-de-erro)
   - [Mapa de Cores](#-mapa-de-cores-da-interface)
   - [Diagnóstico](#-diagnóstico-e-troubleshooting)
@@ -107,6 +109,8 @@ deep-research-cli --compare-live "Qual é a linguagem de programação mais usad
 | ----------- | ----------------------------- |
 | `Enter`     | Iniciar pesquisa              |
 | `Esc`       | Sair da aplicação             |
+| `Tab`       | Alternar entre tabs           |
+| `1` / `2`   | Ir para tab específica        |
 | `Char`      | Digitar caractere             |
 | `Backspace` | Apagar caractere anterior     |
 | `Delete`    | Apagar caractere atual        |
@@ -118,29 +122,85 @@ deep-research-cli --compare-live "Qual é a linguagem de programação mais usad
 
 ### `[research]` Tela de Pesquisa
 
-| Tecla       | Ação                     |
-| ----------- | ------------------------ |
-| `q` / `Esc` | Sair da aplicação        |
-| `↑` / `k`   | Scroll para cima (logs)  |
-| `↓` / `j`   | Scroll para baixo (logs) |
-| `PageUp`    | Scroll 5 linhas acima    |
-| `PageDown`  | Scroll 5 linhas abaixo   |
-| `🖱️ Scroll` | Scroll com roda do mouse |
+| Tecla       | Ação                        |
+| ----------- | --------------------------- |
+| `q` / `Esc` | Sair da aplicação           |
+| `1` / `2`   | Ir para tab específica      |
+| `r`         | Ver resultado (se completo) |
+| `↑` / `k`   | Scroll para cima (logs)     |
+| `↓` / `j`   | Scroll para baixo (logs)    |
+| `PageUp`    | Scroll 5 linhas acima       |
+| `PageDown`  | Scroll 5 linhas abaixo      |
+| `🖱️ Scroll` | Scroll com roda do mouse    |
 
 ### `[result]` Tela de Resultado
 
-| Tecla       | Ação                             |
-| ----------- | -------------------------------- |
-| `Enter`     | Nova pesquisa (reset)            |
-| `q` / `Esc` | Sair da aplicação                |
-| `↑` / `k`   | Scroll resposta para cima        |
-| `↓` / `j`   | Scroll resposta para baixo       |
-| `PageUp`    | Page up na resposta              |
-| `PageDown`  | Page down na resposta            |
-| `Home`      | Início da resposta               |
-| `End`       | Fim da resposta                  |
-| `c`         | **Copiar resposta p/ clipboard** |
-| `🖱️ Scroll` | Scroll com roda do mouse         |
+| Tecla       | Ação                              |
+| ----------- | --------------------------------- |
+| `Tab`       | Focar/desfocar input de follow-up |
+| `Enter`     | Enviar follow-up (se focado)      |
+| `q` / `Esc` | Sair (ou desfocar input)          |
+| `1` / `2`   | Ir para tab específica            |
+| `r`         | Alternar para ver logs            |
+| `c`         | **Copiar resposta p/ clipboard**  |
+| `↑` / `k`   | Scroll resposta para cima         |
+| `↓` / `j`   | Scroll resposta para baixo        |
+| `PageUp`    | Page up na resposta               |
+| `PageDown`  | Page down na resposta             |
+| `Home`      | Início da resposta                |
+| `End`       | Fim da resposta                   |
+| `🖱️ Scroll` | Scroll com roda do mouse          |
+
+### `[config]` Tela de Configurações
+
+| Tecla       | Ação                     |
+| ----------- | ------------------------ |
+| `q` / `Esc` | Sair da aplicação        |
+| `Tab`       | Alternar entre tabs      |
+| `1`         | Voltar para tab Pesquisa |
+| `2`         | Tab Configurações        |
+| `Backspace` | Voltar para tab Pesquisa |
+
+---
+
+## 🗂️ Navegação por Tabs
+
+A TUI possui um sistema de navegação por abas (tabs) que permite alternar entre diferentes visões:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  🔍 Pesquisa  │  ⚙️ Configurações                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Tabs Disponíveis
+
+| Tab | Tecla | Descrição |
+| --- | ----- | --------- |
+| 🔍 **Pesquisa** | `1` | Navegação entre Input → Research → Result |
+| ⚙️ **Configurações** | `2` | Visualiza todas as configurações carregadas |
+
+### Comportamento das Tabs
+
+- **Tab Pesquisa** navega entre as 3 telas de fluxo:
+  - `Input` → `Research` → `Result`
+  - Tecla `r` alterna entre Result ↔ Research (ver logs)
+  
+- **Tab Configurações** exibe:
+  - Configurações de Runtime (threads, webreader)
+  - Configurações do LLM (provider, modelo, temperatura)
+  - Configurações do Agente (budget, limites, steps)
+  - Status das API Keys (presença/ausência)
+
+### Follow-up na Tela de Resultado
+
+Após uma pesquisa ser concluída, você pode **continuar a conversa**:
+
+1. Pressione `Tab` para focar o campo de input
+2. Digite sua pergunta de follow-up
+3. Pressione `Enter` para iniciar nova pesquisa
+
+> 💡 A nova pesquisa inicia imediatamente, sem passar pela fila de processamento.
 
 ---
 
@@ -420,6 +480,57 @@ Esta seção explica como interpretar cada elemento visual da TUI.
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+### ⚙️ TELA 4: CONFIG (Configurações)
+
+A tela de configurações exibe todas as configurações carregadas do ambiente.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  🔍 Pesquisa  │  ⚙️ Configurações ◄                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│ ┌─ ⚙️ Runtime ───────────────────────────────────────────────────────────┐  │
+│ │  🧵 Worker Threads:    8                                          ←[A] │  │
+│ │  📖 Web Reader:        native                                          │  │
+│ │  🔑 OpenAI Key:        ✅ Presente                                ←[B] │  │
+│ │  🔑 Jina Key:          ✅ Presente                                     │  │
+│ └─────────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│ ┌─ 🤖 LLM ────────────────────────────────────────────────────────────────┐  │
+│ │  🏢 Provider:          openai                                     ←[C] │  │
+│ │  🧠 Model:             gpt-4.1-mini                                    │  │
+│ │  📐 Embedding:         text-embedding-3-small                     ←[D] │  │
+│ │  🌡️ Temperature:       0.7                                             │  │
+│ │  📊 Max Tokens:        16000                                           │  │
+│ └─────────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│ ┌─ 🕵️ Agent ───────────────────────────────────────────────────────────────┐  │
+│ │  📊 Min Steps:         3                                          ←[E] │  │
+│ │  🔢 Max Steps:         20                                              │  │
+│ │  💰 Max Budget:        1000000 tokens                                  │  │
+│ │  🔗 Max URLs/Step:     10                                              │  │
+│ │  📝 Max Queries/Step:  5                                               │  │
+│ │  ⏱️ Timeout/URL:       30s                                              │  │
+│ └─────────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│            Tab/1 Pesquisa   2 Config   Backspace Voltar   q Sair       ←[F] │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Legenda da Tela de Config:
+
+| Ref   | Elemento         | O Que Mostra                         | Como Analisar                    |
+| ----- | ---------------- | ------------------------------------ | -------------------------------- |
+| `[A]` | Worker Threads   | Número de threads paralelas          | Mais = mais rápido (até limite)  |
+| `[B]` | API Keys         | Status das chaves (✅/❌)             | ❌ = funcionalidade indisponível |
+| `[C]` | Provider/Model   | LLM configurado para uso             | Afeta qualidade e custo          |
+| `[D]` | Embedding Model  | Modelo para embeddings               | Usado em busca semântica         |
+| `[E]` | Agent Limits     | Limites de operação do agente        | Ajuste para controle de custo    |
+| `[F]` | Ajuda            | Atalhos de navegação                 | Use números para trocar tabs     |
 
 ---
 

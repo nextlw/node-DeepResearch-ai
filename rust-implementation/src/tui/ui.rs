@@ -1,10 +1,10 @@
 //! Renderização da interface TUI
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Tabs, Wrap},
     Frame,
 };
 
@@ -16,10 +16,48 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         AppScreen::Input => render_input_screen(frame, app),
         AppScreen::Research => render_research_screen(frame, app),
         AppScreen::Result => render_result_screen(frame, app),
+        AppScreen::Config => render_config_screen(frame, app),
         AppScreen::InputRequired { question_id, question_type, question, options } => {
             render_input_required_screen(frame, app, question_id, question_type, question, options.as_ref());
         }
     }
+}
+
+/// Renderiza a barra de tabs no topo
+fn render_tabs(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    // Títulos das tabs com indicadores de estado
+    let search_title = match &app.screen {
+        AppScreen::Input => "🔍 Pesquisa [Input]",
+        AppScreen::Research => {
+            if app.is_complete {
+                "🔍 Pesquisa [Concluído]"
+            } else {
+                "🔍 Pesquisa [Em andamento...]"
+            }
+        }
+        AppScreen::Result => "🔍 Pesquisa [Resultado]",
+        _ => "🔍 Pesquisa",
+    };
+
+    let titles = vec![search_title, "⚙️  Configurações"];
+
+    let tabs = Tabs::new(titles)
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
+        .select(app.active_tab.index())
+        .style(Style::default().fg(Color::DarkGray))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::UNDERLINED),
+        )
+        .divider(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+
+    frame.render_widget(tabs, area);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -29,17 +67,29 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 fn render_input_screen(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
 
-    // Layout vertical
+    // Layout vertical com tabs
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),   // Tabs
+            Constraint::Min(10),     // Conteúdo
+        ])
+        .split(area);
+
+    // Renderizar tabs
+    render_tabs(frame, app, main_chunks[0]);
+
+    // Layout do conteúdo
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),   // Header/Logo
+            Constraint::Length(6),   // Header/Logo (reduzido)
             Constraint::Length(5),   // Input box
             Constraint::Min(5),      // Histórico
             Constraint::Length(3),   // Ajuda
         ])
-        .margin(2)
-        .split(area);
+        .margin(1)
+        .split(main_chunks[1]);
 
     // Header com logo
     let logo = r#"
@@ -154,10 +204,12 @@ fn render_input_screen(frame: &mut Frame<'_>, app: &App) {
         Span::raw(" Pesquisar  "),
         Span::styled("↑↓", Style::default().fg(Color::Yellow)),
         Span::raw(" Histórico  "),
+        Span::styled("Tab/1-2", Style::default().fg(Color::Cyan)),
+        Span::raw(" Tabs  "),
         Span::styled("Esc/q", Style::default().fg(Color::Red)),
         Span::raw(" Sair"),
     ]))
-    .alignment(ratatui::layout::Alignment::Center)
+    .alignment(Alignment::Center)
     .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(help, chunks[3]);
 }
@@ -167,6 +219,19 @@ fn render_input_screen(frame: &mut Frame<'_>, app: &App) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn render_research_screen(frame: &mut Frame<'_>, app: &App) {
+    // Layout principal com tabs
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),  // Tabs
+            Constraint::Min(10),    // Conteúdo
+        ])
+        .split(frame.area());
+
+    // Renderizar tabs
+    render_tabs(frame, app, main_chunks[0]);
+
+    // Layout do conteúdo
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -174,15 +239,15 @@ fn render_research_screen(frame: &mut Frame<'_>, app: &App) {
             Constraint::Length(8),  // Raciocínio e Ação (em cima)
             Constraint::Min(8),     // Logs e Stats (em baixo)
             Constraint::Length(3),  // Barra de progresso
-            Constraint::Length(3),  // Input do usuário (sempre visível)
+            Constraint::Length(4),  // Input do usuário + ajuda navegação
         ])
-        .split(frame.area());
+        .split(main_chunks[1]);
 
     render_header(frame, app, chunks[0]);
     render_thinking_panel(frame, app, chunks[1]);
     render_main_content(frame, app, chunks[2]);
     render_progress(frame, app, chunks[3]);
-    render_user_input(frame, app, chunks[4]);
+    render_user_input_with_nav(frame, app, chunks[4]);
 }
 
 /// Renderiza o campo de input do usuário (sempre visível durante pesquisa)
@@ -239,6 +304,48 @@ fn render_user_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .style(Style::default().fg(Color::White));
 
     frame.render_widget(input, area);
+}
+
+/// Renderiza o campo de input do usuário com barra de navegação
+fn render_user_input_with_nav(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    // Dividir área entre input e navegação
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),  // Input
+            Constraint::Length(1),  // Navegação
+        ])
+        .split(area);
+
+    // Renderizar input normal
+    render_user_input(frame, app, chunks[0]);
+
+    // Barra de navegação
+    let nav_hint = if app.is_complete {
+        Line::from(vec![
+            Span::styled("r", Style::default().fg(Color::Green)),
+            Span::raw(" Ver resultado  "),
+            Span::styled("1-2", Style::default().fg(Color::Cyan)),
+            Span::raw(" Tabs  "),
+            Span::styled("q", Style::default().fg(Color::Red)),
+            Span::raw(" Sair"),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("1-2", Style::default().fg(Color::Cyan)),
+            Span::raw(" Tabs  "),
+            Span::styled("↑↓", Style::default().fg(Color::Yellow)),
+            Span::raw(" Scroll logs  "),
+            Span::styled("q", Style::default().fg(Color::Red)),
+            Span::raw(" Sair"),
+        ])
+    };
+
+    let nav = Paragraph::new(nav_hint)
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(Color::DarkGray));
+
+    frame.render_widget(nav, chunks[1]);
 }
 
 /// Renderiza o header
@@ -1305,18 +1412,31 @@ fn render_input_required_screen(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
+    // Layout principal com tabs
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),  // Tabs
+            Constraint::Min(10),    // Conteúdo
+        ])
+        .split(frame.area());
+
+    // Renderizar tabs
+    render_tabs(frame, app, main_chunks[0]);
+
+    // Layout do conteúdo
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),   // Header com UUID e JSON path
             Constraint::Min(5),      // Resposta
-            Constraint::Length(5),   // Referências
-            Constraint::Length(5),   // URLs visitadas
-            Constraint::Length(4),   // Stats finais
+            Constraint::Length(4),   // Referências (reduzido)
+            Constraint::Length(4),   // URLs visitadas (reduzido)
+            Constraint::Length(3),   // Stats finais (reduzido)
+            Constraint::Length(3),   // Input para follow-up
             Constraint::Length(2),   // Ajuda
         ])
-        .margin(1)
-        .split(frame.area());
+        .split(main_chunks[1]);
 
     // Header com UUID e caminhos dos arquivos
     let session_id_short = &app.session_id[..8];
@@ -1490,7 +1610,7 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     ]);
 
     let stats = Paragraph::new(stats_text)
-    .alignment(ratatui::layout::Alignment::Center)
+    .alignment(Alignment::Center)
     .block(
         Block::default()
                 .title(" 📊 Estatísticas ")
@@ -1499,15 +1619,20 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
     );
     frame.render_widget(stats, chunks[4]);
 
+    // Campo de input para follow-up
+    render_followup_input(frame, app, chunks[5]);
+
     // Ajuda (com mensagem de clipboard se houver)
     let clipboard_msg = app.clipboard_message.as_deref().unwrap_or("");
     let help = Paragraph::new(Line::from(vec![
-        Span::styled("↑↓/🖱️", Style::default().fg(Color::Yellow)),
+        Span::styled("Tab", Style::default().fg(Color::Yellow)),
+        Span::raw(" Focar input  "),
+        Span::styled("↑↓", Style::default().fg(Color::DarkGray)),
         Span::raw(" Scroll  "),
         Span::styled("c", Style::default().fg(Color::Cyan)),
         Span::raw(" Copiar  "),
-        Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::raw(" Nova  "),
+        Span::styled("r", Style::default().fg(Color::Magenta)),
+        Span::raw(" Logs  "),
         Span::styled("q", Style::default().fg(Color::Red)),
         Span::raw(" Sair"),
         if !clipboard_msg.is_empty() {
@@ -1516,9 +1641,55 @@ fn render_result_screen(frame: &mut Frame<'_>, app: &App) {
             Span::raw("")
         },
     ]))
-    .alignment(ratatui::layout::Alignment::Center)
+    .alignment(Alignment::Center)
     .style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(help, chunks[5]);
+    frame.render_widget(help, chunks[6]);
+}
+
+/// Renderiza o campo de input para follow-up na tela de resultado
+fn render_followup_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let title = " 💬 Continuar conversa │ Tab: focar │ Enter: enviar ";
+
+    // Texto com cursor
+    let chars: Vec<char> = app.input_text.chars().collect();
+    let cursor_pos = app.cursor_pos.min(chars.len());
+    let before: String = chars[..cursor_pos].iter().collect();
+    let after: String = chars[cursor_pos..].iter().collect();
+
+    let input_content = if app.input_text.is_empty() && !app.input_focused {
+        Line::from(vec![
+            Span::styled(
+                "Digite uma pergunta de follow-up ou nova pesquisa...",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::raw(before),
+            Span::styled(
+                if app.input_focused { "│" } else { "" },
+                Style::default().fg(Color::Green).add_modifier(Modifier::RAPID_BLINK),
+            ),
+            Span::raw(after),
+        ])
+    };
+
+    let border_color = if app.input_focused {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
+
+    let input = Paragraph::new(input_content)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color)),
+        )
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(input, area);
 }
 
 /// Trunca uma string para o tamanho máximo
@@ -1530,4 +1701,249 @@ fn truncate(s: &str, max_len: usize) -> String {
     } else {
         s[..max_len].to_string()
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TELA DE CONFIGURAÇÕES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+fn render_config_screen(frame: &mut Frame<'_>, app: &App) {
+    let area = frame.area();
+
+    // Layout principal
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),   // Tabs
+            Constraint::Length(3),   // Header
+            Constraint::Min(10),     // Conteúdo das configs
+            Constraint::Length(2),   // Ajuda
+        ])
+        .split(area);
+
+    // Tabs no topo
+    render_tabs(frame, app, chunks[0]);
+
+    // Header
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(
+            " ⚙️  CONFIGURAÇÕES CARREGADAS ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " │ Carregadas do arquivo .env e variáveis de ambiente",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    frame.render_widget(header, chunks[1]);
+
+    // Área de conteúdo dividida em 3 colunas
+    let content_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(33),  // Runtime
+            Constraint::Percentage(34),  // LLM
+            Constraint::Percentage(33),  // Agent
+        ])
+        .margin(1)
+        .split(chunks[2]);
+
+    // Coluna 1: Runtime Config
+    render_runtime_config(frame, app, content_chunks[0]);
+
+    // Coluna 2: LLM Config
+    render_llm_config(frame, app, content_chunks[1]);
+
+    // Coluna 3: Agent Config
+    render_agent_config(frame, app, content_chunks[2]);
+
+    // Ajuda
+    let help = Paragraph::new(Line::from(vec![
+        Span::styled("Tab/1-2", Style::default().fg(Color::Yellow)),
+        Span::raw(" Navegar tabs  "),
+        Span::styled("Backspace", Style::default().fg(Color::Cyan)),
+        Span::raw(" Voltar  "),
+        Span::styled("q/Esc", Style::default().fg(Color::Red)),
+        Span::raw(" Sair"),
+    ]))
+    .alignment(Alignment::Center)
+    .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(help, chunks[3]);
+}
+
+/// Renderiza configurações do Runtime
+fn render_runtime_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let config = &app.loaded_config;
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" 🚀 RUNTIME ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" Worker Threads: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&config.worker_threads, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Max Threads:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.max_threads), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Blocking:       ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.max_blocking_threads), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" WebReader:      ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&config.webreader, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" ═══ API Keys ═══ ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" OpenAI:  ", Style::default().fg(Color::DarkGray)),
+            if config.openai_key_present {
+                Span::styled("✅ Configurada", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("❌ Não encontrada", Style::default().fg(Color::Red))
+            },
+        ]),
+        Line::from(vec![
+            Span::styled(" Jina:    ", Style::default().fg(Color::DarkGray)),
+            if config.jina_key_present {
+                Span::styled("✅ Configurada", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("❌ Não encontrada", Style::default().fg(Color::Red))
+            },
+        ]),
+    ];
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .title(" 🖥️ Runtime ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow)),
+    );
+
+    frame.render_widget(content, area);
+}
+
+/// Renderiza configurações do LLM
+fn render_llm_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let config = &app.loaded_config;
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" 🤖 LLM ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" Provider:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&config.llm_provider, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Model:       ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&config.llm_model, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Temperature: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{:.2}", config.temperature), Style::default().fg(Color::White)),
+        ]),
+    ];
+
+    // API Base URL se presente
+    if let Some(ref url) = config.api_base_url {
+        lines.push(Line::from(vec![
+            Span::styled(" API Base:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(truncate(url, 20), Style::default().fg(Color::Yellow)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(" ═══ Embeddings ═══ ", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(" Provider:    ", Style::default().fg(Color::DarkGray)),
+        Span::styled(&config.embedding_provider, Style::default().fg(Color::White)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(" Model:       ", Style::default().fg(Color::DarkGray)),
+        Span::styled(&config.embedding_model, Style::default().fg(Color::Cyan)),
+    ]));
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .title(" 🧠 LLM ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta)),
+    );
+
+    frame.render_widget(content, area);
+}
+
+/// Renderiza configurações do Agent
+fn render_agent_config(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let config = &app.loaded_config;
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" 🕵️ AGENT ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" Min Steps:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.min_steps_before_answer), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Direct Answer: ", Style::default().fg(Color::DarkGray)),
+            if config.allow_direct_answer {
+                Span::styled("✅ Sim", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("❌ Não", Style::default().fg(Color::Red))
+            },
+        ]),
+        Line::from(vec![
+            Span::styled(" Token Budget:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.default_token_budget), Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" ═══ Limites ═══ ", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" URLs/Step:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.max_urls_per_step), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Queries/Step:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.max_queries_per_step), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Max Failures:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", config.max_consecutive_failures), Style::default().fg(Color::Yellow)),
+        ]),
+    ];
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .title(" 🤖 Agent ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green)),
+    );
+
+    frame.render_widget(content, area);
 }

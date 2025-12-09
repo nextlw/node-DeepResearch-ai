@@ -129,6 +129,29 @@ pub struct AgentAnalyzerState {
     pub logs: Vec<LogEntry>,
 }
 
+/// Execução de sandbox completada (para histórico)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxExecution {
+    /// Problema/tarefa resolvido
+    pub problem: String,
+    /// Linguagem de programação usada
+    pub language: String,
+    /// Se foi bem-sucedido
+    pub success: bool,
+    /// Número de tentativas
+    pub attempts: usize,
+    /// Tempo de execução em ms
+    pub execution_time_ms: u64,
+    /// Output da execução (se sucesso)
+    pub output: Option<String>,
+    /// Erro da execução (se falha)
+    pub error: Option<String>,
+    /// Preview do código final
+    pub code_preview: String,
+    /// Timestamp de conclusão
+    pub completed_at: String,
+}
+
 /// Estado do Sandbox de execução de código
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SandboxState {
@@ -158,6 +181,9 @@ pub struct SandboxState {
     pub language: String,
     /// Logs específicos do sandbox
     pub logs: Vec<LogEntry>,
+    /// Histórico de execuções completadas
+    #[serde(default)]
+    pub executions: Vec<SandboxExecution>,
 }
 
 impl SandboxState {
@@ -208,7 +234,7 @@ impl SandboxState {
         self.output = output.clone();
         self.error = error.clone();
         self.execution_time_ms = execution_time_ms;
-        self.code_preview = code_preview;
+        self.code_preview = code_preview.clone();
         self.language = language.clone();
 
         let lang_emoji = if language == "Python" { "🐍" } else { "📜" };
@@ -224,6 +250,19 @@ impl SandboxState {
         } else if let Some(e) = &error {
             self.logs.push(LogEntry::new(LogLevel::Error, format!("❌ {} Falhou após {} tentativa(s): {}", lang_emoji, attempts, e)));
         }
+
+        // Salvar no histórico de execuções
+        self.executions.push(SandboxExecution {
+            problem: self.problem.clone(),
+            language,
+            success,
+            attempts,
+            execution_time_ms,
+            output,
+            error,
+            code_preview,
+            completed_at: chrono::Local::now().format("%H:%M:%S").to_string(),
+        });
     }
 
     /// Reseta o estado
@@ -367,6 +406,9 @@ pub struct ResearchSession {
     /// Steps completados
     #[serde(default)]
     pub completed_steps: Vec<CompletedStep>,
+    /// Execuções de sandbox (código executado)
+    #[serde(default)]
+    pub sandbox_executions: Vec<SandboxExecution>,
 }
 
 /// Estatísticas de tempo da sessão
@@ -395,6 +437,75 @@ pub struct SessionStats {
     pub tokens_used: u64,
 }
 
+/// Tab ativa na navegação
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActiveTab {
+    /// Tab de pesquisa (Input/Research/Result)
+    #[default]
+    Search,
+    /// Tab de configurações
+    Config,
+}
+
+impl ActiveTab {
+    /// Retorna o índice da tab (para widget Tabs)
+    pub fn index(&self) -> usize {
+        match self {
+            ActiveTab::Search => 0,
+            ActiveTab::Config => 1,
+        }
+    }
+
+    /// Cria tab a partir do índice
+    pub fn from_index(idx: usize) -> Self {
+        match idx {
+            0 => ActiveTab::Search,
+            1 => ActiveTab::Config,
+            _ => ActiveTab::Search,
+        }
+    }
+
+    /// Próxima tab (cyclic)
+    pub fn next(&self) -> Self {
+        match self {
+            ActiveTab::Search => ActiveTab::Config,
+            ActiveTab::Config => ActiveTab::Search,
+        }
+    }
+
+    /// Tab anterior (cyclic)
+    pub fn prev(&self) -> Self {
+        self.next() // Com 2 tabs, next == prev
+    }
+}
+
+/// Configurações carregadas (snapshot para exibição na TUI)
+#[derive(Debug, Clone, Default)]
+pub struct LoadedConfig {
+    // Runtime
+    pub worker_threads: String,
+    pub max_threads: usize,
+    pub max_blocking_threads: usize,
+    pub webreader: String,
+    // LLM
+    pub llm_provider: String,
+    pub llm_model: String,
+    pub embedding_provider: String,
+    pub embedding_model: String,
+    pub temperature: f32,
+    pub api_base_url: Option<String>,
+    // Agent
+    pub min_steps_before_answer: usize,
+    pub allow_direct_answer: bool,
+    pub default_token_budget: u64,
+    pub max_urls_per_step: usize,
+    pub max_queries_per_step: usize,
+    pub max_consecutive_failures: usize,
+    // API Keys (mascaradas)
+    pub openai_key_present: bool,
+    pub jina_key_present: bool,
+}
+
 /// Estado da tela
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppScreen {
@@ -404,6 +515,8 @@ pub enum AppScreen {
     Research,
     /// Tela de resultado
     Result,
+    /// Tela de configurações
+    Config,
     /// Aguardando input do usuário (pergunta do agente)
     ///
     /// Compatível com OpenAI Responses API (input_required).
@@ -585,6 +698,12 @@ pub struct App {
     pub started_at: String,
     /// Tela atual
     pub screen: AppScreen,
+    /// Tab ativa (para navegação entre seções)
+    pub active_tab: ActiveTab,
+    /// Tela anterior (para navegação entre Result <-> Research)
+    pub previous_screen: Option<AppScreen>,
+    /// Configurações carregadas (para exibição)
+    pub loaded_config: LoadedConfig,
     /// Texto sendo digitado
     pub input_text: String,
     /// Posição do cursor no input
@@ -695,6 +814,9 @@ impl App {
             session_id: Uuid::new_v4().to_string(),
             started_at: chrono::Local::now().to_rfc3339(),
             screen: AppScreen::Input,
+            active_tab: ActiveTab::Search,
+            previous_screen: None,
+            loaded_config: LoadedConfig::default(),
             input_text: String::new(),
             cursor_pos: 0,
             question: String::new(),
@@ -741,6 +863,89 @@ impl App {
         app
     }
 
+    /// Define as configurações carregadas (chamado pelo main)
+    pub fn set_loaded_config(&mut self, config: LoadedConfig) {
+        self.loaded_config = config;
+    }
+
+    /// Navega para a próxima tab
+    pub fn next_tab(&mut self) {
+        self.active_tab = self.active_tab.next();
+        self.sync_screen_with_tab();
+    }
+
+    /// Navega para a tab anterior
+    pub fn prev_tab(&mut self) {
+        self.active_tab = self.active_tab.prev();
+        self.sync_screen_with_tab();
+    }
+
+    /// Vai para tab específica
+    pub fn go_to_tab(&mut self, tab: ActiveTab) {
+        self.active_tab = tab;
+        self.sync_screen_with_tab();
+    }
+
+    /// Sincroniza a tela com a tab ativa
+    fn sync_screen_with_tab(&mut self) {
+        match self.active_tab {
+            ActiveTab::Search => {
+                // Voltar para tela de pesquisa apropriada
+                if let Some(prev) = &self.previous_screen {
+                    match prev {
+                        AppScreen::Result => {
+                            if self.is_complete {
+                                self.screen = AppScreen::Result;
+                            } else {
+                                self.screen = AppScreen::Research;
+                            }
+                        }
+                        AppScreen::Research => self.screen = AppScreen::Research,
+                        _ => {
+                            // Se estava em Input ou Config, decide baseado no estado
+                            if self.is_complete && self.answer.is_some() {
+                                self.screen = AppScreen::Result;
+                            } else if self.start_time.is_some() {
+                                self.screen = AppScreen::Research;
+                            } else {
+                                self.screen = AppScreen::Input;
+                            }
+                        }
+                    }
+                } else {
+                    // Sem tela anterior, decide baseado no estado
+                    if self.is_complete && self.answer.is_some() {
+                        self.screen = AppScreen::Result;
+                    } else if self.start_time.is_some() {
+                        self.screen = AppScreen::Research;
+                    } else {
+                        self.screen = AppScreen::Input;
+                    }
+                }
+            }
+            ActiveTab::Config => {
+                // Salvar tela atual antes de ir para Config
+                if self.screen != AppScreen::Config {
+                    self.previous_screen = Some(self.screen.clone());
+                }
+                self.screen = AppScreen::Config;
+            }
+        }
+    }
+
+    /// Alterna entre Result e Research (quando pesquisa completa)
+    pub fn toggle_result_research(&mut self) {
+        match self.screen {
+            AppScreen::Result => {
+                self.screen = AppScreen::Research;
+            }
+            AppScreen::Research if self.is_complete => {
+                self.screen = AppScreen::Result;
+            }
+            _ => {}
+        }
+    }
+
     /// Cria app com pergunta pré-definida
     pub fn with_question(question: String) -> Self {
         let mut app = Self::new();
@@ -748,6 +953,7 @@ impl App {
         app.started_at = chrono::Local::now().to_rfc3339();
         app.question = question;
         app.screen = AppScreen::Research;
+        app.active_tab = ActiveTab::Search;
         app.start_time = Some(Instant::now());
         app
     }
@@ -1239,6 +1445,8 @@ impl App {
         self.session_id = Uuid::new_v4().to_string();
         self.started_at = chrono::Local::now().to_rfc3339();
         self.screen = AppScreen::Input;
+        self.active_tab = ActiveTab::Search;
+        self.previous_screen = None;
         self.question.clear();
         self.current_step = 0;
         self.current_action = "Aguardando...".into();
@@ -1320,6 +1528,7 @@ impl App {
             parallel_batches: self.completed_batches.clone(),
             all_tasks: self.all_tasks.clone(),
             completed_steps: self.completed_steps.clone(),
+            sandbox_executions: self.sandbox.executions.clone(),
         }
     }
 
@@ -1511,6 +1720,40 @@ impl App {
                 if !task.data_info.is_empty() {
                     output.push_str(&format!("    Dados: {}\n", task.data_info));
                 }
+            }
+        }
+
+        // Execuções de Sandbox
+        if !self.sandbox.executions.is_empty() {
+            output.push_str("\n───────────────────────────────────────────────────────────────────\n");
+            output.push_str(" EXECUÇÕES DE CÓDIGO (SANDBOX)\n");
+            output.push_str("───────────────────────────────────────────────────────────────────\n\n");
+            for (i, exec) in self.sandbox.executions.iter().enumerate() {
+                let status = if exec.success { "✅" } else { "❌" };
+                let lang_emoji = if exec.language == "Python" { "🐍" } else { "📜" };
+                output.push_str(&format!("{} {} Execução #{} [{}] - {}\n",
+                    status, lang_emoji, i + 1, exec.completed_at, exec.language));
+                output.push_str(&format!("   Problema: {}\n",
+                    if exec.problem.len() > 80 { format!("{}...", &exec.problem[..77]) } else { exec.problem.clone() }));
+                output.push_str(&format!("   Tentativas: {} | Tempo: {}ms\n",
+                    exec.attempts, exec.execution_time_ms));
+                if let Some(out) = &exec.output {
+                    let out_preview = if out.len() > 100 { format!("{}...", &out[..97]) } else { out.clone() };
+                    output.push_str(&format!("   Output: {}\n", out_preview));
+                }
+                if let Some(err) = &exec.error {
+                    output.push_str(&format!("   Erro: {}\n", err));
+                }
+                if !exec.code_preview.is_empty() {
+                    output.push_str("   Código:\n");
+                    for line in exec.code_preview.lines().take(5) {
+                        output.push_str(&format!("      {}\n", line));
+                    }
+                    if exec.code_preview.lines().count() > 5 {
+                        output.push_str("      ...\n");
+                    }
+                }
+                output.push_str("\n");
             }
         }
 

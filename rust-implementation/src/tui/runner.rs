@@ -206,6 +206,25 @@ fn run_app(
                             }
                             _ => {}
                         },
+
+                        // Tela de configurações
+                        AppScreen::Config => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => {
+                                app.should_quit = true;
+                                return Ok(());
+                            }
+                            KeyCode::Backspace | KeyCode::Tab => {
+                                // Voltar para pesquisa
+                                app.go_to_tab(super::app::ActiveTab::Search);
+                            }
+                            KeyCode::Char('1') => {
+                                app.go_to_tab(super::app::ActiveTab::Search);
+                            }
+                            KeyCode::Char('2') => {
+                                // Já está em Config
+                            }
+                            _ => {}
+                        },
                     }
                 }
 

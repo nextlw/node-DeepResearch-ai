@@ -445,6 +445,42 @@ async fn run_comparison_mode(urls_arg: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Cria LoadedConfig a partir das configurações globais
+fn create_loaded_config() -> deep_research::tui::LoadedConfig {
+    use deep_research::tui::LoadedConfig;
+
+    let runtime = get_runtime_config();
+    let llm = get_llm_config();
+    let agent = get_agent_config();
+
+    LoadedConfig {
+        // Runtime
+        worker_threads: runtime.worker_threads
+            .map(|w| format!("{}", w))
+            .unwrap_or_else(|| format!("auto ({})", runtime.effective_worker_threads())),
+        max_threads: runtime.max_threads,
+        max_blocking_threads: runtime.max_blocking_threads,
+        webreader: format!("{:?}", runtime.webreader),
+        // LLM
+        llm_provider: format!("{:?}", llm.provider),
+        llm_model: llm.model.clone(),
+        embedding_provider: format!("{:?}", llm.embedding_provider),
+        embedding_model: llm.active_embedding_model().to_string().clone(),
+        temperature: llm.default_temperature,
+        api_base_url: llm.api_base_url.clone(),
+        // Agent
+        min_steps_before_answer: agent.min_steps_before_answer,
+        allow_direct_answer: agent.allow_direct_answer,
+        default_token_budget: agent.default_token_budget,
+        max_urls_per_step: agent.max_urls_per_step,
+        max_queries_per_step: agent.max_queries_per_step,
+        max_consecutive_failures: agent.max_consecutive_failures,
+        // API Keys (verificar presença)
+        openai_key_present: std::env::var("OPENAI_API_KEY").is_ok(),
+        jina_key_present: std::env::var("JINA_API_KEY").is_ok(),
+    }
+}
+
 /// Executa o modo TUI interativo
 async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
     use crossterm::{
@@ -452,7 +488,7 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     };
-    use deep_research::tui::{App, AppScreen};
+    use deep_research::tui::{App, AppScreen, ActiveTab};
     use deep_research::agent::UserResponse;
     use ratatui::{backend::CrosstermBackend, Terminal};
     use std::io;
@@ -482,6 +518,9 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
     } else {
         App::with_question(question.to_string())
     };
+
+    // Carregar configurações para exibição
+    app.set_loaded_config(create_loaded_config());
 
     // Canal para eventos da TUI
     let (tx, rx) = create_event_channel();
@@ -544,6 +583,15 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                                         ));
                                     }
                                 }
+                                KeyCode::Esc => {
+                                    app.should_quit = true;
+                                    break;
+                                }
+                                // Navegação por tabs (antes do Char genérico)
+                                KeyCode::Tab => app.next_tab(),
+                                KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                // Caso genérico para caracteres (input de texto)
                                 KeyCode::Char(c) => app.input_char(c),
                                 KeyCode::Backspace => app.input_backspace(),
                                 KeyCode::Delete => app.input_delete(),
@@ -553,10 +601,6 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                                 KeyCode::End => app.cursor_end(),
                                 KeyCode::Up => app.history_up(),
                                 KeyCode::Down => app.history_down(),
-                                KeyCode::Esc => {
-                                    app.should_quit = true;
-                                    break;
-                                }
                                 _ => {}
                             }
                         }
@@ -609,6 +653,13 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                                         // Focar no input
                                         app.focus_input();
                                     }
+                                    // Navegação por tabs (números)
+                                    KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                    KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                    // Alternar entre Research e Result quando concluído
+                                    KeyCode::Char('r') if app.is_complete => {
+                                        app.toggle_result_research();
+                                    }
                                     KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
                                     KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
                                     KeyCode::PageUp => {
@@ -626,21 +677,105 @@ async fn run_tui_mode(question: &str) -> anyhow::Result<()> {
                             }
                         }
                         AppScreen::Result => {
-                            match key.code {
-                                KeyCode::Enter => {
-                                    app.reset();
+                            // Se o input está focado, processar digitação
+                            if app.input_focused {
+                                match key.code {
+                                    KeyCode::Tab | KeyCode::Esc => {
+                                        // Desfocar input
+                                        app.unfocus_input();
+                                    }
+                                    KeyCode::Enter => {
+                                        // Iniciar nova pesquisa com o texto digitado
+                                        if !app.input_text.is_empty() {
+                                            let q = app.input_text.clone();
+                                            app.reset();
+                                            app.input_text = q.clone();
+                                            app.start_research();
+
+                                            // Criar novo canal para resposta do usuário
+                                            let (new_tx, new_rx) = tokio::sync::mpsc::channel::<UserResponse>(16);
+                                            user_response_tx = Some(new_tx);
+
+                                            agent_task = Some(spawn_research_task(
+                                                q,
+                                                openai_key.clone(),
+                                                jina_key.clone(),
+                                                tx.clone(),
+                                                new_rx,
+                                            ));
+                                        }
+                                    }
+                                    KeyCode::Char(c) => app.input_char(c),
+                                    KeyCode::Backspace => app.input_backspace(),
+                                    KeyCode::Delete => app.input_delete(),
+                                    KeyCode::Left => app.cursor_left(),
+                                    KeyCode::Right => app.cursor_right(),
+                                    KeyCode::Home => app.cursor_home(),
+                                    KeyCode::End => app.cursor_end(),
+                                    _ => {}
                                 }
+                            } else {
+                                // Input não focado - navegação normal
+                                match key.code {
+                                    KeyCode::Char('q') => {
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Esc => {
+                                        app.should_quit = true;
+                                        break;
+                                    }
+                                    KeyCode::Tab => {
+                                        // Focar no input para follow-up
+                                        app.focus_input();
+                                    }
+                                    // Navegação por tabs
+                                    KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                    KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                    // Alternar para ver logs da pesquisa
+                                    KeyCode::Char('r') => app.toggle_result_research(),
+                                    // Copiar resposta
+                                    KeyCode::Char('c') => {
+                                        if let Some(answer) = &app.answer {
+                                            // Tentar copiar para clipboard
+                                            #[cfg(feature = "clipboard")]
+                                            {
+                                                if let Ok(mut ctx) = arboard::Clipboard::new() {
+                                                    if ctx.set_text(answer.clone()).is_ok() {
+                                                        app.clipboard_message = Some("✅ Copiado!".to_string());
+                                                    }
+                                                }
+                                            }
+                                            #[cfg(not(feature = "clipboard"))]
+                                            {
+                                                app.clipboard_message = Some("📋 Clipboard não disponível".to_string());
+                                            }
+                                        }
+                                    }
+                                    // Scroll na resposta
+                                    KeyCode::Up | KeyCode::Char('k') => app.result_scroll_up(),
+                                    KeyCode::Down | KeyCode::Char('j') => app.result_scroll_down(),
+                                    KeyCode::PageUp => app.result_page_up(),
+                                    KeyCode::PageDown => app.result_page_down(),
+                                    KeyCode::Home => app.result_scroll = 0,
+                                    KeyCode::End => app.result_scroll = usize::MAX,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        // Tela de configurações
+                        AppScreen::Config => {
+                            match key.code {
                                 KeyCode::Char('q') | KeyCode::Esc => {
                                     app.should_quit = true;
                                     break;
                                 }
-                                // Scroll na resposta
-                                KeyCode::Up | KeyCode::Char('k') => app.result_scroll_up(),
-                                KeyCode::Down | KeyCode::Char('j') => app.result_scroll_down(),
-                                KeyCode::PageUp => app.result_page_up(),
-                                KeyCode::PageDown => app.result_page_down(),
-                                KeyCode::Home => app.result_scroll = 0,
-                                KeyCode::End => app.result_scroll = usize::MAX,
+                                // Navegação por tabs
+                                KeyCode::Tab => app.next_tab(),
+                                KeyCode::Char('1') => app.go_to_tab(ActiveTab::Search),
+                                KeyCode::Char('2') => app.go_to_tab(ActiveTab::Config),
+                                // Backspace volta para tela anterior
+                                KeyCode::Backspace => app.go_to_tab(ActiveTab::Search),
                                 _ => {}
                             }
                         }
