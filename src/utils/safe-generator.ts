@@ -8,8 +8,14 @@ import {
 } from "ai";
 import { TokenTracker } from "./token-tracker";
 import { getModel, ToolName, getToolConfig } from "../config";
-import Hjson from 'hjson'; // Import Hjson library
+import Hjson from 'hjson';
 import { logError, logDebug, logWarning } from '../logging';
+
+// Dynamic import for ESM module
+const getJsonRepair = async () => {
+  const { jsonrepair } = await import('jsonrepair');
+  return jsonrepair;
+};
 
 interface GenerateObjectResult<T> {
   object: T;
@@ -154,6 +160,13 @@ export class ObjectGeneratorSafe {
         messages,
         maxTokens: getToolConfig(model).maxTokens,
         temperature: getToolConfig(model).temperature,
+        providerOptions: {
+          google: {
+            thinkingConfig: {
+              thinkingBudget: 0  // Disable Gemini's built-in thinking to avoid conflict with our schema's think field
+            }
+          }
+        }
       });
 
       this.tokenTracker.trackUsage(model, result.usage);
@@ -200,6 +213,13 @@ export class ObjectGeneratorSafe {
               schema: distilledSchema,
               prompt: `Following the given JSON schema, extract the field from below: \n\n ${failedOutput}`,
               temperature: getToolConfig('fallback').temperature,
+              providerOptions: {
+                google: {
+                  thinkingConfig: {
+                    thinkingBudget: 0
+                  }
+                }
+              }
             });
 
             this.tokenTracker.trackUsage('fallback', fallbackResult.usage); // Track against fallback model
@@ -224,26 +244,40 @@ export class ObjectGeneratorSafe {
   private async handleGenerateObjectError<T>(error: unknown): Promise<GenerateObjectResult<T>> {
     if (NoObjectGeneratedError.isInstance(error)) {
       logWarning('Object not generated according to schema, fallback to manual parsing', { error });
+      const rawText = (error as any).text;
+
+      // 1. First try standard JSON parsing
       try {
-        // First try standard JSON parsing
-        const partialResponse = JSON.parse((error as any).text);
+        const partialResponse = JSON.parse(rawText);
         logDebug('JSON parse success!');
         return {
           object: partialResponse as T,
           usage: (error as any).usage
         };
-      } catch (parseError) {
-        // Use Hjson to parse the error response for more lenient parsing
+      } catch (jsonError) {
+        // 2. Try jsonrepair to fix truncated/malformed JSON
         try {
-          const hjsonResponse = Hjson.parse((error as any).text);
-          logDebug('Hjson parse success!');
+          const jsonrepair = await getJsonRepair();
+          const repairedJson = jsonrepair(rawText);
+          const repairedResponse = JSON.parse(repairedJson);
+          logDebug('jsonrepair parse success!');
           return {
-            object: hjsonResponse as T,
+            object: repairedResponse as T,
             usage: (error as any).usage
           };
-        } catch (hjsonError) {
-          logError('Both JSON and Hjson parsing failed:', { error: hjsonError });
-          throw error;
+        } catch (repairError) {
+          // 3. Try Hjson for lenient parsing (trailing commas, comments, etc.)
+          try {
+            const hjsonResponse = Hjson.parse(rawText);
+            logDebug('Hjson parse success!');
+            return {
+              object: hjsonResponse as T,
+              usage: (error as any).usage
+            };
+          } catch (hjsonError) {
+            logError('All JSON parsing attempts failed (JSON, jsonrepair, Hjson):', { error: hjsonError });
+            throw error;
+          }
         }
       }
     }

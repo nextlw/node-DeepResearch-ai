@@ -194,6 +194,18 @@ const extractUrlParts = (urlStr: string) => {
 };
 
 export const normalizeHostName = (hostStr: string) => {
+  // Handle wildcard patterns like *.medium.com
+  if (hostStr.startsWith('*.')) {
+    hostStr = hostStr.slice(2);
+  }
+
+  // If it doesn't look like a URL (no protocol), just clean up the hostname directly
+  if (!hostStr.includes('://')) {
+    const cleaned = hostStr.startsWith('www.') ? hostStr.slice(4) : hostStr;
+    return cleaned.toLowerCase();
+  }
+
+  // Try to parse as URL
   const extract = extractUrlParts(hostStr);
   const host = extract.hostname;
   if (!host) {

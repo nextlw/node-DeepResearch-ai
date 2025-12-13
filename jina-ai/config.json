@@ -34,31 +34,35 @@
   "models": {
     "gemini": {
       "default": {
-        "model": "gemini-2.5-flash",
+        "model": "gemini-2.5-flash-lite",
         "temperature": 0.6,
         "maxTokens": 8000
       },
       "tools": {
         "coder": {
-          "maxTokens": 2000,
-          "model": "gemini-2.5-flash-lite"
+          "maxTokens": 2000
         },
         "researchPlanner": {},
         "evaluator": {
           "maxTokens": 2000
         },
-        "serpCluster": {},
+        "serpCluster": {
+          "maxTokens": 4000
+        },
         "errorAnalyzer": {
-          "maxTokens": 1000
+          "maxTokens": 4000
         },
         "queryRewriter": {
-          "maxTokens": 2000
+          "maxTokens": 4000
         },
-        "agent": {},
-        "agentBeastMode": {},
+        "agent": {
+          "model": "gemini-2.5-flash"
+        },
+        "agentBeastMode": {
+          "model": "gemini-2.5-flash"
+        },
         "fallback": {
-          "maxTokens": 8000,
-          "model": "gemini-2.5-flash-lite"
+          "maxTokens": 8000
         },
         "finalizer": {},
         "reducer": {

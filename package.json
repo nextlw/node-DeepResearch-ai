@@ -40,6 +40,7 @@
     "express-validator": "^7.2.1",
     "hjson": "^3.2.2",
     "jsdom": "^26.0.0",
+    "jsonrepair": "^3.13.1",
     "node-fetch": "^3.3.2",
     "sharp": "^0.34.2",
     "undici": "^7.3.0",
