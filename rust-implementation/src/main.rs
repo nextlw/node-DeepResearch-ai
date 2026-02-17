@@ -94,6 +94,7 @@ fn main() -> anyhow::Result<()> {
     // Parse argumentos ANTES de inicializar logging
     let args: Vec<String> = std::env::args().collect();
     let is_tui_mode = args.len() >= 2 && args[1] == "--tui";
+    let is_server_mode = args.iter().any(|a| a == "--server");
 
     // Inicializar logging apenas se NÃO for modo TUI
     // (TUI não funciona com env_logger pois corrompe a tela)
@@ -149,7 +150,7 @@ fn main() -> anyhow::Result<()> {
     let runtime = create_tokio_runtime(&config)?;
 
     // Executar main async dentro do runtime customizado
-    runtime.block_on(async_main(args, is_tui_mode))
+    runtime.block_on(async_main(args, is_tui_mode, is_server_mode))
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -652,6 +653,9 @@ fn show_help(program_name: &str) {
     println!();
     println!("Opções:");
     println!("  --tui [pergunta]      Modo TUI interativo (com campo de texto)");
+    println!("  --server              Inicia servidor HTTP com API OpenAI-compatível");
+    println!("  --port=<porta>        Porta do servidor (padrão: 3000, requer --server)");
+    println!("  --secret=<token>      Token Bearer para autenticação (requer --server)");
     println!("  --budget <tokens>     Budget máximo de tokens (padrão: 1000000)");
     println!("  --compare <urls>      Comparar Jina Reader vs Rust+OpenAI (URLs separadas por vírgula)");
     println!("  --compare-live        Habilita comparação Jina vs Rust durante pesquisa");
@@ -670,7 +674,19 @@ fn show_help(program_name: &str) {
     println!("  cargo build --release --features qdrant         # Com Qdrant");
 }
 
-async fn async_main(args: Vec<String>, is_tui_mode: bool) -> anyhow::Result<()> {
+async fn async_main(args: Vec<String>, is_tui_mode: bool, is_server_mode: bool) -> anyhow::Result<()> {
+
+    // Modo servidor HTTP
+    #[cfg(feature = "server")]
+    if is_server_mode {
+        return run_server_mode(&args).await;
+    }
+    #[cfg(not(feature = "server"))]
+    if is_server_mode {
+        eprintln!("Erro: feature 'server' não está habilitada.");
+        eprintln!("Recompile com: cargo build --features server");
+        std::process::exit(1);
+    }
 
     // Se não tem argumentos, mostra o menu launcher
     if args.len() < 2 {
@@ -752,6 +768,69 @@ async fn async_main(args: Vec<String>, is_tui_mode: bool) -> anyhow::Result<()> 
 
     run_direct_mode(&question, budget, enable_compare_live).await
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MODO SERVIDOR HTTP
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Inicia o servidor HTTP com API compatível OpenAI
+#[cfg(feature = "server")]
+async fn run_server_mode(args: &[String]) -> anyhow::Result<()> {
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| {
+        eprintln!("Erro: OPENAI_API_KEY não encontrada no ambiente!");
+        std::process::exit(1);
+    });
+    let jina_key = std::env::var("JINA_API_KEY").unwrap_or_else(|_| {
+        eprintln!("Erro: JINA_API_KEY não encontrada no ambiente!");
+        std::process::exit(1);
+    });
+
+    // Parse --port=XXXX (default 3000)
+    let port: u16 = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--port="))
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(3000);
+
+    // Parse --secret=XXXX (opcional)
+    let secret = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--secret="))
+        .map(|s| s.to_string());
+
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!(" DEEP RESEARCH SERVER v{}", deep_research::VERSION);
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+    println!("  Port: {}", port);
+    println!("  Auth: {}", if secret.is_some() { "Bearer token" } else { "disabled" });
+    println!();
+    println!("Endpoints:");
+    println!("  GET  /health");
+    println!("  GET  /v1/models");
+    println!("  GET  /v1/models/{{model}}");
+    println!("  POST /v1/chat/completions");
+    println!();
+
+    let state = Arc::new(deep_research::server::AppState {
+        llm_config: get_llm_config().clone(),
+        runtime_config: get_runtime_config().clone(),
+        agent_config: get_agent_config().clone(),
+        openai_key,
+        jina_key,
+        secret,
+    });
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    deep_research::server::start_server(addr, state).await
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MODO DIRETO (CLI)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// Executa o modo de pesquisa direta no terminal
 async fn run_direct_mode(question: &str, budget: Option<u64>, enable_compare_live: bool) -> anyhow::Result<()> {

@@ -245,6 +245,18 @@ pub mod tools;
 /// - [`DigisacTools`]: API Digisac para mensagens WhatsApp
 pub mod integrations;
 
+/// HTTP Server com API compatível OpenAI e SSE streaming.
+///
+/// Fornece endpoints REST para interação programática:
+/// - `GET /health` - Health check
+/// - `GET /v1/models` - Lista modelos disponíveis
+/// - `GET /v1/models/{model}` - Detalhes de um modelo
+/// - `POST /v1/chat/completions` - Pesquisa com SSE streaming ou JSON
+///
+/// Habilitar com `--features server`.
+#[cfg(feature = "server")]
+pub mod server;
+
 // Re-exports principais
 pub use agent::DeepResearchAgent;
 pub use config::{

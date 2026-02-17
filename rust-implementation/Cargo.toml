@@ -93,6 +93,14 @@ arboard = { version = "3.4", optional = true }
 boa_engine = "0.20"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# OPTIONAL: HTTP Server (axum)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+axum = { version = "0.7", features = ["json", "macros"], optional = true }
+tower-http = { version = "0.5", features = ["cors"], optional = true }
+tower = { version = "0.4", optional = true }
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # OPTIONAL: Backends de produção (Railway)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PostgreSQL para histórico persistente
@@ -145,8 +153,10 @@ simd = []  # Enable SIMD optimizations (requires nightly for some features)
 postgres = ["sqlx"]  # PostgreSQL para Railway
 qdrant = ["qdrant-client"]  # Qdrant para busca semântica
 clipboard = ["dep:arboard"]
+# HTTP Server com SSE (axum)
+server = ["axum", "tower-http", "tower", "tokio-stream"]
 # Feature "all" habilita todas as features opcionais
-all = ["clipboard", "postgres", "qdrant", "simd"]
+all = ["clipboard", "postgres", "qdrant", "simd", "server"]
 
 [profile.release]
 lto = true
